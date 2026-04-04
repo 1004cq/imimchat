@@ -2,8 +2,8 @@
 """
 imimchat 安全注册中间件服务
 功能：
-  1. 生成随机验证码并缓存（Redis / 内存）
-  2. 调用短信服务发送验证码（当前为模拟，可接入阿里云/腾讯云）
+  1. 生成随机验证码并缓存（内存）
+  2. 调用短信服务发送验证码（阿里云号码认证 Dypnsapi / mock 模式）
   3. 验证码校验（5分钟有效期、最多3次错误、防重放）
   4. 密码强度校验
   5. 注册频率限制（同IP每小时最多5次）
@@ -14,11 +14,10 @@ import re
 import time
 import random
 import string
-import hashlib
 import logging
 import requests
+import json
 from flask import Flask, request, jsonify
-from functools import wraps
 from collections import defaultdict
 from threading import Lock
 
@@ -31,12 +30,17 @@ TSDD_API = os.environ.get('TSDD_API', 'http://localhost:8090')
 # 后端固定验证码（TangSengDaoDao 使用 TS_SMSCODE 配置，默认 123456）
 # 中间件负责真实验证码校验，向后端传递此固定码完成注册
 TSDD_SMSCODE = os.environ.get('TSDD_SMSCODE', '123456')
-SMS_PROVIDER = os.environ.get('SMS_PROVIDER', 'mock')   # mock | aliyun | tencent
+# SMS_PROVIDER: mock | aliyun_dypns
+SMS_PROVIDER = os.environ.get('SMS_PROVIDER', 'mock')
+
+# 阿里云号码认证服务（Dypnsapi）配置
 ALIYUN_ACCESS_KEY = os.environ.get('ALIYUN_ACCESS_KEY', '')
 ALIYUN_ACCESS_SECRET = os.environ.get('ALIYUN_ACCESS_SECRET', '')
-ALIYUN_SIGN_NAME = os.environ.get('ALIYUN_SIGN_NAME', 'imimchat')
-ALIYUN_TEMPLATE_CODE = os.environ.get('ALIYUN_TEMPLATE_CODE', '')
-CODE_EXPIRE = int(os.environ.get('CODE_EXPIRE', 300))       # 验证码有效期（秒）
+ALIYUN_DYPNS_SIGN_NAME = os.environ.get('ALIYUN_DYPNS_SIGN_NAME', '速通互联验证码')
+ALIYUN_DYPNS_TEMPLATE_CODE = os.environ.get('ALIYUN_DYPNS_TEMPLATE_CODE', '100001')
+ALIYUN_DYPNS_VALID_TIME = int(os.environ.get('ALIYUN_DYPNS_VALID_TIME', 5))  # 验证码有效期（分钟）
+
+CODE_EXPIRE = int(os.environ.get('CODE_EXPIRE', 300))       # 验证码有效期（秒），与 VALID_TIME 保持一致
 CODE_MAX_RETRY = int(os.environ.get('CODE_MAX_RETRY', 3))   # 最大错误次数
 RATE_LIMIT_PER_HOUR = int(os.environ.get('RATE_LIMIT_PER_HOUR', 5))  # 每IP每小时注册上限
 RATE_LIMIT_SMS_PER_HOUR = int(os.environ.get('RATE_LIMIT_SMS_PER_HOUR', 3))  # 每手机号每小时短信上限
@@ -46,7 +50,7 @@ SERVICE_PORT = int(os.environ.get('SERVICE_PORT', 9091))
 _store_lock = Lock()
 _code_store = {}       # phone -> {code, expires_at, retry_count, used}
 _rate_store = defaultdict(list)   # ip -> [timestamp, ...]
-_sms_rate_store = defaultdict(list)  # phone -> [timestamp, ...]
+_sms_rate_store = defaultdict(list)  # phone/ip -> [timestamp, ...]
 
 # ===== 工具函数 =====
 def get_client_ip():
@@ -70,7 +74,6 @@ def check_password_strength(password):
     - 包含大写字母
     - 包含小写字母
     - 包含数字
-    - 包含特殊字符（可选，但推荐）
     """
     if len(password) < 8 or len(password) > 32:
         return False, '密码长度须为 8-32 位'
@@ -98,38 +101,49 @@ def send_sms_mock(phone, code):
     logger.info(f'[MOCK SMS] 手机号 {phone} 验证码: {code}')
     return True, '验证码已发送（测试模式，请查看服务器日志）'
 
-def send_sms_aliyun(phone, code):
-    """阿里云短信发送"""
+def send_sms_aliyun_dypns(phone, code):
+    """
+    阿里云号码认证服务（Dypnsapi）短信发送
+    使用 SendSmsVerifyCode 接口，支持赠送签名和模板，无需企业资质
+    """
     try:
-        from alibabacloud_dysmsapi20170525 import models as sms_models
-        from alibabacloud_dysmsapi20170525.client import Client
+        from alibabacloud_dypnsapi20170525.client import Client as DypnsapiClient
         from alibabacloud_tea_openapi import models as open_api_models
-        import json
+        from alibabacloud_dypnsapi20170525 import models as dypnsapi_models
 
         config = open_api_models.Config(
             access_key_id=ALIYUN_ACCESS_KEY,
-            access_key_secret=ALIYUN_ACCESS_SECRET
+            access_key_secret=ALIYUN_ACCESS_SECRET,
+            endpoint='dypnsapi.aliyuncs.com'
         )
-        config.endpoint = 'dysmsapi.aliyuncs.com'
-        client = Client(config)
-        send_req = sms_models.SendSmsRequest(
-            phone_numbers=phone,
-            sign_name=ALIYUN_SIGN_NAME,
-            template_code=ALIYUN_TEMPLATE_CODE,
-            template_param=json.dumps({'code': code})
+        client = DypnsapiClient(config)
+
+        send_request = dypnsapi_models.SendSmsVerifyCodeRequest(
+            phone_number=phone,
+            sign_name=ALIYUN_DYPNS_SIGN_NAME,
+            template_code=ALIYUN_DYPNS_TEMPLATE_CODE,
+            template_param=json.dumps({'code': code, 'min': str(ALIYUN_DYPNS_VALID_TIME)}),
         )
-        resp = client.send_sms(send_req)
-        if resp.body.code == 'OK':
+        resp = client.send_sms_verify_code(send_request)
+        result = resp.body.to_map()
+
+        if result.get('Code') == 'OK':
+            logger.info(f'[ALIYUN DYPNS] 短信发送成功: {phone[:3]}****{phone[-4:]}')
             return True, '验证码已发送'
-        return False, f'短信发送失败: {resp.body.message}'
+        else:
+            err_msg = result.get('Message', '短信发送失败')
+            err_code = result.get('Code', 'UNKNOWN')
+            logger.error(f'[ALIYUN DYPNS] 短信发送失败: {phone[:3]}****{phone[-4:]}，Code={err_code}，Message={err_msg}')
+            return False, f'短信发送失败，请稍后重试'
+
     except Exception as e:
-        logger.error(f'阿里云短信发送失败: {e}')
+        logger.error(f'[ALIYUN DYPNS] 短信发送异常: {e}')
         return False, '短信服务暂时不可用，请稍后重试'
 
 def send_sms(phone, code):
     """统一短信发送入口"""
-    if SMS_PROVIDER == 'aliyun':
-        return send_sms_aliyun(phone, code)
+    if SMS_PROVIDER == 'aliyun_dypns':
+        return send_sms_aliyun_dypns(phone, code)
     return send_sms_mock(phone, code)
 
 # ===== CORS 中间件 =====
@@ -165,8 +179,6 @@ def send_verification_code():
             timeout=5
         )
         resp_data = resp.json()
-        # 如果返回"验证码不正确"说明手机号未注册（验证码校验阶段失败）
-        # 如果返回"手机号已存在"说明已注册
         if resp_data.get('msg', '').find('已存在') != -1 or resp_data.get('msg', '').find('already') != -1:
             return jsonify({'code': 409, 'msg': '该手机号已注册，请直接登录'}), 409
     except Exception:
@@ -194,9 +206,12 @@ def send_verification_code():
     # 6. 发送短信
     ok, msg = send_sms(phone, code)
     if not ok:
+        # 发送失败，清除已缓存的验证码
+        with _store_lock:
+            _code_store.pop(phone, None)
         return jsonify({'code': 500, 'msg': msg}), 500
 
-    logger.info(f'[SMS] 验证码已发送至 {phone[:3]}****{phone[-4:]}，IP: {ip}')
+    logger.info(f'[SMS] 验证码已发送至 {phone[:3]}****{phone[-4:]}，IP: {ip}，模式: {SMS_PROVIDER}')
     return jsonify({'code': 200, 'msg': f'验证码已发送至 {phone[:3]}****{phone[-4:]}，{CODE_EXPIRE//60} 分钟内有效'})
 
 
