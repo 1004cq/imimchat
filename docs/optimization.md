@@ -1,5 +1,7 @@
 # imimchat 优化方案与路线图
 
+**中文版** | [English Version](./optimization_en.md)
+
 ## 概述
 
 本文档从**安全性、稳定性、性能、用户体验、功能扩展**五个维度，对 imimchat 当前部署进行全面评估，并给出优先级排序的优化建议。

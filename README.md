@@ -1,11 +1,23 @@
 # imimchat 私有化即时通讯系统
 
+[English Version](./README_en.md) | **中文版**
+
 > 基于 [WuKongIM](https://github.com/WuKongIM/WuKongIM) + [TangSengDaoDao](https://github.com/TangSengDaoDao/TangSengDaoDaoServer) 搭建的端到端加密私有化即时通讯系统，已完成品牌定制、移动端适配和安全加固。
 
 **访问地址：** https://wed.imim.chat  
 **服务器：** 42.194.167.201（腾讯云）  
 **管理后台：** https://wed.imim.chat/admin  
 **部署方式：** Docker Compose + Nginx 反向代理
+
+---
+
+## 文档导航
+
+| 文档 | 中文 | English |
+|------|------|---------|
+| 系统架构说明 | [architecture.md](./docs/architecture.md) | [architecture_en.md](./docs/architecture_en.md) |
+| 优化方案路线图 | [optimization.md](./docs/optimization.md) | [optimization_en.md](./docs/optimization_en.md) |
+| 项目移交手册 | [handover.md](./docs/handover.md) | [handover_en.md](./docs/handover_en.md) |
 
 ---
 
@@ -31,12 +43,16 @@ imimchat/
 │   ├── deploy-frontend.sh      # 部署前端自定义文件
 │   ├── backup-db.sh            # 数据库备份
 │   └── manage.sh               # 服务管理（启停/日志/更新）
-├── docs/                       # 项目文档
-│   ├── architecture.md         # 系统架构说明
-│   ├── optimization.md         # 优化方案与路线图
-│   └── handover.md             # 项目移交文档
+├── docs/                       # 项目文档（中英双语）
+│   ├── architecture.md         # 系统架构说明（中文）
+│   ├── architecture_en.md      # System Architecture (English)
+│   ├── optimization.md         # 优化方案与路线图（中文）
+│   ├── optimization_en.md      # Optimization Plan & Roadmap (English)
+│   ├── handover.md             # 项目移交文档（中文）
+│   └── handover_en.md          # Project Handover Document (English)
 ├── .gitignore
-└── README.md
+├── README.md                   # 中文说明
+└── README_en.md                # English README
 ```
 
 ---

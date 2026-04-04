@@ -1,5 +1,7 @@
 # imimchat 系统架构说明
 
+**中文版** | [English Version](./architecture_en.md)
+
 ## 1. 整体架构
 
 imimchat 是一套基于开源框架私有化部署的即时通讯系统，采用 **Docker Compose 容器化部署**，通过 **Nginx 反向代理**统一对外提供服务。

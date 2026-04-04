@@ -1,5 +1,7 @@
 # imimchat 项目移交文档
 
+**中文版** | [English Version](./handover_en.md)
+
 > 最后更新：2026-04-05
 
 ## 1. 项目基本信息
