@@ -447,8 +447,23 @@ body[theme-mode=dark] .wk-mobile-tabbar-item.active {
     }
   ];
 
+  // 判断当前是否已登录（主界面已渲染）
+  function isLoggedIn() {
+    // 登录后会出现 wk-layout 容器，登录页是 wk-login
+    var layout = document.querySelector('.wk-layout');
+    var loginPage = document.querySelector('.wk-login');
+    // 有主界面且没有登录页，才算已登录
+    return !!layout && !loginPage;
+  }
+
   function injectTabBar() {
     if (!isMobile()) return;
+    // 未登录时：移除已有的 TabBar 并返回
+    if (!isLoggedIn()) {
+      var existing = document.getElementById('wk-mobile-tabbar');
+      if (existing) existing.remove();
+      return;
+    }
     if (document.getElementById('wk-mobile-tabbar')) return;
 
     var tabbar = document.createElement('div');
@@ -744,14 +759,16 @@ body[theme-mode=dark] .wk-mobile-tabbar-item.active {
   function initMobile() {
     if (!isMobile()) return;
     injectTabBar();
-    setupChatObserver();
-    injectBackButton();
+    if (isLoggedIn()) {
+      setupChatObserver();
+      injectBackButton();
+    }
 
     // 监听 DOM 变化，确保聊天窗口状态正确
     var observer = new MutationObserver(function() {
       checkChatState();
-      injectTabBar();
-      injectBackButton();
+      injectTabBar(); // 内部已含登录状态检测
+      if (isLoggedIn()) injectBackButton();
     });
 
     var root = document.getElementById('root');
