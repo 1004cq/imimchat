@@ -304,6 +304,176 @@ body[theme-mode=dark] #imim-qr-overlay-title {
   border-color: #1677ff !important;
   color: #1677ff !important;
 }
+/* ============================================================
+   注册弹窗
+   ============================================================ */
+#imim-reg-overlay {
+  position: fixed !important;
+  top: 0 !important; left: 0 !important;
+  width: 100vw !important; height: 100vh !important;
+  background: rgba(0,0,0,0.45) !important;
+  z-index: 99999 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  backdrop-filter: blur(4px) !important;
+}
+#imim-reg-box {
+  background: #fff !important;
+  border-radius: 20px !important;
+  padding: 32px 28px 24px !important;
+  box-shadow: 0 12px 40px rgba(22,119,255,0.18) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  width: 360px !important;
+  max-width: 92vw !important;
+  max-height: 92vh !important;
+  overflow-y: auto !important;
+  position: relative !important;
+}
+body[theme-mode=dark] #imim-reg-box {
+  background: #1e293b !important;
+}
+#imim-reg-title {
+  font-size: 20px !important;
+  font-weight: 700 !important;
+  color: #1e293b !important;
+  text-align: center !important;
+  margin-bottom: 6px !important;
+}
+body[theme-mode=dark] #imim-reg-title { color: #e2e8f0 !important; }
+#imim-reg-sub {
+  font-size: 13px !important;
+  color: #64748b !important;
+  text-align: center !important;
+  margin-bottom: 22px !important;
+}
+#imim-reg-close {
+  position: absolute !important;
+  top: 14px !important; right: 16px !important;
+  width: 28px !important; height: 28px !important;
+  background: none !important;
+  border: none !important;
+  cursor: pointer !important;
+  color: #94a3b8 !important;
+  font-size: 20px !important;
+  line-height: 1 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 50% !important;
+  transition: background 0.2s !important;
+}
+#imim-reg-close:hover { background: #f1f5f9 !important; color: #475569 !important; }
+.imim-reg-field {
+  display: flex !important;
+  flex-direction: column !important;
+  margin-bottom: 14px !important;
+}
+.imim-reg-label {
+  font-size: 13px !important;
+  color: #475569 !important;
+  margin-bottom: 5px !important;
+  font-weight: 500 !important;
+}
+body[theme-mode=dark] .imim-reg-label { color: #94a3b8 !important; }
+.imim-reg-input-row {
+  display: flex !important;
+  gap: 8px !important;
+  align-items: center !important;
+}
+.imim-reg-input {
+  flex: 1 !important;
+  height: 46px !important;
+  border: 1.5px solid #e2e8f0 !important;
+  border-radius: 10px !important;
+  padding: 0 14px !important;
+  font-size: 15px !important;
+  background: #f8faff !important;
+  color: #1e293b !important;
+  outline: none !important;
+  transition: border-color 0.2s, box-shadow 0.2s !important;
+  box-sizing: border-box !important;
+  -webkit-appearance: none !important;
+}
+.imim-reg-input:focus {
+  border-color: #1677ff !important;
+  box-shadow: 0 0 0 3px rgba(22,119,255,0.10) !important;
+}
+body[theme-mode=dark] .imim-reg-input {
+  background: #0f172a !important;
+  border-color: #334155 !important;
+  color: #e2e8f0 !important;
+}
+#imim-reg-sms-btn {
+  flex-shrink: 0 !important;
+  height: 46px !important;
+  padding: 0 14px !important;
+  background: #1677ff !important;
+  color: #fff !important;
+  border: none !important;
+  border-radius: 10px !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  white-space: nowrap !important;
+  transition: background 0.2s !important;
+  min-width: 96px !important;
+}
+#imim-reg-sms-btn:disabled {
+  background: #94a3b8 !important;
+  cursor: not-allowed !important;
+}
+#imim-reg-pwd-hint {
+  font-size: 12px !important;
+  color: #94a3b8 !important;
+  margin-top: 4px !important;
+  line-height: 1.5 !important;
+}
+#imim-reg-error {
+  font-size: 13px !important;
+  color: #ef4444 !important;
+  text-align: center !important;
+  min-height: 18px !important;
+  margin-bottom: 8px !important;
+}
+#imim-reg-success {
+  font-size: 14px !important;
+  color: #22c55e !important;
+  text-align: center !important;
+  min-height: 18px !important;
+  margin-bottom: 8px !important;
+}
+#imim-reg-submit {
+  width: 100% !important;
+  height: 52px !important;
+  background: #1677ff !important;
+  border: none !important;
+  border-radius: 12px !important;
+  color: #fff !important;
+  font-size: 17px !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  letter-spacing: 1px !important;
+  box-shadow: 0 4px 16px rgba(22,119,255,0.25) !important;
+  transition: all 0.2s !important;
+  margin-top: 4px !important;
+}
+#imim-reg-submit:hover { background: #0958d9 !important; }
+#imim-reg-submit:disabled { background: #94a3b8 !important; cursor: not-allowed !important; box-shadow: none !important; }
+#imim-reg-back-login {
+  text-align: center !important;
+  margin-top: 14px !important;
+  font-size: 13px !important;
+  color: #64748b !important;
+}
+#imim-reg-back-login a {
+  color: #1677ff !important;
+  text-decoration: none !important;
+  font-weight: 500 !important;
+  cursor: pointer !important;
+}
 
 /* ============================================================
    桌面端布局（宽屏）
@@ -1081,6 +1251,186 @@ body[theme-mode=dark] .wk-mobile-tabbar-item.active {
     }
   }
 
+  // ===== 注册弹窗 =====
+  function showRegisterOverlay() {
+    if (document.getElementById('imim-reg-overlay')) return;
+
+    var overlay = document.createElement('div');
+    overlay.id = 'imim-reg-overlay';
+    overlay.innerHTML = `
+      <div id="imim-reg-box">
+        <button id="imim-reg-close" title="关闭">&#x2715;</button>
+        <div id="imim-reg-title">注册账号</div>
+        <div id="imim-reg-sub">注册 imimchat，开始安全加密通讯</div>
+
+        <div class="imim-reg-field">
+          <div class="imim-reg-label">手机号（中国大陆）</div>
+          <div class="imim-reg-input-row">
+            <input id="imim-reg-phone" class="imim-reg-input" type="tel" maxlength="11"
+              placeholder="请输入 11 位手机号" autocomplete="tel" inputmode="numeric" />
+          </div>
+        </div>
+
+        <div class="imim-reg-field">
+          <div class="imim-reg-label">验证码</div>
+          <div class="imim-reg-input-row">
+            <input id="imim-reg-code" class="imim-reg-input" type="text" maxlength="6"
+              placeholder="6 位数字验证码" autocomplete="one-time-code" inputmode="numeric" />
+            <button id="imim-reg-sms-btn" type="button">获取验证码</button>
+          </div>
+        </div>
+
+        <div class="imim-reg-field">
+          <div class="imim-reg-label">昵称</div>
+          <input id="imim-reg-name" class="imim-reg-input" type="text" maxlength="20"
+            placeholder="2-20 个字符" autocomplete="nickname" />
+        </div>
+
+        <div class="imim-reg-field">
+          <div class="imim-reg-label">密码</div>
+          <input id="imim-reg-pwd" class="imim-reg-input" type="password" maxlength="32"
+            placeholder="8-32 位，含大小写字母和数字" autocomplete="new-password" />
+          <div id="imim-reg-pwd-hint">密码须包含大写字母、小写字母和数字，长度 8-32 位</div>
+        </div>
+
+        <div class="imim-reg-field">
+          <div class="imim-reg-label">确认密码</div>
+          <input id="imim-reg-pwd2" class="imim-reg-input" type="password" maxlength="32"
+            placeholder="再次输入密码" autocomplete="new-password" />
+        </div>
+
+        <div id="imim-reg-error"></div>
+        <div id="imim-reg-success"></div>
+
+        <button id="imim-reg-submit" type="button">注 册</button>
+        <div id="imim-reg-back-login">已有账号？<a id="imim-reg-back-a">返回登录</a></div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    // 关闭按钮
+    document.getElementById('imim-reg-close').addEventListener('click', function() {
+      overlay.remove();
+    });
+    document.getElementById('imim-reg-back-a').addEventListener('click', function() {
+      overlay.remove();
+    });
+    // 点击背景关闭
+    overlay.addEventListener('click', function(e) {
+      if (e.target === overlay) overlay.remove();
+    });
+
+    // 验证码倒计时
+    var smsBtn = document.getElementById('imim-reg-sms-btn');
+    var countdownTimer = null;
+    smsBtn.addEventListener('click', function() {
+      var phone = document.getElementById('imim-reg-phone').value.trim();
+      if (!/^1[3-9]\d{9}$/.test(phone)) {
+        setRegError('请输入正确的 11 位手机号');
+        return;
+      }
+      smsBtn.disabled = true;
+      smsBtn.textContent = '发送中...';
+      setRegError('');
+      fetch('/register/sms', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({phone: phone})
+      }).then(function(r) { return r.json(); }).then(function(d) {
+        if (d.code === 200) {
+          setRegSuccess(d.msg || '验证码已发送');
+          var sec = 60;
+          smsBtn.textContent = sec + 's';
+          countdownTimer = setInterval(function() {
+            sec--;
+            if (sec <= 0) {
+              clearInterval(countdownTimer);
+              smsBtn.disabled = false;
+              smsBtn.textContent = '重新获取';
+            } else {
+              smsBtn.textContent = sec + 's';
+            }
+          }, 1000);
+        } else {
+          smsBtn.disabled = false;
+          smsBtn.textContent = '获取验证码';
+          setRegError(d.msg || '发送失败，请重试');
+        }
+      }).catch(function() {
+        smsBtn.disabled = false;
+        smsBtn.textContent = '获取验证码';
+        setRegError('网络错误，请检查连接后重试');
+      });
+    });
+
+    // 提交注册
+    document.getElementById('imim-reg-submit').addEventListener('click', function() {
+      var phone = document.getElementById('imim-reg-phone').value.trim();
+      var code  = document.getElementById('imim-reg-code').value.trim();
+      var name  = document.getElementById('imim-reg-name').value.trim();
+      var pwd   = document.getElementById('imim-reg-pwd').value;
+      var pwd2  = document.getElementById('imim-reg-pwd2').value;
+
+      if (!/^1[3-9]\d{9}$/.test(phone)) { setRegError('请输入正确的 11 位手机号'); return; }
+      if (!/^\d{6}$/.test(code))         { setRegError('请输入 6 位数字验证码'); return; }
+      if (!name || name.length < 1 || name.length > 20) { setRegError('昵称长度须为 1-20 个字符'); return; }
+      if (pwd.length < 8 || pwd.length > 32) { setRegError('密码长度须为 8-32 位'); return; }
+      if (!/[A-Z]/.test(pwd)) { setRegError('密码须包含至少一个大写字母'); return; }
+      if (!/[a-z]/.test(pwd)) { setRegError('密码须包含至少一个小写字母'); return; }
+      if (!/\d/.test(pwd))    { setRegError('密码须包含至少一个数字'); return; }
+      if (pwd !== pwd2)        { setRegError('两次输入的密码不一致'); return; }
+
+      setRegError('');
+      var submitBtn = document.getElementById('imim-reg-submit');
+      submitBtn.disabled = true;
+      submitBtn.textContent = '注册中...';
+
+      fetch('/register/submit', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({phone: phone, code: code, name: name, password: pwd})
+      }).then(function(r) { return r.json(); }).then(function(d) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = '注 册';
+        if (d.code === 200) {
+          setRegSuccess('🎉 注册成功！正在跳转登录...');
+          // 3 秒后关闭弹窗并自动填入手机号
+          setTimeout(function() {
+            overlay.remove();
+            // 尝试自动填入手机号到登录表单
+            var phoneInput = document.querySelector('.wk-login-content-form input[type="text"], .wk-login-content-form input[type="tel"], .wk-login-content-form input:first-of-type');
+            if (phoneInput) {
+              phoneInput.focus();
+              var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+              nativeInputValueSetter.call(phoneInput, phone);
+              phoneInput.dispatchEvent(new Event('input', {bubbles: true}));
+            }
+          }, 2000);
+        } else {
+          setRegError(d.msg || '注册失败，请重试');
+        }
+      }).catch(function() {
+        submitBtn.disabled = false;
+        submitBtn.textContent = '注 册';
+        setRegError('网络错误，请检查连接后重试');
+      });
+    });
+  }
+
+  function setRegError(msg) {
+    var el = document.getElementById('imim-reg-error');
+    var el2 = document.getElementById('imim-reg-success');
+    if (el) el.textContent = msg;
+    if (el2 && msg) el2.textContent = '';
+  }
+  function setRegSuccess(msg) {
+    var el = document.getElementById('imim-reg-success');
+    var el2 = document.getElementById('imim-reg-error');
+    if (el) el.textContent = msg;
+    if (el2 && msg) el2.textContent = '';
+  }
+
   // ===== 登录页 UI 注入（蓝色登录按钮 + 注册按钮 + 二维码图标）=====
   function injectLoginUI() {
     // 找到登录表单容器
@@ -1101,22 +1451,7 @@ body[theme-mode=dark] .wk-mobile-tabbar-item.active {
     regBtn.type = 'button';
     regBtn.textContent = '注册';
     regBtn.addEventListener('click', function() {
-      // 尝试点击原始注册入口，如果没有则提示
-      var regLink = document.querySelector('.wk-login-content a[href*="register"], .wk-login-content-form a');
-      if (regLink) {
-        regLink.click();
-      } else {
-        // 尝试找注册相关文字按钮
-        var allBtns = document.querySelectorAll('.wk-login-content button, .wk-login-content a');
-        for (var i = 0; i < allBtns.length; i++) {
-          var t = allBtns[i].textContent.trim();
-          if (t.indexOf('注册') !== -1 || t.indexOf('register') !== -1) {
-            allBtns[i].click();
-            return;
-          }
-        }
-        alert('请联系管理员开通账号');
-      }
+      showRegisterOverlay();
     });
     form.appendChild(regBtn);
 
