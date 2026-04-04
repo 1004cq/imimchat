@@ -520,6 +520,78 @@ body[theme-mode=dark] #imim-qr-overlay-title {
     display: none !important;
   }
 
+  /* ============================================================
+     右键菜单修复：移动端改为底部弹出式菜单
+     ============================================================ */
+  .wk-contextmenus {
+    position: fixed !important;
+    bottom: 56px !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    top: auto !important;
+    width: 90vw !important;
+    max-width: 360px !important;
+    background: #fff !important;
+    border-radius: 16px 16px 0 0 !important;
+    box-shadow: 0 -4px 24px rgba(0,0,0,0.12) !important;
+    z-index: 10000 !important;
+    overflow: hidden !important;
+    padding: 8px 0 !important;
+  }
+  body[theme-mode=dark] .wk-contextmenus {
+    background: #2c2c2c !important;
+  }
+  .wk-contextmenus ul {
+    list-style: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  .wk-contextmenus ul li {
+    padding: 14px 20px !important;
+    font-size: 16px !important;
+    color: #333 !important;
+    border-bottom: 0.5px solid #f0f0f0 !important;
+    cursor: pointer !important;
+    text-align: center !important;
+  }
+  body[theme-mode=dark] .wk-contextmenus ul li {
+    color: #e0e0e0 !important;
+    border-bottom-color: #3a3a3a !important;
+  }
+  .wk-contextmenus ul li:last-child {
+    border-bottom: none !important;
+    color: #ff4d4f !important;
+  }
+  .wk-contextmenus ul li:active {
+    background: #f5f5f5 !important;
+  }
+
+  /* 会话列表顶部工具栏（搜索、新建按钮）*/
+  .wk-chat-header,
+  .wk-conversationlist-header,
+  [class*="conversation"][class*="header"] {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 10 !important;
+    background: #ededed !important;
+    display: flex !important;
+    align-items: center !important;
+    padding: 8px 12px !important;
+    min-height: 48px !important;
+  }
+
+  /* 断开连接提示条 */
+  [class*="disconnect"],
+  [class*="offline"],
+  [class*="reconnect"] {
+    font-size: 12px !important;
+    padding: 4px 12px !important;
+    text-align: center !important;
+    background: #fffbe6 !important;
+    color: #d46b08 !important;
+    border-bottom: 1px solid #ffe58f !important;
+  }
+
   /* 会话列表适配 */
   .wk-chat-conversation-list,
   .wk-conversationlist {
@@ -933,18 +1005,75 @@ body[theme-mode=dark] .wk-mobile-tabbar-item.active {
     if (isLoggedIn()) {
       setupChatObserver();
       injectBackButton();
+      setupContextMenuFix();
     }
 
     // 监听 DOM 变化，确保聊天窗口状态正确
     var observer = new MutationObserver(function() {
       checkChatState();
       injectTabBar(); // 内部已含登录状态检测
-      if (isLoggedIn()) injectBackButton();
+      if (isLoggedIn()) {
+        injectBackButton();
+        setupContextMenuFix();
+      }
     });
 
     var root = document.getElementById('root');
     if (root) {
       observer.observe(root, { childList: true, subtree: true });
+    }
+  }
+
+  // ===== 移动端右键菜单修复 =====
+  var _contextMenuFixInstalled = false;
+  function setupContextMenuFix() {
+    if (_contextMenuFixInstalled) return;
+    _contextMenuFixInstalled = true;
+
+    // 点击空白处关闭菜单
+    document.addEventListener('click', function(e) {
+      var menu = document.querySelector('.wk-contextmenus');
+      if (!menu) return;
+      // 如果点击的不是菜单内容，则关闭菜单
+      if (!menu.contains(e.target)) {
+        // 触发点击菜单外部来关闭（模拟 ESC）
+        document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', keyCode: 27, bubbles: true}));
+        // 备用：直接隐藏
+        setTimeout(function() {
+          var m = document.querySelector('.wk-contextmenus');
+          if (m) m.style.display = 'none';
+        }, 100);
+      }
+    }, true);
+
+    // 监听菜单出现，添加遇层背景
+    var menuObserver = new MutationObserver(function() {
+      var menu = document.querySelector('.wk-contextmenus');
+      var overlay = document.getElementById('imim-menu-overlay');
+      if (menu && window.getComputedStyle(menu).display !== 'none') {
+        if (!overlay) {
+          overlay = document.createElement('div');
+          overlay.id = 'imim-menu-overlay';
+          overlay.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:9999;background:rgba(0,0,0,0.3);';
+          overlay.addEventListener('click', function() {
+            document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', keyCode: 27, bubbles: true}));
+            setTimeout(function() {
+              var m = document.querySelector('.wk-contextmenus');
+              if (m) m.style.display = 'none';
+              var ov = document.getElementById('imim-menu-overlay');
+              if (ov) ov.remove();
+            }, 100);
+          });
+          document.body.appendChild(overlay);
+        }
+      } else {
+        if (overlay) overlay.remove();
+      }
+    });
+
+    var root = document.getElementById('root');
+    if (root) {
+      menuObserver.observe(root, {childList: true, subtree: true, attributes: true});
     }
   }
 
