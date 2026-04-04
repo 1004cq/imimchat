@@ -10,42 +10,12 @@
 (function() {
   'use strict';
 
-  // ===== 立即执行：修复 username 格式（必须在 main.js 加载前执行）=====
-  (function() {
-    var origOpen = XMLHttpRequest.prototype.open;
-    var origSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open = function(method, url) {
-      this._xhrUrl = url;
-      return origOpen.apply(this, arguments);
-    };
-    XMLHttpRequest.prototype.send = function(body) {
-      if (this._xhrUrl && this._xhrUrl.toString().indexOf('user/login') !== -1 && body) {
-        try {
-          var data = JSON.parse(body);
-          if (data.username && data.username.indexOf('0086') === 0) {
-            data.username = data.username.substring(2);
-            body = JSON.stringify(data);
-          }
-        } catch(e) {}
-      }
-      return origSend.call(this, body);
-    };
-    var origFetch = window.fetch;
-    if (origFetch) {
-      window.fetch = function(url, options) {
-        if (url && url.toString().indexOf('user/login') !== -1 && options && options.body) {
-          try {
-            var data = JSON.parse(options.body);
-            if (data.username && data.username.indexOf('0086') === 0) {
-              data.username = data.username.substring(2);
-              options = Object.assign({}, options, { body: JSON.stringify(data) });
-            }
-          } catch(e) {}
-        }
-        return origFetch.apply(this, arguments);
-      };
-    }
-  })();
+  // ===== username 格式说明 =====
+  // 前端会将手机号转换为 008619xxxxxxxxx 格式发送给服务器
+  // 数据库中存储的也是 008619xxxxxxxxx 格式，无需修改，直接放行
+  function fixLoginUsername() {
+    // 不做任何修改，前端原始格式就是正确的
+  }
 
 
 
