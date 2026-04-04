@@ -129,6 +129,177 @@ body[theme-mode=dark] .wk-login-content-slogan {
 .wk-login-content-form {
   width: 100% !important;
 }
+/* 登录页输入框样式 */
+.wk-login-content-form input,
+.wk-login-content-form .ant-input {
+  height: 48px !important;
+  border-radius: 10px !important;
+  border: 1.5px solid #e2e8f0 !important;
+  font-size: 15px !important;
+  padding: 0 16px !important;
+  width: 100% !important;
+  margin-bottom: 12px !important;
+  background: #f8faff !important;
+  transition: border-color 0.2s !important;
+}
+.wk-login-content-form input:focus,
+.wk-login-content-form .ant-input:focus {
+  border-color: #1677ff !important;
+  outline: none !important;
+  box-shadow: 0 0 0 3px rgba(22,119,255,0.1) !important;
+}
+/* 登录按钮 - 蓝色实心 */
+.wk-login-content-form button[type=submit],
+.wk-login-content-form .ant-btn-primary,
+#imim-login-btn {
+  width: 100% !important;
+  height: 52px !important;
+  background: #1677ff !important;
+  border: none !important;
+  border-radius: 12px !important;
+  color: #fff !important;
+  font-size: 17px !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  margin-top: 8px !important;
+  margin-bottom: 12px !important;
+  letter-spacing: 1px !important;
+  box-shadow: 0 4px 16px rgba(22,119,255,0.25) !important;
+  transition: all 0.2s !important;
+}
+.wk-login-content-form button[type=submit]:hover,
+.wk-login-content-form .ant-btn-primary:hover,
+#imim-login-btn:hover {
+  background: #0958d9 !important;
+  box-shadow: 0 6px 20px rgba(22,119,255,0.35) !important;
+}
+/* 注册按钮 - 蓝色描边空心 */
+#imim-register-btn {
+  width: 100% !important;
+  height: 52px !important;
+  background: transparent !important;
+  border: 2px solid #1677ff !important;
+  border-radius: 12px !important;
+  color: #1677ff !important;
+  font-size: 17px !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  margin-bottom: 16px !important;
+  letter-spacing: 1px !important;
+  transition: all 0.2s !important;
+}
+#imim-register-btn:hover {
+  background: rgba(22,119,255,0.06) !important;
+}
+/* 二维码图标按钮 */
+#imim-qr-btn {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 6px !important;
+  width: 100% !important;
+  height: 40px !important;
+  background: transparent !important;
+  border: none !important;
+  color: #64748b !important;
+  font-size: 14px !important;
+  cursor: pointer !important;
+  margin-top: 4px !important;
+  border-radius: 8px !important;
+  transition: color 0.2s, background 0.2s !important;
+}
+#imim-qr-btn:hover {
+  color: #1677ff !important;
+  background: rgba(22,119,255,0.06) !important;
+}
+/* 隐藏原始扫描登录文字和说明区域 */
+.wk-login-content-form-scanlogin {
+  display: none !important;
+}
+.wk-login-content-scanlogin {
+  display: none !important;
+}
+/* 二维码登录覆盖层 */
+#imim-qr-overlay {
+  position: fixed !important;
+  top: 0 !important; left: 0 !important;
+  width: 100vw !important; height: 100vh !important;
+  background: linear-gradient(135deg, #f0f4ff 0%, #e8f0fe 50%, #f5f0ff 100%) !important;
+  z-index: 99998 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+body[theme-mode=dark] #imim-qr-overlay {
+  background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%) !important;
+}
+#imim-qr-overlay-inner {
+  background: rgba(255,255,255,0.92) !important;
+  border-radius: 20px !important;
+  padding: 40px 32px 32px !important;
+  box-shadow: 0 8px 32px rgba(22,119,255,0.12) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  width: 320px !important;
+  max-width: 90vw !important;
+}
+body[theme-mode=dark] #imim-qr-overlay-inner {
+  background: rgba(30,30,50,0.95) !important;
+}
+#imim-qr-overlay-title {
+  font-size: 18px !important;
+  font-weight: 600 !important;
+  color: #1e293b !important;
+  margin-bottom: 6px !important;
+}
+body[theme-mode=dark] #imim-qr-overlay-title {
+  color: #e2e8f0 !important;
+}
+#imim-qr-overlay-sub {
+  font-size: 13px !important;
+  color: #64748b !important;
+  margin-bottom: 24px !important;
+  text-align: center !important;
+}
+#imim-qr-overlay-qr {
+  width: 180px !important;
+  height: 180px !important;
+  border-radius: 12px !important;
+  border: 1.5px solid #e2e8f0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  background: #fff !important;
+  margin-bottom: 20px !important;
+  overflow: hidden !important;
+}
+#imim-qr-overlay-qr img {
+  width: 160px !important;
+  height: 160px !important;
+}
+#imim-qr-overlay-hint {
+  font-size: 13px !important;
+  color: #64748b !important;
+  text-align: center !important;
+  margin-bottom: 20px !important;
+  line-height: 1.6 !important;
+}
+#imim-qr-overlay-back {
+  width: 100% !important;
+  height: 44px !important;
+  background: transparent !important;
+  border: 1.5px solid #e2e8f0 !important;
+  border-radius: 10px !important;
+  color: #64748b !important;
+  font-size: 15px !important;
+  cursor: pointer !important;
+  transition: all 0.2s !important;
+}
+#imim-qr-overlay-back:hover {
+  border-color: #1677ff !important;
+  color: #1677ff !important;
+}
 
 /* ============================================================
    桌面端布局（宽屏）
@@ -777,6 +948,118 @@ body[theme-mode=dark] .wk-mobile-tabbar-item.active {
     }
   }
 
+  // ===== 登录页 UI 注入（蓝色登录按钮 + 注册按钮 + 二维码图标）=====
+  function injectLoginUI() {
+    // 找到登录表单容器
+    var form = document.querySelector('.wk-login-content-form');
+    if (!form) return;
+    // 避免重复注入
+    if (document.getElementById('imim-register-btn')) return;
+
+    // 找到原始登录按钮，覆盖其样式
+    var origBtn = form.querySelector('button');
+    if (origBtn) {
+      origBtn.style.cssText = 'width:100%!important;height:52px!important;background:#1677ff!important;border:none!important;border-radius:12px!important;color:#fff!important;font-size:17px!important;font-weight:600!important;cursor:pointer!important;margin-top:8px!important;margin-bottom:12px!important;letter-spacing:1px!important;box-shadow:0 4px 16px rgba(22,119,255,0.25)!important;transition:all 0.2s!important;display:block!important;';
+    }
+
+    // 注册「注册」按钮
+    var regBtn = document.createElement('button');
+    regBtn.id = 'imim-register-btn';
+    regBtn.type = 'button';
+    regBtn.textContent = '注册';
+    regBtn.addEventListener('click', function() {
+      // 尝试点击原始注册入口，如果没有则提示
+      var regLink = document.querySelector('.wk-login-content a[href*="register"], .wk-login-content-form a');
+      if (regLink) {
+        regLink.click();
+      } else {
+        // 尝试找注册相关文字按钮
+        var allBtns = document.querySelectorAll('.wk-login-content button, .wk-login-content a');
+        for (var i = 0; i < allBtns.length; i++) {
+          var t = allBtns[i].textContent.trim();
+          if (t.indexOf('注册') !== -1 || t.indexOf('register') !== -1) {
+            allBtns[i].click();
+            return;
+          }
+        }
+        alert('请联系管理员开通账号');
+      }
+    });
+    form.appendChild(regBtn);
+
+    // 注入「扫码登录」图标按钮
+    var qrBtn = document.createElement('button');
+    qrBtn.id = 'imim-qr-btn';
+    qrBtn.type = 'button';
+    qrBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="3" height="3"/><rect x="18" y="14" width="3" height="3"/><rect x="14" y="18" width="3" height="3"/><rect x="18" y="18" width="3" height="3"/></svg><span>扫码登录</span>';
+    qrBtn.addEventListener('click', function() {
+      showQROverlay();
+    });
+    form.appendChild(qrBtn);
+
+    // 隐藏原始的「扫描登录」文字链接（如果存在）
+    var scanLinks = document.querySelectorAll('.wk-login-content-form a, .wk-login-content a');
+    scanLinks.forEach(function(el) {
+      if (el.textContent.indexOf('扫描') !== -1 || el.textContent.indexOf('二维码') !== -1) {
+        el.style.display = 'none';
+      }
+    });
+  }
+
+  // 展示二维码登录覆盖层
+  function showQROverlay() {
+    if (document.getElementById('imim-qr-overlay')) return;
+
+    // 获取原始的二维码登录内容
+    var origQRSection = document.querySelector('.wk-login-content-qrcode, [class*="qrcode"], [class*="qr-code"]');
+
+    var overlay = document.createElement('div');
+    overlay.id = 'imim-qr-overlay';
+    overlay.innerHTML = `
+      <div id="imim-qr-overlay-inner">
+        <div id="imim-qr-overlay-title">扫码登录</div>
+        <div id="imim-qr-overlay-sub">使用手机 imimchat 扫码登录</div>
+        <div id="imim-qr-overlay-qr">
+          ${origQRSection ? origQRSection.innerHTML : '<div style="width:160px;height:160px;display:flex;align-items:center;justify-content:center;flex-direction:column;color:#94a3b8;font-size:13px;gap:12px;"><svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#1677ff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="3" height="3"/><rect x="18" y="14" width="3" height="3"/><rect x="14" y="18" width="3" height="3"/><rect x="18" y="18" width="3" height="3"/></svg><span>二维码加载中...</span></div>'}
+        </div>
+        <div id="imim-qr-overlay-hint">在手机上打开 imimchat<br>进入 <b>消息</b> &gt; <b>+</b> &gt; <b>扫一扫</b><br>将摄像头对准二维码扫描登录</div>
+        <button id="imim-qr-overlay-back" onclick="document.getElementById('imim-qr-overlay').remove()">返回手机号登录</button>
+      </div>
+    `;
+
+    // 如果原始页面有真实二维码，尝试触发它生成
+    var origScanBtn = document.querySelector('.wk-login-content a[class*="scan"], .wk-login-content button[class*="scan"]');
+    if (!origScanBtn) {
+      // 找到原始扫描登录按钮并触发
+      var allEls = document.querySelectorAll('.wk-login-content button, .wk-login-content a, .wk-login-content span');
+      for (var i = 0; i < allEls.length; i++) {
+        var txt = allEls[i].textContent.trim();
+        if (txt === '扫描登录' || txt === '二维码登录') {
+          origScanBtn = allEls[i];
+          break;
+        }
+      }
+    }
+
+    document.body.appendChild(overlay);
+
+    // 触发原始扫码登录流程，等待二维码生成
+    if (origScanBtn) {
+      origScanBtn.click();
+      // 等待二维码生成后将其内容复制到覆盖层
+      setTimeout(function() {
+        var qrImg = document.querySelector('.wk-login-content canvas, .wk-login-content img[src*="qr"], .wk-login-content [class*="qrcode"] canvas, .wk-login-content [class*="qrcode"] img');
+        var qrContainer = document.getElementById('imim-qr-overlay-qr');
+        if (qrImg && qrContainer) {
+          qrContainer.innerHTML = '';
+          var clone = qrImg.cloneNode(true);
+          clone.style.cssText = 'width:160px!important;height:160px!important;';
+          qrContainer.appendChild(clone);
+        }
+      }, 1500);
+    }
+  }
+
   // ===== 主初始化 =====
   function init() {
     // 恢复主题
@@ -787,6 +1070,19 @@ body[theme-mode=dark] .wk-mobile-tabbar-item.active {
     injectCSS();
     fixLoginUsername();
     injectThemeToggle();
+
+    // 登录页 UI 注入（多次尝试确保 React 渲染完成）
+    setTimeout(injectLoginUI, 300);
+    setTimeout(injectLoginUI, 800);
+    setTimeout(injectLoginUI, 2000);
+
+    // 用 MutationObserver 监听登录页出现
+    var loginObserver = new MutationObserver(function() {
+      if (document.querySelector('.wk-login-content-form') && !document.getElementById('imim-register-btn')) {
+        injectLoginUI();
+      }
+    });
+    loginObserver.observe(document.body, { childList: true, subtree: true });
 
     // 等待 React 渲染后初始化移动端
     setTimeout(initMobile, 500);
