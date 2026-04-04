@@ -1,0 +1,36 @@
+# 敏感配置文件（不提交真实密码）
+docker/.env
+*.pem
+*.key
+*.p12
+
+# 数据目录（体积巨大，不提交）
+mysqldata/
+miniodata/
+wukongim/data/
+wukongim/logs/
+tsdd/
+
+# 备份文件
+backups/
+*.sql
+*.sql.gz
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志文件
+*.log
+logs/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node.js（如有前端开发）
+node_modules/
+dist/
+build/
