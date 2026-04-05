@@ -175,7 +175,7 @@ def send_verification_code():
     try:
         resp = requests.post(
             f'{TSDD_API}/v1/user/register',
-            json={'phone': phone, 'zone': '0086', 'code': '000000', 'password': 'CheckOnly', 'name': 'check'},
+            json={'phone': phone, 'zone': '86', 'code': '000000', 'password': 'CheckOnly', 'name': 'check'},
             timeout=5
         )
         resp_data = resp.json()
@@ -277,7 +277,7 @@ def register():
             f'{TSDD_API}/v1/user/register',
             json={
                 'phone': phone,
-                'zone': '0086',
+                'zone': '86',
                 'code': TSDD_SMSCODE,  # 使用后端固定验证码
                 'password': password,
                 'name': name
