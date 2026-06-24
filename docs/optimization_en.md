@@ -12,7 +12,7 @@ This document provides a comprehensive evaluation of the current imimchat deploy
 
 ### 1.1 Replace Fixed SMS Code with Real SMS Service
 
-**Current Issue:** `.env` contains `TS_SMSCODE=123456`, allowing anyone to register an account using the fixed verification code.
+**Current Status:** TangSengDaoDao still uses an internal fixed `TS_SMSCODE`, but public registration now goes through the `register-service` middleware. The middleware verifies the real SMS code, applies rate limits, checks password strength, and then calls the backend registration API.
 
 **Optimization Plan:**
 
@@ -26,6 +26,12 @@ TS_ALIYUN_TEMPLATECODE=SMS_xxxxxxxx
 ```
 
 **Expected Result:** Prevents malicious mass registration and enhances account security.
+
+**Implemented:**
+- `register-service` supports `mock` and `aliyun_dypns` SMS modes
+- Verification codes expire in 5 minutes, allow up to 3 wrong attempts, and prevent replay
+- Phone/IP registration and SMS rate limits
+- Docker Compose includes the registration service and exposes local `9091` for Nginx proxying
 
 ---
 
@@ -327,7 +333,7 @@ if ('serviceWorker' in navigator && 'PushManager' in window) {
 Phase 1 (1-2 Weeks, Security Hardening)
 ├── ✅ Mobile UI Fixes (Completed)
 ├── 🔲 Configure Automated Database Backups
-├── 🔲 Replace Fixed SMS Code with Real SMS Service
+├── ✅ Replace Fixed SMS Code with Real SMS Service (public verification through register-service)
 └── 🔲 Add Nginx Security Headers + Rate Limiting
 
 Phase 2 (2-4 Weeks, Stability)
@@ -354,7 +360,7 @@ Phase 4 (Long-term, Functional Expansion)
 
 | ID | Issue Description | Severity | Status |
 |----|-------------------|----------|--------|
-| #001 | Fixed SMS code `123456` can be abused for registration | High | Pending Fix |
+| #001 | Fixed SMS code `123456` can be abused for registration | High | Mitigated through register-service public registration checks |
 | #002 | No automated database backups | High | Pending Fix |
 | #003 | No alerts for SSL certificate expiration | Medium | Pending Fix |
 | #004 | Mobile image/voice message experience needs optimization | Medium | Pending Test |

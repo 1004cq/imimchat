@@ -12,6 +12,7 @@ imimchat is a private instant messaging system based on open-source frameworks. 
 |-------|-----------|---------|-------------|
 | Messaging Engine | WuKongIM | v2 | High-performance IM messaging engine supporting TCP/WebSocket |
 | Business Service | TangSengDaoDao Server | v1.5 | IM business API service written in Go |
+| Registration Middleware | register-service | Flask | SMS verification codes, registration rate limits, password strength checks |
 | Web Frontend | TangSengDaoDao Web | latest | Pre-compiled React SPA application |
 | Admin Dashboard | TangSengDaoDao Manager | latest | Pre-compiled Vue admin dashboard |
 | Database | MySQL | 8.0.33 | Business data such as users, messages, channels, etc. |
@@ -50,6 +51,7 @@ Internal Port (Container communication only)
 82          →    tangsengdaodaoweb (Web Frontend)
 83          →    tangsengdaodaomanager (Admin Dashboard)
 8090        →    tangsengdaodaoserver (Business API)
+127.0.0.1:9091 → register-service (Secure registration middleware, local proxy only)
 5001        →    wukongim HTTP API (Internal only)
 5300        →    wukongim Monitoring Port
 3306        →    MySQL (Container internal network only)
@@ -66,6 +68,7 @@ Internal Port (Container communication only)
 | `/` | `127.0.0.1:82` | Web Frontend (React SPA) |
 | `/v1/` | `127.0.0.1:8090/v1/` | Business API (Direct proxy) |
 | `/api/` | `127.0.0.1:8090/` | Business API (Alias) |
+| `/register/` | `127.0.0.1:9091/register/` | Secure registration middleware |
 | `/ws` | `127.0.0.1:5200` | WebSocket persistent connection |
 | `/admin` | `127.0.0.1:83/` | Admin Dashboard (includes path rewriting) |
 | `/admin/static/` | `127.0.0.1:83/static/` | Admin Dashboard static resources |
@@ -113,7 +116,23 @@ Frontend SDK → WebSocket → wukongim (Messaging Engine)
             └── Stored in MySQL (Message records, read status, etc.)
 ```
 
-### 3.3 File Upload Flow
+### 3.3 User Registration Flow
+
+```
+User enters phone number, verification code, password, and nickname
+    │
+    ├── POST /register/sms → register-service
+    │       ├── Applies phone/IP rate limits
+    │       ├── Generates and caches a secure random verification code
+    │       └── Calls the SMS provider to send the verification code
+    │
+    └── POST /register/submit → register-service
+            ├── Verifies code expiry, retry count, and replay protection
+            ├── Checks password strength
+            └── Calls tangsengdaodaoserver registration API with backend fixed code
+```
+
+### 3.4 File Upload Flow
 
 ```
 User selects image/file
@@ -143,9 +162,9 @@ minio ────────────────────────�
                                 ▼
                     tangsengdaodaoserver (healthy)
                                 │
-                    ┌───────────┴───────────┐
-                    ▼                       ▼
-            tangsengdaodaoweb    tangsengdaodaomanager
+              ┌─────────────────┼─────────────────┐
+              ▼                 ▼                 ▼
+      tangsengdaodaoweb  tangsengdaodaomanager  register-service
 ```
 
 ---

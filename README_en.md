@@ -39,6 +39,10 @@ imimchat/
 │       │   └── imim_adaptive.js    # Mobile adaptation script v3 (core customization)
 │       └── css/
 │           └── mobile.css          # Mobile CSS supplementary styles
+├── register-service/           # Secure registration middleware (SMS code, rate limit, password checks)
+│   ├── app.py                  # Flask API service
+│   ├── Dockerfile              # Registration service container image
+│   └── requirements.txt        # Python dependencies
 ├── scripts/                    # Operation and maintenance scripts
 │   ├── deploy-frontend.sh      # Deploy frontend custom files
 │   ├── backup-db.sh            # Database backup script
@@ -118,6 +122,7 @@ Nginx (443/80) ─── SSL Termination ─── wed.imim.chat
     │
     ├── /          → Web Frontend (Docker:82)  [tangsengdaodaoweb]
     ├── /v1/       → Business API (Docker:8090) [tangsengdaodaoserver]
+    ├── /register/ → Secure Registration Service (Docker:9091) [register-service]
     ├── /ws        → WebSocket (Docker:5200) [wukongim]
     └── /admin     → Admin Dashboard (Docker:83)  [tangsengdaodaomanager]
          │
