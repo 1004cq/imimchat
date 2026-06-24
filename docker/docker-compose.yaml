@@ -40,6 +40,33 @@ services:
       - TS_FILESERVICE=${TS_FILESERVICE}
       - TS_MINIO_ACCESSKEYID=${MINIO_ROOT_USER}
       - TS_MINIO_SECRETACCESSKEY=${MINIO_ROOT_PASSWORD}
+  register-service:  # 安全注册中间件服务（短信验证码、限流、密码校验）
+    build:
+      context: ../register-service
+    restart: always
+    depends_on:
+      tangsengdaodaoserver:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:9091:9091"
+    environment:
+      - TSDD_API=http://tangsengdaodaoserver:8090
+      - TSDD_SMSCODE=${TS_SMSCODE:-123456}
+      - SMS_PROVIDER=${SMS_PROVIDER:-mock}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://wed.imim.chat}
+      - CODE_EXPIRE=${CODE_EXPIRE:-300}
+      - RATE_LIMIT_PER_HOUR=${RATE_LIMIT_PER_HOUR:-5}
+      - RATE_LIMIT_SMS_PER_HOUR=${RATE_LIMIT_SMS_PER_HOUR:-3}
+      - RATE_LIMIT_SMS_IP_PER_HOUR=${RATE_LIMIT_SMS_IP_PER_HOUR:-10}
+      - ALIYUN_ACCESS_KEY=${ALIYUN_ACCESS_KEY:-}
+      - ALIYUN_ACCESS_SECRET=${ALIYUN_ACCESS_SECRET:-}
+      - ALIYUN_DYPNS_SIGN_NAME=${ALIYUN_DYPNS_SIGN_NAME:-速通互联验证码}
+      - ALIYUN_DYPNS_TEMPLATE_CODE=${ALIYUN_DYPNS_TEMPLATE_CODE:-100001}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9091/register/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
   tangsengdaodaoweb:  # 唐僧叨叨的web服务
     image: registry.cn-shanghai.aliyuncs.com/wukongim/tangsengdaodaoweb:latest
     restart: always

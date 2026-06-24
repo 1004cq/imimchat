@@ -12,6 +12,7 @@ imimchat 是一套基于开源框架私有化部署的即时通讯系统，采�
 |------|------|------|------|
 | 通讯引擎 | WuKongIM | v2 | 高性能 IM 消息引擎，支持 TCP/WebSocket |
 | 业务服务 | TangSengDaoDao Server | v1.5 | Go 语言编写的 IM 业务 API 服务 |
+| 注册中间件 | register-service | Flask | 短信验证码、注册限流、密码强度校验 |
 | Web 前端 | TangSengDaoDao Web | latest | React 预编译 SPA 应用 |
 | 管理后台 | TangSengDaoDao Manager | latest | Vue 预编译管理后台 |
 | 数据库 | MySQL | 8.0.33 | 用户、消息、频道等业务数据 |
@@ -50,6 +51,7 @@ imimchat 是一套基于开源框架私有化部署的即时通讯系统，采�
 82          →    tangsengdaodaoweb（Web 前端）
 83          →    tangsengdaodaomanager（管理后台）
 8090        →    tangsengdaodaoserver（业务 API）
+127.0.0.1:9091 → register-service（安全注册中间件，仅本机代理）
 5001        →    wukongim HTTP API（仅内网）
 5300        →    wukongim 监控端口
 3306        →    MySQL（仅容器内网）
@@ -66,6 +68,7 @@ imimchat 是一套基于开源框架私有化部署的即时通讯系统，采�
 | `/` | `127.0.0.1:82` | Web 前端（React SPA） |
 | `/v1/` | `127.0.0.1:8090/v1/` | 业务 API（直接代理） |
 | `/api/` | `127.0.0.1:8090/` | 业务 API（别名） |
+| `/register/` | `127.0.0.1:9091/register/` | 安全注册中间件 |
 | `/ws` | `127.0.0.1:5200` | WebSocket 长连接 |
 | `/admin` | `127.0.0.1:83/` | 管理后台（含路径重写） |
 | `/admin/static/` | `127.0.0.1:83/static/` | 管理后台静态资源 |
@@ -113,7 +116,23 @@ POST /v1/user/login → Nginx → tangsengdaodaoserver:8090
             └── 存储到 MySQL（消息记录、已读状态等）
 ```
 
-### 3.3 文件上传流程
+### 3.3 用户注册流程
+
+```
+用户输入手机号、验证码、密码、昵称
+    │
+    ├── POST /register/sms → register-service
+    │       ├── 手机号/IP 限流
+    │       ├── 生成安全随机验证码并缓存
+    │       └── 调用短信服务发送验证码
+    │
+    └── POST /register/submit → register-service
+            ├── 校验验证码有效期、重试次数、防重放
+            ├── 校验密码强度
+            └── 使用后端固定验证码调用 tangsengdaodaoserver 注册接口
+```
+
+### 3.4 文件上传流程
 
 ```
 用户选择图片/文件
@@ -143,9 +162,9 @@ minio ────────────────────────�
                                 ▼
                     tangsengdaodaoserver (healthy)
                                 │
-                    ┌───────────┴───────────┐
-                    ▼                       ▼
-            tangsengdaodaoweb    tangsengdaodaomanager
+              ┌─────────────────┼─────────────────┐
+              ▼                 ▼                 ▼
+      tangsengdaodaoweb  tangsengdaodaomanager  register-service
 ```
 
 ---

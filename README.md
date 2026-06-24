@@ -39,6 +39,10 @@ imimchat/
 │       │   └── imim_adaptive.js    # 移动端适配脚本 v3（核心定制）
 │       └── css/
 │           └── mobile.css          # 移动端 CSS 补充样式
+├── register-service/           # 安全注册中间件（短信验证码、限流、密码校验）
+│   ├── app.py                  # Flask API 服务
+│   ├── Dockerfile              # 注册服务容器镜像
+│   └── requirements.txt        # Python 依赖
 ├── scripts/                    # 运维脚本
 │   ├── deploy-frontend.sh      # 部署前端自定义文件
 │   ├── backup-db.sh            # 数据库备份
@@ -121,6 +125,7 @@ Nginx (443/80) ─── SSL 终止 ─── wed.imim.chat
     │
     ├── /          → Web 前端 (Docker:82)  [tangsengdaodaoweb]
     ├── /v1/       → 业务 API (Docker:8090) [tangsengdaodaoserver]
+    ├── /register/ → 安全注册服务 (Docker:9091) [register-service]
     ├── /ws        → WebSocket (Docker:5200) [wukongim]
     └── /admin     → 管理后台 (Docker:83)  [tangsengdaodaomanager]
          │
