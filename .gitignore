@@ -7,9 +7,16 @@ docker/.env
 # 数据目录（体积巨大，不提交）
 mysqldata/
 miniodata/
+wukongim/
 wukongim/data/
 wukongim/logs/
+docker/wukongim/
 tsdd/
+
+# Python 虚拟环境与缓存
+.venv/
+__pycache__/
+*.pyc
 
 # 备份文件
 backups/
