@@ -3,6 +3,7 @@ package redisstore
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -153,4 +154,55 @@ func (s *Store) GetMTProtoSession(ctx context.Context, authKeyID int64) (userID 
 
 func (s *Store) UnbindMTProtoSession(ctx context.Context, authKeyID int64) error {
 	return s.client.Del(ctx, fmt.Sprintf("mtproto:auth:%d", authKeyID)).Err()
+}
+
+// PushToken 设备推送令牌
+type PushToken struct {
+	Token    string
+	Platform string
+	PushType string
+	DeviceID string
+}
+
+func (s *Store) SavePushToken(ctx context.Context, userID int64, tok PushToken) error {
+	key := fmt.Sprintf("push:%d:%s", userID, tok.DeviceID)
+	return s.client.HSet(ctx, key, map[string]interface{}{
+		"token":     tok.Token,
+		"platform":  tok.Platform,
+		"push_type": tok.PushType,
+	}).Err()
+}
+
+func (s *Store) ListPushTokens(ctx context.Context, userID int64) ([]PushToken, error) {
+	pattern := fmt.Sprintf("push:%d:*", userID)
+	var cursor uint64
+	var out []PushToken
+	for {
+		keys, next, err := s.client.Scan(ctx, cursor, pattern, 50).Result()
+		if err != nil {
+			return nil, err
+		}
+		for _, key := range keys {
+			vals, err := s.client.HGetAll(ctx, key).Result()
+			if err != nil {
+				continue
+			}
+			parts := strings.Split(key, ":")
+			deviceID := ""
+			if len(parts) >= 3 {
+				deviceID = parts[2]
+			}
+			out = append(out, PushToken{
+				Token:    vals["token"],
+				Platform: vals["platform"],
+				PushType: vals["push_type"],
+				DeviceID: deviceID,
+			})
+		}
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+	return out, nil
 }

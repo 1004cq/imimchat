@@ -1,7 +1,33 @@
 import SwiftUI
 
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        PushNotificationHandler.shared.registerForPushNotifications()
+        return true
+    }
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        PushNotificationHandler.shared.updateDeviceToken(deviceToken)
+    }
+
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        PushNotificationHandler.shared.handleRemoteNotification(
+            userInfo: userInfo,
+            fetchCompletionHandler: completionHandler
+        )
+    }
+}
+
 @main
 struct NeoMsgApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var coordinator = AppCoordinator()
 
     var body: some Scene {

@@ -32,6 +32,15 @@ final class APIClient {
         try await get("/v1/auth/devices")
     }
 
+    func registerPushToken(_ token: String, deviceID: String) async throws {
+        let _: [String: Bool] = try await post("/v1/devices/push-token", body: [
+            "device_id": deviceID,
+            "token": token,
+            "platform": "ios",
+            "push_type": "apns",
+        ])
+    }
+
     // MARK: - HTTP helpers
 
     private func get<T: Decodable>(_ path: String) async throws -> T {

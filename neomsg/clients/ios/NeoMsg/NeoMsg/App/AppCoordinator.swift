@@ -28,6 +28,17 @@ final class AppCoordinator: ObservableObject {
         connectionManager.$state
             .receive(on: DispatchQueue.main)
             .assign(to: &$connectionState)
+
+        NotificationCenter.default.publisher(for: .neomsgAPNsTokenUpdated)
+            .compactMap { $0.userInfo?["token"] as? String }
+            .sink { [weak self] token in
+                Task { await self?.uploadPushToken(token) }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func uploadPushToken(_ token: String) async {
+        try? await apiClient.registerPushToken(token, deviceID: DeviceInfo.id)
     }
 
     func bootstrap() async {

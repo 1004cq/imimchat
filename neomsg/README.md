@@ -2,7 +2,7 @@
 
 > 类 Telegram 高性能即时通讯系统 — **MTProto 2.0** + Protobuf 双协议，云同步 + 可选端到端加密。
 
-**完整技术方案** → [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)  
+**完整技术方案** → [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)（v1.1 含架构图/协议/引擎/iOS 通知/APNs）  
 **MTProto 升级** → [../docs/MTPROTO_UPGRADE.md](../docs/MTPROTO_UPGRADE.md)  
 **客户端接入** → [docs/MTProto_CLIENT.md](./docs/MTProto_CLIENT.md)
 

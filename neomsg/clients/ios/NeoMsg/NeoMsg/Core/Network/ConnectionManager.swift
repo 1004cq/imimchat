@@ -86,7 +86,11 @@ final class ConnectionManager: ObservableObject {
     }
 
     private func handleIncoming(_ data: Data) {
-        // TODO: Protobuf 解码 Envelope，分发到 SyncEngine / MessageStore
+        if let (_, payload) = WireFrameCodec.decode(data) {
+            // TODO: SwiftProtobuf 解码 Envelope / WirePacket
+            Task { await syncEngine.handlePush(payload) }
+            return
+        }
         Task { await syncEngine.handlePush(data) }
     }
 

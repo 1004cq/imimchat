@@ -23,6 +23,14 @@ final class SyncEngine {
         store.updatePts(pts)
         for msg in updates {
             store.appendMessage(msg)
+            MessageService.shared.onNewMessageReceived(
+                IncomingMessagePayload(
+                    chatId: msg.dialogID,
+                    messageId: msg.id,
+                    senderId: msg.senderID,
+                    preview: msg.content
+                )
+            )
         }
     }
 }
