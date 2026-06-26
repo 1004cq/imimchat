@@ -3325,12 +3325,18 @@ async function startServer() {
     try {
       dbUser = await prisma.user.findUnique({
         where: { id: userId },
-        select: { id: true, username: true, nickname: true, avatar: true, backgroundUrl: true, bio: true, phone: true, email: true },
+        select: {
+          id: true, username: true, nickname: true, avatar: true, backgroundUrl: true,
+          bio: true, phone: true, email: true, gender: true, region: true, birthday: true,
+        },
       });
       if (!dbUser) {
         dbUser = await prisma.user.findUnique({
           where: { username: userId },
-          select: { id: true, username: true, nickname: true, avatar: true, backgroundUrl: true, bio: true, phone: true, email: true },
+          select: {
+            id: true, username: true, nickname: true, avatar: true, backgroundUrl: true,
+            bio: true, phone: true, email: true, gender: true, region: true, birthday: true,
+          },
         });
       }
     } catch {}
@@ -3343,8 +3349,8 @@ async function startServer() {
       // 数据库昵称优先于内存缓存
       name: displayName,
       nickname: dbUser?.nickname || (memProfile as any).nickname || displayName,
-      gender: (memProfile as any).gender || '',
-      region: (memProfile as any).region || '',
+      gender: dbUser?.gender || (memProfile as any).gender || '',
+      region: dbUser?.region || (memProfile as any).region || '',
       // 优先从数据库读取 phone/email（仅当请求者是本人时才返回）
       phone: dbUser?.phone || (memProfile as any).phone || '',
       email: dbUser?.email || (memProfile as any).email || '',
@@ -3352,7 +3358,7 @@ async function startServer() {
       bio: dbUser?.bio ?? (memProfile as any).bio ?? '',
       avatar: avatarToProxy(dbUser?.avatar || (memProfile as any).avatar || ''),
       backgroundUrl: dbUser?.backgroundUrl || (memProfile as any).backgroundUrl || '',
-      birthday: (memProfile as any).birthday || '',
+      birthday: dbUser?.birthday || (memProfile as any).birthday || '',
     };
     res.json({ profile });
   });
@@ -3433,6 +3439,9 @@ async function startServer() {
       if (updated.bio !== undefined) dbUpdate.bio = updated.bio;
       if (updated.avatar !== undefined) dbUpdate.avatar = updated.avatar;
       if (updated.backgroundUrl !== undefined) dbUpdate.backgroundUrl = updated.backgroundUrl || null;
+      if (updated.gender !== undefined) dbUpdate.gender = updated.gender || null;
+      if (updated.region !== undefined) dbUpdate.region = updated.region || null;
+      if (updated.birthday !== undefined) dbUpdate.birthday = updated.birthday || null;
       if (dbUser && updated.wechatId && updated.wechatId !== currentUsername) dbUpdate.username = updated.wechatId;
 
       if (Object.keys(dbUpdate).length > 0) {

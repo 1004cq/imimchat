@@ -4,8 +4,7 @@
  */
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Download, Share2 } from 'lucide-react';
-import QRCode from 'qrcode';
+import { X, Download, Share2, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface QRCodeModalProps {
@@ -18,27 +17,34 @@ interface QRCodeModalProps {
 export const QRCodeModal: React.FC<QRCodeModalProps> = ({ userId, nickname, avatar, onClose }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
+  const [qrError, setQrError] = useState('');
 
-  // 生成二维码内容：imim://user/{userId}
   const qrContent = `imim://user/${userId}`;
 
   useEffect(() => {
+    let cancelled = false;
     const generate = async () => {
       try {
         const canvas = canvasRef.current;
-        if (!canvas) return;
+        if (!canvas || cancelled) return;
+        const QRCode = (await import('qrcode')).default;
         await QRCode.toCanvas(canvas, qrContent, {
           width: 220,
           margin: 2,
           color: { dark: '#1a1a1a', light: '#ffffff' },
           errorCorrectionLevel: 'H',
         });
-        setQrDataUrl(canvas.toDataURL('image/png'));
+        if (!cancelled) {
+          setQrDataUrl(canvas.toDataURL('image/png'));
+          setQrError('');
+        }
       } catch (err) {
         console.error('QR 生成失败:', err);
+        if (!cancelled) setQrError('二维码生成失败，请关闭后重试');
       }
     };
     generate();
+    return () => { cancelled = true; };
   }, [qrContent]);
 
   const handleSave = () => {
@@ -117,8 +123,15 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({ userId, nickname, avat
             </div>
 
             {/* 二维码 */}
-            <div className="bg-white rounded-2xl p-3 shadow-sm">
-              <canvas ref={canvasRef} className="block" />
+            <div className="bg-white rounded-2xl p-3 shadow-sm min-h-[220px] flex items-center justify-center">
+              {qrError ? (
+                <div className="flex flex-col items-center gap-2 text-center px-4">
+                  <AlertTriangle size={20} className="text-amber-500" />
+                  <p className="text-xs text-gray-500">{qrError}</p>
+                </div>
+              ) : (
+                <canvas ref={canvasRef} className="block" />
+              )}
             </div>
 
             <p className="text-xs text-gray-400 text-center">扫描二维码，添加我为好友</p>

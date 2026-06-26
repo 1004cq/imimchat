@@ -19,6 +19,9 @@ model User {
   avatar      String?
   backgroundUrl String?
   bio         String?
+  gender      String?
+  region      String?
+  birthday    String?
   /// 是否为机器人（TG 风格：正数 ID，is_bot=true）
   isBot       Boolean  @default(false)
   isBanned    Boolean  @default(false)

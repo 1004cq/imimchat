@@ -30,9 +30,11 @@ router.post('/verify', async (req: Request, res: Response) => {
     if (!payload || payload.v !== 1) {
       return res.status(400).json({ error: '无效的二维码格式' });
     }
-    if (!payload.uid || !payload.ik) {
+    if (!payload.uid) {
       return res.status(400).json({ error: '二维码缺少必要字段' });
     }
+    // 基础二维码（imim://user/{id}）无 E2EE 公钥，仍允许添加好友
+    const isBasicQr = !payload.ik || payload.ik === 'basic';
 
     // 过期校验
     if (payload.exp && Date.now() > payload.exp) {
@@ -63,6 +65,7 @@ router.post('/verify', async (req: Request, res: Response) => {
 
     res.json({
       valid: true,
+      basic: isBasicQr,
       user: {
         id: user.id,
         name: user.nickname || user.username,

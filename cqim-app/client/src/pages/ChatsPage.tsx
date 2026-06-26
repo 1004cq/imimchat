@@ -644,7 +644,7 @@ export default function ChatsPage() {
       {showQRCode && currentUser && (
         <QRCodeModal
           userId={currentUser.id}
-          nickname={currentUser.nickname}
+          nickname={currentUser.nickname || currentUser.name || '用户'}
           avatar={currentUser.avatar}
           onClose={() => setShowQRCode(false)}
         />

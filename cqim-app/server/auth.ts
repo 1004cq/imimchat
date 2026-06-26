@@ -1070,6 +1070,9 @@ router.get('/me', userAuth, async (req: Request, res: Response) => {
       email: user.email,
       avatar: avatarToProxy(user.avatar),
       bio: user.bio,
+      gender: user.gender || '',
+      region: user.region || '',
+      birthday: user.birthday || '',
       isBot: user.isBot || false,
       phoneVerified: user.phoneVerified,
       emailVerified: user.emailVerified,
@@ -1237,6 +1240,9 @@ router.put('/profile', userAuth, async (req: Request, res: Response) => {
   if (avatar !== undefined) data.avatar = avatar;
   if (backgroundUrl !== undefined) data.backgroundUrl = backgroundUrl || null;
   if (bio !== undefined) data.bio = bio;
+  if (gender !== undefined) data.gender = gender || null;
+  if (region !== undefined) data.region = region || null;
+  if (birthday !== undefined) data.birthday = birthday || null;
 
   // 支持修改 username（账号ID），需校验唯一性
   if (newUsername !== undefined && newUsername !== user.username) {
@@ -1261,9 +1267,8 @@ router.put('/profile', userAuth, async (req: Request, res: Response) => {
     return res.status(e?.code === 'P2002' ? 409 : 500).json({ error: msg });
   }
 
-  // 修改 username 后立即清除 session 缓存，确保下次请求能从数据库获取最新 user.username
-  // 避免缓存中的旧 username 导致后续请求跳过更新逻辑，返回旧的 wechatId
-  if (data.username && token) {
+  // 资料更新后清除 session 缓存，确保 /me 等接口返回最新字段
+  if (token) {
     invalidateSessionCache(token);
   }
 
@@ -1311,6 +1316,9 @@ router.put('/profile', userAuth, async (req: Request, res: Response) => {
       avatar: avatarToProxy(updated.avatar),
       backgroundUrl: updated.backgroundUrl,
       bio: updated.bio,
+      gender: updated.gender || '',
+      region: updated.region || '',
+      birthday: updated.birthday || '',
       phoneVerified: updated.phoneVerified,
       emailVerified: updated.emailVerified,
     },
@@ -1326,9 +1334,9 @@ router.put('/profile', userAuth, async (req: Request, res: Response) => {
       bio: updated.bio || '',
       phone: updated.phone || '',
       email: updated.email || '',
-      gender: gender || '',
-      region: region || '',
-      birthday: birthday || '',
+      gender: updated.gender || '',
+      region: updated.region || '',
+      birthday: updated.birthday || '',
     },
   });
 });

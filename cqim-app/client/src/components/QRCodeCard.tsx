@@ -191,6 +191,21 @@ const QRScanner: React.FC<{
       inversionAttempts: 'dontInvert',
     });
     if (code) {
+      const imimMatch = code.data.match(/^imim:\/\/user\/(.+)$/);
+      if (imimMatch) {
+        onScan({
+          v: 1,
+          uid: imimMatch[1],
+          name: '',
+          phone: '',
+          ik: 'basic',
+          regId: 0,
+          fp: '',
+          ts: Date.now(),
+          exp: Date.now() + 24 * 60 * 60 * 1000,
+        });
+        return;
+      }
       try {
         const payload: QRPayload = JSON.parse(code.data);
         if (payload.v === 1 && payload.uid && payload.ik) {
@@ -451,9 +466,11 @@ export const SafetyNumberVerify: React.FC<{
       setGenerating(false);
       // 生成安全码二维码（只编码前 60 位用于扫码比对）
       const snShort = sn9999.slice(0, 60);
-      QRCode.toDataURL(JSON.stringify({ type: 'safety_number_9999', snShort, peerId, ts: Date.now() }), {
-        width: 200, margin: 2, color: { dark: '#1a2e1a', light: '#ffffff' }
-      }).then(setQrData).catch(console.error);
+      loadQRCode().then((QRCode: any) => {
+        QRCode.toDataURL(JSON.stringify({ type: 'safety_number_9999', snShort, peerId, ts: Date.now() }), {
+          width: 200, margin: 2, color: { dark: '#1a2e1a', light: '#ffffff' }
+        }).then(setQrData).catch(console.error);
+      }).catch(console.error);
     });
   }, [e2ee.isReady, peerId]);
 
@@ -690,50 +707,92 @@ export const QRCardModal: React.FC<{
   onScanSuccess?: (payload: QRPayload) => void;
 }> = ({ onClose, onScanSuccess }) => {
   const e2ee = useE2EE();
-  const [qrData, setQrData] = useState('');
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [payload, setPayload] = useState<QRPayload | null>(null);
   const [showScanner, setShowScanner] = useState(false);
   const [scannedPayload, setScannedPayload] = useState<QRPayload | null>(null);
   const [scanSafetyNumber, setScanSafetyNumber] = useState('');
   const [tab, setTab] = useState<'myqr' | 'scan'>('myqr');
   const [loading, setLoading] = useState(true);
+  const [qrError, setQrError] = useState('');
+  const [useBasicQr, setUseBasicQr] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [verifying, setVerifying] = useState(false);
   const [adding, setAdding] = useState(false);
 
   // 生成个人名片二维码
   useEffect(() => {
-    if (!e2ee.isReady) return;
-    const generate = async () => {
+    let cancelled = false;
+    let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const renderQr = async (withE2EE: boolean) => {
       setLoading(true);
+      setQrError('');
       try {
-        const status = e2ee.status;
-        const fp = await e2ee.getLocalFingerprint();
-        const p: QRPayload = {
-          v: 1,
-          uid: CURRENT_USER.id,
-          name: CURRENT_USER.name,
-          phone: CURRENT_USER.phone || '',
-          ik: status?.identityKey?.slice(0, 64) || '',
-          regId: status?.registrationId || 0,
-          fp: fp || '',
-          ts: Date.now(),
-          exp: Date.now() + 24 * 60 * 60 * 1000, // 24小时有效
-        };
-        setPayload(p);
-        const dataStr = JSON.stringify(p);
-        await QRCode.toCanvas(document.getElementById('my-qr-canvas') as HTMLCanvasElement, dataStr, {
-          width: 200, margin: 2,
+        const QRCode = await loadQRCode();
+        const canvas = canvasRef.current;
+        if (cancelled || !canvas) return;
+
+        const userId = CURRENT_USER.id;
+        if (!userId || userId === 'me') {
+          setQrError('请先登录后再查看二维码');
+          setPayload(null);
+          return;
+        }
+
+        let dataStr: string;
+        if (withE2EE && e2ee.isReady) {
+          const status = e2ee.status;
+          const fp = await e2ee.getLocalFingerprint();
+          const p: QRPayload = {
+            v: 1,
+            uid: userId,
+            name: CURRENT_USER.name,
+            phone: CURRENT_USER.phone || '',
+            ik: status?.identityKey?.slice(0, 64) || '',
+            regId: status?.registrationId || 0,
+            fp: fp || '',
+            ts: Date.now(),
+            exp: Date.now() + 24 * 60 * 60 * 1000,
+          };
+          setPayload(p);
+          setUseBasicQr(false);
+          dataStr = JSON.stringify(p);
+        } else {
+          setPayload(null);
+          setUseBasicQr(true);
+          dataStr = `imim://user/${userId}`;
+        }
+
+        await QRCode.toCanvas(canvas, dataStr, {
+          width: 200,
+          margin: 2,
           color: { dark: '#1a2e1a', light: '#ffffff' },
           errorCorrectionLevel: 'M',
         });
       } catch (e) {
         console.error('QR生成失败', e);
+        if (!cancelled) setQrError('二维码生成失败，请重试');
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
-    generate();
-  }, [e2ee.isReady, e2ee.status]);
+
+    if (e2ee.isReady) {
+      renderQr(true);
+    } else if (e2ee.isInitializing) {
+      fallbackTimer = setTimeout(() => {
+        if (!cancelled && !e2ee.isReady) renderQr(false);
+      }, 2500);
+    } else {
+      renderQr(false);
+    }
+
+    return () => {
+      cancelled = true;
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+    };
+  }, [e2ee.isReady, e2ee.isInitializing, e2ee.status, refreshKey]);
 
   // 扫码成功处理（先调服务端校验，再展示确认弹窗）
   const handleScan = useCallback(async (p: QRPayload) => {
@@ -813,8 +872,7 @@ export const QRCardModal: React.FC<{
 
   // 刷新二维码
   const handleRefresh = useCallback(() => {
-    setLoading(true);
-    setTimeout(() => setLoading(false), 100);
+    setRefreshKey((k) => k + 1);
   }, []);
 
   return (
@@ -886,7 +944,19 @@ export const QRCardModal: React.FC<{
                       <Loader2 size={24} className="animate-spin text-dove-green" />
                     </div>
                   )}
-                  <canvas id="my-qr-canvas" width={200} height={200} className="rounded-lg" />
+                  {qrError && !loading && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-white rounded-xl z-10 px-4 text-center gap-2">
+                      <AlertTriangle size={22} className="text-amber-500" />
+                      <p className="text-[11px] text-muted-foreground">{qrError}</p>
+                      <button
+                        onClick={handleRefresh}
+                        className="text-[10px] text-dove-green flex items-center gap-1"
+                      >
+                        <RefreshCw size={10} /> 重试
+                      </button>
+                    </div>
+                  )}
+                  <canvas ref={canvasRef} width={200} height={200} className="rounded-lg" />
                   {/* 中心 logo */}
                   <div className="absolute w-10 h-10 bg-white rounded-lg flex items-center justify-center shadow-sm border border-border/20">
                     <span className="text-[10px] font-bold text-dove-green">im</span>
@@ -904,6 +974,11 @@ export const QRCardModal: React.FC<{
                       <RefreshCw size={9} className="text-muted-foreground" />
                     </button>
                   </div>
+                )}
+                {useBasicQr && !loading && !qrError && (
+                  <p className="text-[9px] text-amber-600 mt-2 text-center">
+                    加密模块初始化中，当前为基础二维码（仍可添加好友）
+                  </p>
                 )}
 
                 <p className="text-[10px] text-muted-foreground mt-2 text-center">

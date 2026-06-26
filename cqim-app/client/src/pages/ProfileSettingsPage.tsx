@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { CURRENT_USER, syncCurrentUserProfile } from '@/lib/store';
+import { filterRegionGroups } from '@/lib/region-data';
 import { authApi, authFetch } from '@/lib/authFetch';
 import { DoveAvatar } from '@/components/DoveAvatar';
 import { QRCardModal } from '@/components/QRCodeCard';
@@ -239,16 +240,7 @@ const RegionPicker: React.FC<{
   onSelect: (val: string) => void;
 }> = ({ value, onClose, onSelect }) => {
   const [search, setSearch] = useState('');
-  const regions = [
-    '中国 · 北京', '中国 · 上海', '中国 · 广州', '中国 · 深圳',
-    '中国 · 杭州', '中国 · 成都', '中国 · 武汉', '中国 · 南京',
-    '中国 · 西安', '中国 · 重庆', '中国 · 天津', '中国 · 苏州',
-    '中国 · 香港', '中国 · 澳门', '中国 · 台湾',
-    '美国', '英国', '日本', '韩国', '新加坡', '澳大利亚', '加拿大',
-    '德国', '法国', '意大利', '西班牙', '荷兰', '瑞士',
-    '泰国', '马来西亚', '印度尼西亚', '越南', '菲律宾',
-  ];
-  const filtered = regions.filter(r => r.includes(search));
+  const groups = filterRegionGroups(search);
 
   return (
     <motion.div
@@ -271,28 +263,44 @@ const RegionPicker: React.FC<{
         <div className="flex items-center justify-between px-5 py-3 flex-shrink-0">
           <button onClick={onClose} className="text-sm text-muted-foreground/60 font-medium">取消</button>
           <h3 className="text-sm font-semibold text-dove-ink" style={{ fontFamily: 'var(--font-wenkai)' }}>地区</h3>
-          <div className="w-10" />
+          <button
+            onClick={() => { onSelect(''); onClose(); }}
+            className="text-sm text-dove-green font-medium"
+          >
+            清除
+          </button>
         </div>
         <div className="px-4 pb-2 flex-shrink-0">
           <div className="search-bar">
             <input
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="搜索地区"
+              placeholder="搜索国家或城市"
             />
           </div>
         </div>
-        <div className="overflow-y-auto flex-1 mx-4 settings-group">
-          {filtered.map((r) => (
-            <button
-              key={r}
-              onClick={() => { onSelect(r); onClose(); }}
-              className="settings-item w-full"
-            >
-              <span className="text-sm text-dove-ink">{r}</span>
-              {value === r && <Check size={16} className="text-dove-green" />}
-            </button>
-          ))}
+        <div className="overflow-y-auto flex-1 mx-4">
+          {groups.length === 0 ? (
+            <div className="py-10 text-center text-sm text-muted-foreground">未找到匹配地区</div>
+          ) : (
+            groups.map((group) => (
+              <div key={group.label} className="mb-3">
+                <div className="px-1 py-1.5 text-[11px] text-muted-foreground/70 font-medium">{group.label}</div>
+                <div className="settings-group">
+                  {group.regions.map((r) => (
+                    <button
+                      key={r}
+                      onClick={() => { onSelect(r); onClose(); }}
+                      className="settings-item w-full"
+                    >
+                      <span className="text-sm text-dove-ink">{r}</span>
+                      {value === r && <Check size={16} className="text-dove-green" />}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </motion.div>
     </motion.div>
@@ -415,16 +423,26 @@ export default function ProfileSettingsPage({ onClose, onProfileUpdate }: Profil
   const [showQR, setShowQR] = useState(false);
 
   useEffect(() => {
-    authFetch(`/api/profile?userId=${CURRENT_USER.id || 'me'}`)
-      .then(async (r) => {
+    Promise.all([
+      authFetch(`/api/profile?userId=${CURRENT_USER.id || 'me'}`).then(async (r) => {
         const data = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(data.error || '加载资料失败');
         return data;
-      })
-      .then(d => {
-        if (d.profile) {
-          setProfile(prev => ({ ...prev, ...d.profile }));
-        }
+      }),
+      authFetch('/api/auth/me').then(async (r) => (r.ok ? r.json() : null)).catch(() => null),
+    ])
+      .then(([profileRes, meRes]) => {
+        const profile = profileRes?.profile || {};
+        const me = meRes?.user || {};
+        setProfile(prev => ({
+          ...prev,
+          ...profile,
+          gender: me.gender ?? profile.gender ?? prev.gender,
+          region: me.region ?? profile.region ?? prev.region,
+          birthday: me.birthday ?? profile.birthday ?? prev.birthday,
+          phone: me.phone ?? profile.phone ?? prev.phone,
+          email: me.email ?? profile.email ?? prev.email,
+        }));
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -460,6 +478,9 @@ export default function ProfileSettingsPage({ onClose, onProfileUpdate }: Profil
         wechatId: key === 'wechatId' ? updated.wechatId : (data.profile?.wechatId || data.user?.username || updated.wechatId),
         name: data.profile?.name || data.profile?.nickname || updated.name,
         nickname: data.profile?.nickname || data.profile?.name || updated.nickname,
+        gender: data.profile?.gender ?? data.user?.gender ?? updated.gender,
+        region: data.profile?.region ?? data.user?.region ?? updated.region,
+        birthday: data.profile?.birthday ?? data.user?.birthday ?? updated.birthday,
       };
 
       setProfile(savedProfile);
@@ -570,7 +591,7 @@ export default function ProfileSettingsPage({ onClose, onProfileUpdate }: Profil
             />
             <ListItem
               label="地区"
-              value={profile.region}
+              value={profile.region || '未填写'}
               onClick={() => setShowRegion(true)}
             />
             <ListItem
