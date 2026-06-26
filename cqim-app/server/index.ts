@@ -1626,6 +1626,21 @@ async function startServer() {
   const { default: channelRouter } = await import('./channel.js');
   app.use('/api/channel', channelRouter);
 
+  // ============ 类 TG 架构扩展服务 ============
+  const { default: botPlatformRouter, botApiRouter } = await import('./bot-platform.js');
+  app.use('/api/bot', botPlatformRouter);
+  app.use('/bot', botApiRouter);
+
+  const { default: searchRouter } = await import('./search.js');
+  app.use('/api/search', searchRouter);
+
+  const { default: riskRouter, loadRiskConfig } = await import('./risk-control.js');
+  app.use('/api/risk', riskRouter);
+  await loadRiskConfig();
+
+  const { initMQSubscriptions } = await import('./mq.js');
+  initMQSubscriptions();
+
   // ============ TRTC UserSig 生成接口 ============
 
   /**
