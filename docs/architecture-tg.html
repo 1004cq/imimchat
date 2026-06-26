@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>类 TG 即时通讯项目架构图</title>
+<style>
+  :root{
+    --bg:#f6f8fa;--card:#ffffff;--text:#1f2328;--muted:#57606a;--line:#d0d7de;
+    --blue:#0969da;--blue2:#ddf4ff;--green:#1a7f37;--green2:#dafbe1;
+    --orange:#bc4c00;--orange2:#fff1e5;--purple:#8250df;--purple2:#fbefff;
+    --red:#cf222e;--red2:#ffebe9;--gray2:#f6f8fa;
+  }
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",Arial,sans-serif;}
+  .wrap{max-width:1280px;margin:0 auto;padding:28px 20px 48px;}
+  .hero{background:linear-gradient(135deg,#0a3069,#0969da);color:white;border-radius:18px;padding:28px 32px;box-shadow:0 12px 32px rgba(9,105,218,.18)}
+  .hero h1{margin:0 0 10px;font-size:30px}.hero p{margin:0;color:#dbeafe;line-height:1.7}
+  .meta{margin-top:14px;display:flex;gap:10px;flex-wrap:wrap}.tag{border:1px solid rgba(255,255,255,.35);border-radius:999px;padding:5px 10px;font-size:13px;color:#fff;background:rgba(255,255,255,.08)}
+  .panel{margin-top:22px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:0 6px 18px rgba(27,31,36,.06)}
+  .panel h2{font-size:20px;margin:0 0 12px}.note{color:var(--muted);font-size:14px;line-height:1.7;margin:0 0 12px}
+  svg{width:100%;height:auto;display:block;background:#fff;border-radius:12px;border:1px solid #d8dee4}
+  .legend{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:14px}.legend .item{border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff;font-size:14px}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-top:14px}.card{border:1px solid var(--line);border-radius:14px;background:#fff;padding:16px}.card h3{margin:0 0 8px;font-size:16px}.card ul{margin:0;padding-left:20px;color:var(--muted);line-height:1.8;font-size:14px}
+  .footer{margin-top:18px;color:var(--muted);font-size:13px;text-align:center}
+  .layer-title{font-weight:700;font-size:18px;fill:#1f2328}.node-title{font-weight:700;font-size:13px;fill:#1f2328}.node-sub{font-size:11px;fill:#57606a}.small{font-size:10px;fill:#57606a}.arrow{stroke:#8c959f;stroke-width:1.8;fill:none;marker-end:url(#arrow)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <section class="hero">
+    <h1>类 TG 即时通讯项目架构图</h1>
+    <p>面向私聊、群聊、超级群、频道、Bot、大文件分发、内容治理和全球访问的整体技术架构。</p>
+    <div class="meta"><span class="tag">即时通讯</span><span class="tag">超级群 / 频道</span><span class="tag">Bot 平台</span><span class="tag">文件分发</span><span class="tag">安全治理</span></div>
+  </section>
+
+  <section class="panel">
+    <h2>架构总览</h2>
+    <p class="note">该图按客户端、接入与加速、核心业务服务、通信能力、数据中间件、安全治理与运维六层拆分。</p>
+    <svg viewBox="0 0 1240 980" role="img" aria-label="类 TG 即时通讯项目架构图">
+      <defs>
+        <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#8c959f"/></marker>
+        <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#1b1f24" flood-opacity="0.12"/></filter>
+      </defs>
+
+      <!-- layer backgrounds -->
+      <rect x="30" y="30" width="1180" height="110" rx="18" fill="#ddf4ff" stroke="#54aeff"/>
+      <text x="52" y="62" class="layer-title">客户端层</text>
+      <rect x="30" y="170" width="1180" height="120" rx="18" fill="#f6f8fa" stroke="#d0d7de"/>
+      <text x="52" y="202" class="layer-title">接入与加速层</text>
+      <rect x="30" y="320" width="1180" height="230" rx="18" fill="#fff1e5" stroke="#fb8f44"/>
+      <text x="52" y="352" class="layer-title">核心业务服务层（主要自研）</text>
+      <rect x="30" y="580" width="1180" height="120" rx="18" fill="#dafbe1" stroke="#4ac26b"/>
+      <text x="52" y="612" class="layer-title">通信能力层</text>
+      <rect x="30" y="730" width="1180" height="120" rx="18" fill="#fbefff" stroke="#d8b9ff"/>
+      <text x="52" y="762" class="layer-title">数据与中间件层</text>
+      <rect x="30" y="880" width="1180" height="70" rx="18" fill="#ffebe9" stroke="#ff8182"/>
+      <text x="52" y="922" class="layer-title">安全、治理与运维层</text>
+
+      <!-- node function -->
+      <!-- Client -->
+      <g filter="url(#shadow)">
+        <rect x="180" y="72" width="160" height="48" rx="10" fill="#fff" stroke="#0969da"/><text x="260" y="94" text-anchor="middle" class="node-title">iOS App</text><text x="260" y="111" text-anchor="middle" class="node-sub">移动端</text>
+        <rect x="390" y="72" width="160" height="48" rx="10" fill="#fff" stroke="#0969da"/><text x="470" y="94" text-anchor="middle" class="node-title">Android App</text><text x="470" y="111" text-anchor="middle" class="node-sub">移动端</text>
+        <rect x="600" y="72" width="160" height="48" rx="10" fill="#fff" stroke="#0969da"/><text x="680" y="94" text-anchor="middle" class="node-title">Web App</text><text x="680" y="111" text-anchor="middle" class="node-sub">浏览器</text>
+        <rect x="810" y="72" width="220" height="48" rx="10" fill="#fff" stroke="#0969da"/><text x="920" y="94" text-anchor="middle" class="node-title">Desktop 客户端</text><text x="920" y="111" text-anchor="middle" class="node-sub">Windows / macOS / Linux</text>
+      </g>
+
+      <!-- Access -->
+      <g filter="url(#shadow)">
+        <rect x="80" y="222" width="145" height="46" rx="10" fill="#fff" stroke="#8c959f"/><text x="152" y="250" text-anchor="middle" class="node-title">DNSPod</text>
+        <rect x="275" y="222" width="155" height="46" rx="10" fill="#fff" stroke="#8c959f"/><text x="352" y="250" text-anchor="middle" class="node-title">EdgeOne / CDN</text>
+        <rect x="480" y="222" width="145" height="46" rx="10" fill="#fff" stroke="#8c959f"/><text x="552" y="250" text-anchor="middle" class="node-title">GAAP</text>
+        <rect x="675" y="222" width="165" height="46" rx="10" fill="#fff" stroke="#8c959f"/><text x="757" y="250" text-anchor="middle" class="node-title">WAF / Anti-DDoS</text>
+        <rect x="890" y="222" width="210" height="46" rx="10" fill="#fff" stroke="#8c959f"/><text x="995" y="250" text-anchor="middle" class="node-title">CLB / API Gateway</text>
+      </g>
+
+      <!-- Biz nodes -->
+      <g filter="url(#shadow)">
+        <rect x="65" y="375" width="145" height="58" rx="10" fill="#fff" stroke="#bc4c00"/><text x="137" y="398" text-anchor="middle" class="node-title">账号服务</text><text x="137" y="416" text-anchor="middle" class="node-sub">登录 / 设备 / 2FA</text>
+        <rect x="230" y="375" width="145" height="58" rx="10" fill="#fff" stroke="#bc4c00"/><text x="302" y="398" text-anchor="middle" class="node-title">用户资料</text><text x="302" y="416" text-anchor="middle" class="node-sub">头像 / 昵称 / 用户名</text>
+        <rect x="395" y="375" width="145" height="58" rx="10" fill="#fff" stroke="#bc4c00"/><text x="467" y="398" text-anchor="middle" class="node-title">关系链</text><text x="467" y="416" text-anchor="middle" class="node-sub">好友 / 黑名单</text>
+        <rect x="560" y="375" width="145" height="58" rx="10" fill="#fff" stroke="#bc4c00"/><text x="632" y="398" text-anchor="middle" class="node-title">群组服务</text><text x="632" y="416" text-anchor="middle" class="node-sub">普通群 / 超级群</text>
+        <rect x="725" y="375" width="145" height="58" rx="10" fill="#fff" stroke="#bc4c00"/><text x="797" y="398" text-anchor="middle" class="node-title">频道服务</text><text x="797" y="416" text-anchor="middle" class="node-sub">订阅 / 广播</text>
+        <rect x="890" y="375" width="145" height="58" rx="10" fill="#fff" stroke="#bc4c00"/><text x="962" y="398" text-anchor="middle" class="node-title">Bot 平台</text><text x="962" y="416" text-anchor="middle" class="node-sub">Token / Webhook</text>
+        <rect x="1055" y="375" width="120" height="58" rx="10" fill="#fff" stroke="#bc4c00"/><text x="1115" y="398" text-anchor="middle" class="node-title">文件服务</text><text x="1115" y="416" text-anchor="middle" class="node-sub">上传 / 预览</text>
+
+        <rect x="145" y="465" width="145" height="58" rx="10" fill="#fff" stroke="#bc4c00"/><text x="217" y="488" text-anchor="middle" class="node-title">搜索服务</text><text x="217" y="506" text-anchor="middle" class="node-sub">消息 / 群 / 文件</text>
+        <rect x="330" y="465" width="145" height="58" rx="10" fill="#fff" stroke="#bc4c00"/><text x="402" y="488" text-anchor="middle" class="node-title">通知服务</text><text x="402" y="506" text-anchor="middle" class="node-sub">离线 / 系统通知</text>
+        <rect x="515" y="465" width="145" height="58" rx="10" fill="#fff" stroke="#bc4c00"/><text x="587" y="488" text-anchor="middle" class="node-title">风控服务</text><text x="587" y="506" text-anchor="middle" class="node-sub">反垃圾 / 限流</text>
+        <rect x="700" y="465" width="145" height="58" rx="10" fill="#fff" stroke="#bc4c00"/><text x="772" y="488" text-anchor="middle" class="node-title">审核后台</text><text x="772" y="506" text-anchor="middle" class="node-sub">举报 / 人工审核</text>
+        <rect x="885" y="465" width="165" height="58" rx="10" fill="#fff" stroke="#bc4c00"/><text x="967" y="488" text-anchor="middle" class="node-title">运营管理后台</text><text x="967" y="506" text-anchor="middle" class="node-sub">配置 / 权限 / 统计</text>
+      </g>
+
+      <!-- Comm -->
+      <g filter="url(#shadow)">
+        <rect x="210" y="625" width="250" height="52" rx="10" fill="#fff" stroke="#1a7f37"/><text x="335" y="647" text-anchor="middle" class="node-title">腾讯云 IM / Chat</text><text x="335" y="665" text-anchor="middle" class="node-sub">单聊 / 群聊 / 离线 / 历史</text>
+        <rect x="530" y="625" width="200" height="52" rx="10" fill="#fff" stroke="#1a7f37"/><text x="630" y="647" text-anchor="middle" class="node-title">TRTC</text><text x="630" y="665" text-anchor="middle" class="node-sub">语音 / 视频 / 群通话</text>
+        <rect x="800" y="625" width="200" height="52" rx="10" fill="#fff" stroke="#1a7f37"/><text x="900" y="647" text-anchor="middle" class="node-title">TPNS</text><text x="900" y="665" text-anchor="middle" class="node-sub">移动端离线推送</text>
+      </g>
+
+      <!-- Data -->
+      <g filter="url(#shadow)">
+        <rect x="65" y="775" width="175" height="52" rx="10" fill="#fff" stroke="#8250df"/><text x="152" y="797" text-anchor="middle" class="node-title">TDSQL-C / MySQL</text><text x="152" y="815" text-anchor="middle" class="node-sub">核心业务数据</text>
+        <rect x="270" y="775" width="145" height="52" rx="10" fill="#fff" stroke="#8250df"/><text x="342" y="797" text-anchor="middle" class="node-title">Redis</text><text x="342" y="815" text-anchor="middle" class="node-sub">缓存 / 限流</text>
+        <rect x="445" y="775" width="155" height="52" rx="10" fill="#fff" stroke="#8250df"/><text x="522" y="797" text-anchor="middle" class="node-title">CKafka / TDMQ</text><text x="522" y="815" text-anchor="middle" class="node-sub">异步 / 广播</text>
+        <rect x="630" y="775" width="150" height="52" rx="10" fill="#fff" stroke="#8250df"/><text x="705" y="797" text-anchor="middle" class="node-title">Elasticsearch</text><text x="705" y="815" text-anchor="middle" class="node-sub">全文索引</text>
+        <rect x="810" y="775" width="145" height="52" rx="10" fill="#fff" stroke="#8250df"/><text x="882" y="797" text-anchor="middle" class="node-title">COS</text><text x="882" y="815" text-anchor="middle" class="node-sub">媒体 / 大文件</text>
+        <rect x="985" y="775" width="145" height="52" rx="10" fill="#fff" stroke="#8250df"/><text x="1057" y="797" text-anchor="middle" class="node-title">数据万象 CI</text><text x="1057" y="815" text-anchor="middle" class="node-sub">缩略图 / 处理</text>
+      </g>
+
+      <!-- SecOps -->
+      <g filter="url(#shadow)">
+        <rect x="235" y="895" width="150" height="38" rx="10" fill="#fff" stroke="#cf222e"/><text x="310" y="919" text-anchor="middle" class="node-title">内容安全</text>
+        <rect x="425" y="895" width="145" height="38" rx="10" fill="#fff" stroke="#cf222e"/><text x="497" y="919" text-anchor="middle" class="node-title">CLS 日志</text>
+        <rect x="610" y="895" width="145" height="38" rx="10" fill="#fff" stroke="#cf222e"/><text x="682" y="919" text-anchor="middle" class="node-title">云监控 / APM</text>
+        <rect x="795" y="895" width="170" height="38" rx="10" fill="#fff" stroke="#cf222e"/><text x="880" y="919" text-anchor="middle" class="node-title">CAM / 操作审计</text>
+      </g>
+
+      <!-- arrows -->
+      <path class="arrow" d="M 680 120 V 170"/>
+      <path class="arrow" d="M 225 245 H 275"/><path class="arrow" d="M 430 245 H 480"/><path class="arrow" d="M 625 245 H 675"/><path class="arrow" d="M 840 245 H 890"/>
+      <path class="arrow" d="M 995 268 V 320"/>
+      <path class="arrow" d="M 335 550 V 625"/><path class="arrow" d="M 632 433 V 625"/><path class="arrow" d="M 797 433 V 625"/><path class="arrow" d="M 962 433 V 625"/><path class="arrow" d="M 402 523 L 850 625"/>
+      <path class="arrow" d="M 137 433 L 152 775"/><path class="arrow" d="M 302 433 L 152 775"/><path class="arrow" d="M 467 433 L 152 775"/><path class="arrow" d="M 632 433 L 342 775"/><path class="arrow" d="M 797 433 L 522 775"/><path class="arrow" d="M 962 433 L 522 775"/><path class="arrow" d="M 1115 433 L 882 775"/><path class="arrow" d="M 217 523 L 705 775"/>
+      <path class="arrow" d="M 882 827 L 1057 827"/><path class="arrow" d="M 882 775 C 900 700 320 700 352 268"/>
+      <path class="arrow" d="M 335 677 L 310 895"/><path class="arrow" d="M 1115 433 L 310 895"/><path class="arrow" d="M 797 433 L 310 895"/><path class="arrow" d="M 587 523 L 772 465"/>
+      <path class="arrow" d="M 620 550 V 895"/><path class="arrow" d="M 770 550 V 895"/><path class="arrow" d="M 967 523 L 880 895"/>
+    </svg>
+
+    <div class="legend">
+      <div class="item"><span class="dot" style="background:#0969da"></span><b>客户端层：</b>多端一致体验与消息同步。</div>
+      <div class="item"><span class="dot" style="background:#8c959f"></span><b>接入层：</b>解析、加速、防护和统一入口。</div>
+      <div class="item"><span class="dot" style="background:#bc4c00"></span><b>业务层：</b>超级群、频道、Bot、搜索、风控等核心自研。</div>
+      <div class="item"><span class="dot" style="background:#1a7f37"></span><b>通信层：</b>承载消息、音视频与离线推送。</div>
+      <div class="item"><span class="dot" style="background:#8250df"></span><b>数据层：</b>数据库、缓存、队列、搜索和对象存储。</div>
+      <div class="item"><span class="dot" style="background:#cf222e"></span><b>治理运维：</b>审核、日志、监控、审计。</div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>落地重点</h2>
+    <div class="grid">
+      <div class="card"><h3>第一阶段：基础聊天版</h3><ul><li>账号、单聊、普通群</li><li>图片 / 语音 / 文件消息</li><li>离线推送与基础审核</li><li>日志、监控和管理后台</li></ul></div>
+      <div class="card"><h3>第二阶段：TG 核心体验</h3><ul><li>超级群、频道、Bot</li><li>消息搜索、文件搜索</li><li>CDN / EdgeOne 文件加速</li><li>举报、封禁和风控策略</li></ul></div>
+      <div class="card"><h3>第三阶段：平台增强版</h3><ul><li>密聊、阅后即焚</li><li>Bot 开放平台与频道推荐</li><li>全球加速与多地域容灾</li><li>高级内容治理和审计</li></ul></div>
+    </div>
+  </section>
+  <div class="footer">CloudQ 架构图 · 类 TG 即时通讯项目</div>
+</div>
+</body>
+</html>

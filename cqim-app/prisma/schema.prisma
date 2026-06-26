@@ -300,6 +300,47 @@ model CustomPage {
   @@index([published])
 }
 
+// ============ Bot 平台（类 Telegram Bot API） ============
+
+/// Bot Token 与 Webhook 配置
+model BotToken {
+  id          String   @id @default(cuid())
+  /// 关联的 Bot 用户 ID（User.isBot = true）
+  botUserId   String   @unique
+  /// API Token（格式：{botId}:{secret}）
+  token       String   @unique
+  /// Webhook URL（可选，用于事件推送）
+  webhookUrl  String?
+  /// Webhook 密钥（可选）
+  webhookSecret String?
+  /// 允许的更新类型（JSON 数组，空 = 全部）
+  allowedUpdates String?
+  /// 是否启用
+  isActive    Boolean  @default(true)
+  /// 创建者用户 ID
+  ownerId     String
+  /// 速率限制：每分钟最大请求数
+  rateLimit   Int      @default(30)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  @@index([token])
+  @@index([ownerId])
+  @@index([isActive])
+}
+
+/// Bot 更新队列（Polling 模式用）
+model BotUpdate {
+  id          String   @id @default(cuid())
+  botUserId   String
+  updateId    Int
+  /// 更新内容（JSON）
+  payload     String
+  processed   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  @@unique([botUserId, updateId])
+  @@index([botUserId, processed, createdAt])
+}
+
 // ============ 好友关系系统 ============
 
 /// 好友申请
@@ -429,6 +470,10 @@ model Group {
   lastMsgTime   DateTime?
   /// 群公告
   announcement  String?
+  /// 慢速模式：成员发送消息的最小间隔（秒），0 = 关闭
+  slowModeSeconds Int    @default(0)
+  /// 超级群权限配置（JSON：sendMessages / sendMedia / pinMessages 等）
+  permissions   String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   members       GroupMember[]
