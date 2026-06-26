@@ -34,6 +34,7 @@
 | [register-service.md](./docs/register-service.md) | 注册中间件说明 |
 | [cqim-deploy.md](./docs/cqim-deploy.md) | CQIM 部署指南 |
 | [cqim-dev-roadmap.md](./docs/cqim-dev-roadmap.md) | CQIM 开发路线图 |
+| [neomsg 技术方案](./neomsg/docs/ARCHITECTURE.md) | NeoMsg 类 TG 高性能 IM 设计方案 |
 
 ---
 
