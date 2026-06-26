@@ -422,6 +422,21 @@ export function useGroupSync(options: UseGroupSyncOptions) {
       } catch {
         // 忽略非 JSON 消息
       }
+
+      // ★ 用户资料实时更新：也通过 addEventListener 处理
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'user_profile_updated') {
+          const { userId, nickname, avatar, username, bio, backgroundUrl, updatedAt } = msg.payload || {};
+          if (userId) {
+            window.dispatchEvent(new CustomEvent('cqim:remote-user-profile-updated', {
+              detail: { userId, nickname, avatar, username, bio, backgroundUrl, updatedAt },
+            }));
+          }
+        }
+      } catch {
+        // 忽略
+      }
     };
 
     ws.addEventListener('message', handleWsMessage);

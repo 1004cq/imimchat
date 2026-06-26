@@ -110,7 +110,10 @@ type Action =
   | { type: 'REPLACE_MESSAGE_ID'; chatId: string; tempId: string; realId: string }
   // ===== 消息防篡改 Actions =====
   /** 更新消息完整性验证状态 */
-  | { type: 'UPDATE_MESSAGE_INTEGRITY'; chatId: string; messageId: string; integrityStatus: 'verified' | 'tampered' | 'unverified' };
+  | { type: 'UPDATE_MESSAGE_INTEGRITY'; chatId: string; messageId: string; integrityStatus: 'verified' | 'tampered' | 'unverified' }
+  // ===== 用户资料同步 =====
+  /** 更新会话列表中缓存的用户头像/昵称 */
+  | { type: 'UPDATE_USER_PROFILE_IN_CHATS'; userId: string; nickname?: string; avatar?: string };
 
 const OFFICIAL_CHAT_ID = 'c0';
 const BOT_CHAT_ID = 'cBOT';
@@ -614,6 +617,23 @@ function reducer(state: AppState, action: Action): AppState {
               : m
           ),
         },
+      };
+    }
+
+    // ===== 用户资料实时同步：更新会话列表中缓存的头像/昵称 =====
+    case 'UPDATE_USER_PROFILE_IN_CHATS': {
+      const { userId, nickname, avatar } = action;
+      return {
+        ...state,
+        chats: state.chats.map(c => {
+          if (c.type === 'private' && c.members?.includes(userId)) {
+            const updates: Partial<Chat> = {};
+            if (nickname !== undefined) updates.name = nickname;
+            if (avatar !== undefined) updates.avatar = avatar;
+            return { ...c, ...updates };
+          }
+          return c;
+        }),
       };
     }
 
@@ -1144,6 +1164,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (msg.type === 'moment_like_notify' || msg.type === 'moment_comment_notify') {
             window.dispatchEvent(new CustomEvent('moment_realtime_event', { detail: { type: msg.type, payload: msg.payload } }));
             console.log(`[AppContext] 朋友圈实时事件: ${msg.type}`, msg.payload);
+            return;
+          }
+
+          // ===== 用户资料实时更新 =====
+          if (msg.type === 'user_profile_updated') {
+            const { userId, nickname, avatar, username, bio, backgroundUrl, updatedAt } = msg.payload || {};
+            if (!userId) return;
+            // 更新会话列表中的缓存
+            dispatch({ type: 'UPDATE_USER_PROFILE_IN_CHATS', userId, nickname, avatar });
+            // 派发全局事件，让各组件自行刷新
+            window.dispatchEvent(new CustomEvent('cqim:remote-user-profile-updated', {
+              detail: { userId, nickname, avatar, username, bio, backgroundUrl, updatedAt },
+            }));
+            console.log(`[AppContext] 收到用户资料更新: userId=${userId} nickname=${nickname}`);
             return;
           }
         } catch (e) {

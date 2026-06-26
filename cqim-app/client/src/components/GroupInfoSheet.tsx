@@ -12,6 +12,7 @@ import {
 import { DoveAvatar } from '@/components/DoveAvatar';
 import { GroupQRCodePage } from '@/components/GroupQRCodePage';
 import { InviteMembersModal } from '@/components/InviteMembersModal';
+import { useRemoteProfileSync, mergeProfileUpdate } from '@/hooks/useRemoteProfileSync';
 import { toast } from 'sonner';
 
 interface MemberInfo {
@@ -235,6 +236,11 @@ export const GroupInfoSheet: React.FC<GroupInfoSheetProps> = ({
       toast.error('加载群信息失败');
     }).finally(() => setLoading(false));
   }, [groupId, currentUserId]);
+
+  // ★ 实时同步：群成员更新头像/昵称后自动更新成员列表
+  useRemoteProfileSync((update) => {
+    setMembers(prev => prev.map(m => mergeProfileUpdate(m, update)));
+  });
 
   // 保存群昵称
   const handleSaveNickname = useCallback(async () => {

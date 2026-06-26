@@ -622,7 +622,9 @@ interface SignalMessage {
     | "channel_send"       // 发送频道消息（仅管理员）
     | "channel_message"    // 频道消息推送
     | "channel_subscribe"  // 订阅频道在线列表
-    | "channel_leave";     // 离开频道在线列表
+    | "channel_leave"      // 离开频道在线列表
+    // ===== 用户资料同步 =====
+    | "user_profile_updated";  // 用户资料更新（广播给好友/群成员）
   from?: string;
   to?: string;
   roomId?: string;
@@ -672,6 +674,14 @@ function broadcastToRoom(roomId: string, msg: SignalMessage, excludeUserId?: str
   room.forEach((uid) => {
     if (uid !== excludeUserId) sendRaw(uid, payload);
   });
+}
+
+/** 向多个用户广播消息（用于用户资料更新等场景） */
+function broadcastToUsers(userIds: string[], msg: SignalMessage, excludeUserId?: string) {
+  const payload = JSON.stringify(msg);
+  for (const uid of userIds) {
+    if (uid !== excludeUserId) sendRaw(uid, payload);
+  }
 }
 
 async function handleMessage(client: SignalClient, raw: string) {
@@ -3099,6 +3109,42 @@ async function startServer() {
       targetClient.ws.send(JSON.stringify({ type, payload }));
       console.log(`[Moments] 推送 ${type} 给用户 ${targetUserId}`);
     }
+  });
+
+  // ★ 用户资料实时同步：订阅 Redis 频道，将头像/昵称更新推送给好友和群成员
+  subscribeChannel('user_profile_updated', (message: any) => {
+    const { userId, nickname, avatar, username, bio, backgroundUrl, updatedAt, targetFriendIds, targetGroupIds } = message || {};
+    if (!userId) return;
+
+    const profilePayload = { userId, nickname, avatar, username, bio, backgroundUrl, updatedAt };
+
+    // 1. 通知好友：在线的好友会立即收到更新
+    if (Array.isArray(targetFriendIds) && targetFriendIds.length > 0) {
+      broadcastToUsers(targetFriendIds, {
+        type: 'user_profile_updated',
+        from: userId,
+        payload: profilePayload,
+      }, userId); // 排除自己
+    }
+
+    // 2. 通知群成员：用户在的所有群，广播给群内在线成员
+    if (Array.isArray(targetGroupIds) && targetGroupIds.length > 0) {
+      for (const groupId of targetGroupIds) {
+        const groupRoom = rooms.get(groupId);
+        if (groupRoom) {
+          const payload = JSON.stringify({
+            type: 'user_profile_updated',
+            from: userId,
+            payload: profilePayload,
+          });
+          groupRoom.forEach((uid) => {
+            if (uid !== userId) sendRaw(uid, payload);
+          });
+        }
+      }
+    }
+
+    console.log(`[Profile] 用户 ${userId} 资料已更新，通知 ${targetFriendIds?.length || 0} 个好友和 ${targetGroupIds?.length || 0} 个群`);
   });
 
   wss.on("connection", (ws, req) => {

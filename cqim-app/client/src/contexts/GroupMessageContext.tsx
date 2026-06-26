@@ -333,6 +333,21 @@ export function GroupMessageProvider({ children, userId }: { children: ReactNode
         } catch {
           // 忽略非群消息
         }
+
+        // ★ 用户资料实时更新：处理群消息 WebSocket 连接上的资料更新事件
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'user_profile_updated') {
+            const { userId, nickname, avatar, username, bio, backgroundUrl, updatedAt } = msg.payload || {};
+            if (userId) {
+              window.dispatchEvent(new CustomEvent('cqim:remote-user-profile-updated', {
+                detail: { userId, nickname, avatar, username, bio, backgroundUrl, updatedAt },
+              }));
+            }
+          }
+        } catch {
+          // 已在上方 try-catch 处理过
+        }
       };
 
       ws.onclose = () => {

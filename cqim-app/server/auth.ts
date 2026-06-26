@@ -1267,6 +1267,39 @@ router.put('/profile', userAuth, async (req: Request, res: Response) => {
     invalidateSessionCache(token);
   }
 
+  // ★ 实时同步：通过 Redis pub/sub 通知所有在线的好友和群成员，资料已更新
+  try {
+    const { publishMessage } = await import('./redis.js');
+    const friends = await prisma.friend.findMany({
+      where: { userId: user.id, status: 'accepted' },
+      select: { friendId: true },
+    });
+    const friendIds = friends.map((f: { friendId: string }) => f.friendId);
+
+    // 获取用户所在的所有群成员
+    const groupMemberships = await prisma.groupMember.findMany({
+      where: { userId: user.id },
+      select: { groupId: true },
+    });
+
+    const profileUpdatePayload = {
+      userId: updated.id,
+      nickname: updated.nickname,
+      avatar: avatarToProxy(updated.avatar),
+      username: updated.username,
+      bio: updated.bio,
+      backgroundUrl: updated.backgroundUrl,
+      updatedAt: Date.now(),
+      targetFriendIds: friendIds,
+      targetGroupIds: groupMemberships.map((m: { groupId: string }) => m.groupId),
+    };
+
+    await publishMessage('user_profile_updated', profileUpdatePayload);
+  } catch (pubErr) {
+    console.error('[Auth] 发布用户资料更新事件失败:', pubErr);
+    // 不影响主流程
+  }
+
   res.json({
     success: true,
     user: {

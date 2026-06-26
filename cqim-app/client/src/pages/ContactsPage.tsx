@@ -7,6 +7,7 @@ import React, { useMemo, useState, useRef, useCallback, useEffect } from 'react'
 import { type User } from '@/lib/store';
 import { DoveAvatar } from '@/components/DoveAvatar';
 import { useAppActions, useApp } from '@/contexts/AppContext';
+import { useRemoteProfileSync, mergeProfileUpdate } from '@/hooks/useRemoteProfileSync';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Search, UserPlus, Users, Scan, X, UserX, Loader2 } from 'lucide-react';
 import { QRCardModal } from '@/components/QRCodeCard';
@@ -123,6 +124,11 @@ export default function ContactsPage() {
       loadPendingCount();
     }
   }, [state.isLoggedIn, loadFriends, loadPendingCount]);
+
+  // ★ 实时同步：好友更新头像/昵称后自动更新列表
+  useRemoteProfileSync((update) => {
+    setFriends(prev => prev.map(f => mergeProfileUpdate(f, update)));
+  });
 
   // 关闭添加好友页面时刷新列表
   const handleCloseAddFriend = useCallback(() => {
