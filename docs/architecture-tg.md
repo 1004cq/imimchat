@@ -1,5 +1,7 @@
 # 类 Telegram 即时通讯项目架构图
 
+> 可视化架构图：[architecture-tg.html](./architecture-tg.html)
+
 ## 架构全景图
 
 ```mermaid
@@ -166,32 +168,77 @@ TDSQL-C/MySQL/PostgreSQL（业务数据）、Redis（缓存/限流）、CKafka/T
 | 业务层 | 账号/资料 | server/auth.ts + User model | ✅ 完整 |
 | 业务层 | 好友关系 | server/friend.ts | ✅ 完整 |
 | 业务层 | 群组 | server/group-message.ts（支持万人群） | ✅ 核心功能 |
+| 业务层 | 频道服务 | server/channel.ts + ChannelsPage + ChannelDetailPage | ✅ 已实现 |
+| 业务层 | 超级群 | 慢速模式 + 权限设置 API（group-message.ts） | ✅ 已实现 |
+| 业务层 | Bot 平台 | server/bot-platform.ts（TG Bot API + OneBot 兼容） | ✅ 已实现 |
+| 业务层 | 搜索服务 | server/search.ts + GlobalSearchPage | ✅ 已实现 |
+| 业务层 | 风控服务 | server/risk-control.ts（敏感词/限流/慢速模式） | ✅ 已实现 |
 | 业务层 | 文件服务 | COS + MinIO 双存储 | ✅ 完整 |
 | 业务层 | E2EE 加密 | Signal Protocol + MLS | ✅ 已实现 |
 | 数据层 | PostgreSQL | 当前用 MongoDB + SQLite，PostgreSQL 在 Go 版设计中 | 🔶 架构设计中 |
 | 数据层 | Redis | Redis 7.2（会话/缓存/PubSub） | ✅ 生产就绪 |
+| 数据层 | MQ | server/mq.ts（Redis Pub/Sub，可扩展 Kafka） | ✅ 已实现 |
 | 数据层 | COS + CI | cos-signer.ts + imageMogr2 实时缩略图 | ✅ 完整 |
+| 治理层 | 审核后台 | admin.ts + AdminPage（举报/敏感词/IP 黑名单） | ✅ 已实现 |
 
-### 需要新建的能力
+### 待扩展能力
 
-| 架构图组件 | 当前缺失 | 优先级 |
+| 架构图组件 | 当前状态 | 优先级 |
 |-----------|---------|--------|
-| 频道服务 | 无 Channel 概念（最核心的 TG 差异点） | P0 |
-| 频道服务 | ✅ 已实现 — server/channel.ts + ChannelsPage + ChannelDetailPage | ✅ 已完成 |
-| 超级群组 | 当前群组上限较低，无慢速模式/精细权限 | P0 |
-| Bot 平台 | 仅有基础 OneBot，无完整 Bot API | P0 |
-| 搜索服务 | 无 Elasticsearch 全文索引 | P1 |
-| 风控服务 | 基础 IP 限流，无反垃圾/内容审核 | P1 |
-| MQ 消息队列 | 当前用 Redis Pub/Sub，无持久化 MQ | P1 |
+| Elasticsearch 全文索引 | 预留 ELASTICSEARCH_URL 钩子，当前用 SQLite LIKE | P1 |
 | 桌面客户端 | 无原生桌面端 | P2 |
 | GAAP 全球加速 | 未配置 | P2 |
+| 内容安全（图片/音频 AI 审核） | 仅敏感词文本过滤 | P1 |
+| CKafka / TDMQ 生产级 MQ | Redis Pub/Sub 已满足中小规模 | P2 |
 
-### MVP 第一阶段推荐范围
+---
 
-基于当前 cqim-app 的成熟度，MVP 应聚焦三个核心缺口：
+## 新增服务 API 速查
 
-1. **频道服务** — ✅ 已实现：新建 channel 数据模型和 API，复用现有的消息和推送基础设施
-2. **Bot 平台升级** — 从 OneBot 适配升级为类 Telegram Bot API
-3. **搜索服务** — 接入 Elasticsearch，对消息和频道建立全文索引
+### Bot 平台（`server/bot-platform.ts`）
 
-这三个能力补上后，当前项目就能覆盖 TG 约 80% 的核心体验。
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/bot/create` | 创建 Bot（返回 Token） |
+| GET | `/api/bot/list?ownerId=` | 列出用户创建的 Bot |
+| GET | `/bot{token}/getMe` | TG 风格：获取 Bot 信息 |
+| POST | `/bot{token}/sendMessage` | 发送消息 |
+| POST | `/bot{token}/setWebhook` | 设置 Webhook |
+| GET | `/bot{token}/getUpdates` | 长轮询获取更新 |
+
+### 搜索服务（`server/search.ts`）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/search?q=&scope=all&userId=` | 全局搜索（消息/用户/群/频道/文件） |
+
+### 风控服务（`server/risk-control.ts`）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/risk/config` | 获取风控配置 |
+| PUT | `/api/risk/config` | 更新风控配置 |
+| POST | `/api/risk/check` | 手动检测内容 |
+
+### 超级群设置
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| PUT | `/api/group/settings` | 设置慢速模式、权限（仅群主） |
+
+### 消息队列（`server/mq.ts`）
+
+内部服务，主题包括：`message.sent`、`bot.update`、`audit.report`、`risk.alert`、`search.index`。
+
+---
+
+## 三阶段落地路线
+
+### 第一阶段：基础聊天版 ✅
+账号、单聊、普通群、图片/语音/文件消息、离线推送、基础审核、日志监控和管理后台。
+
+### 第二阶段：TG 核心体验 ✅（本次完善）
+超级群慢速模式、频道、Bot 平台、消息搜索、风控策略、MQ 异步流转。
+
+### 第三阶段：平台增强版
+密聊增强、Bot 开放平台生态、全球加速与多地域容灾、Elasticsearch 全文索引、AI 内容审核。
