@@ -1,0 +1,21 @@
+{
+  "name": "capacitor-message-alert",
+  "version": "1.0.0",
+  "description": "Foreground new-message haptics and alert sound for iOS",
+  "main": "dist/plugin.cjs.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "files": [
+    "dist/",
+    "ios/Sources",
+    "CapacitorMessageAlert.podspec"
+  ],
+  "peerDependencies": {
+    "@capacitor/core": ">=8.0.0"
+  },
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    }
+  }
+}

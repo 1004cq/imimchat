@@ -1,3 +1,5 @@
+import { Capacitor } from '@capacitor/core';
+
 export interface NotificationPreferences {
   enabled: boolean;
   soundEnabled: boolean;
@@ -117,6 +119,28 @@ export async function warmupNotificationAudio(): Promise<boolean> {
   if (!ctx) return false;
   await ensureAudioContextReady(ctx);
   return ctx.state === 'running';
+}
+
+export async function playNativeMessageAlert(urgent = true): Promise<boolean> {
+  const preferences = loadNotificationPreferences();
+  if (!preferences.enabled) return false;
+  if (!preferences.soundEnabled && !preferences.vibrationEnabled) return false;
+
+  if (Capacitor.getPlatform() !== 'ios' || !Capacitor.isNativePlatform()) {
+    return false;
+  }
+
+  try {
+    const { MessageAlert } = await import('capacitor-message-alert');
+    await MessageAlert.playNewMessageAlert({
+      urgent,
+      sound: preferences.soundEnabled,
+      vibration: preferences.vibrationEnabled,
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function playNotificationSound(volume = 0.035): Promise<boolean> {

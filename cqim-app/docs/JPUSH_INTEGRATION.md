@@ -71,6 +71,15 @@ func applicationDidBecomeActive(_ application: UIApplication) {
 5. Xcode 中找到 `JPUSHService.h` → Target Membership 勾选 **CapacitorPluginJPush** 并设为 **Public**（插件 README 要求）
 6. 真机运行，控制台应出现 `registrationID: ...`
 
+### iOS 前台消息提示音
+
+已集成本地插件 `capacitor-message-alert`（`NotificationManager.swift`）：
+
+- App **前台**收到 JPush 推送或 WebSocket 新消息时，触发强震动 + 系统急促提示音（类似 Telegram）
+- 受「设置 → 消息通知」中的声音/震动开关控制
+- `npx cap sync ios` 后自动链接；可选将 `urgent_message.caf` 放入 Xcode 工程以使用自定义音效
+
+
 ### Android（可选）
 
 - `variables.gradle` 中 `compileSdkVersion` / `targetSdkVersion` ≥ 33

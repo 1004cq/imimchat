@@ -9,6 +9,7 @@ import {
 } from '@/lib/store';
 import {
   formatMessagePreview,
+  playNativeMessageAlert,
   playNotificationSound,
   shouldShowBrowserNotification,
   showBrowserNotification,
@@ -779,8 +780,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    void playNotificationSound();
-    triggerNotificationVibration();
+    void (async () => {
+      const usedNativeAlert = await playNativeMessageAlert(true);
+      if (!usedNativeAlert) {
+        void playNotificationSound();
+        triggerNotificationVibration();
+      }
+    })();
 
     if (shouldShowBrowserNotification()) {
       showBrowserNotification({

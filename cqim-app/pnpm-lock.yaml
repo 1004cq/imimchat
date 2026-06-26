@@ -148,6 +148,9 @@ importers:
       busboy:
         specifier: ^1.6.0
         version: 1.6.0
+      capacitor-message-alert:
+        specifier: file:./plugins/capacitor-message-alert
+        version: file:plugins/capacitor-message-alert(@capacitor/core@8.3.0)
       capacitor-plugin-jpush:
         specifier: 4.0.1
         version: 4.0.1(@capacitor/core@8.3.0)
@@ -2711,6 +2714,11 @@ packages:
 
   caniuse-lite@1.0.30001748:
     resolution: {integrity: sha512-5P5UgAr0+aBmNiplks08JLw+AW/XG/SurlgZLgB1dDLfAw7EfRGxIwzPHxdSCGY/BTKDqIVyJL87cCN6s0ZR0w==}
+
+  capacitor-message-alert@file:plugins/capacitor-message-alert:
+    resolution: {directory: plugins/capacitor-message-alert, type: directory}
+    peerDependencies:
+      '@capacitor/core': '>=8.0.0'
 
   capacitor-plugin-jpush@4.0.1:
     resolution: {integrity: sha512-OuhWuMoAMN/xG+Ls6Cg6nZIac0XVxWC1qdjq8WHsc4bXUrDqM9AFodPuqK2w3mB34FQMjY67WV3v+05Vt/YTIQ==}
@@ -8417,6 +8425,10 @@ snapshots:
   camelcase@5.3.1: {}
 
   caniuse-lite@1.0.30001748: {}
+
+  capacitor-message-alert@file:plugins/capacitor-message-alert(@capacitor/core@8.3.0):
+    dependencies:
+      '@capacitor/core': 8.3.0
 
   capacitor-plugin-jpush@4.0.1(@capacitor/core@8.3.0):
     dependencies:
