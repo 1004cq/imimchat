@@ -11,9 +11,12 @@ type Config struct {
 	S3SecretKey string
 	S3Bucket    string
 	JWTSecret   string
-	WSAddr      string
-	TCPAddr     string
-	APIAddr     string
+	WSAddr            string
+	TCPAddr           string
+	APIAddr           string
+	MTProtoAddr       string
+	MTProtoHealthAddr string
+	MTProtoRSAKey     string
 }
 
 func Load() *Config {
@@ -26,9 +29,12 @@ func Load() *Config {
 		S3SecretKey: env("S3_SECRET_KEY", "minioadmin"),
 		S3Bucket:    env("S3_BUCKET", "neomsg-media"),
 		JWTSecret:   env("JWT_SECRET", "change-me-in-production"),
-		WSAddr:      env("WS_ADDR", ":8080"),
-		TCPAddr:     env("TCP_ADDR", ":5222"),
-		APIAddr:     env("API_ADDR", ":8090"),
+		WSAddr:            env("WS_ADDR", ":8080"),
+		TCPAddr:           env("TCP_ADDR", ":5222"),
+		APIAddr:           env("API_ADDR", ":8090"),
+		MTProtoAddr:       env("MTPROTO_ADDR", ":10443"),
+		MTProtoHealthAddr: env("MTPROTO_HEALTH_ADDR", ":10444"),
+		MTProtoRSAKey:     env("MTPROTO_RSA_KEY", ""),
 	}
 }
 

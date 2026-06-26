@@ -18,7 +18,7 @@
 | 系统 | 技术栈 | 说明 |
 |------|--------|------|
 | **WuKongIM** | Docker 容器 (WuKongIM + TangSengDaoDao) | 私有化 IM 引擎，提供基础聊天能力 |
-| **CQIM** | TypeScript/React + Express + MongoDB | 自研全栈 IM，功能更丰富（朋友圈/贴纸/AI 等） |
+| **CQIM** | TypeScript/React + Express + SQLite/MongoDB | 自研全栈 IM，类 TG 能力（频道/Bot/搜索/风控） |
 
 ---
 
@@ -35,7 +35,8 @@
 | [cqim-deploy.md](./docs/cqim-deploy.md) | CQIM 部署指南 |
 | [cqim-dev-roadmap.md](./docs/cqim-dev-roadmap.md) | CQIM 开发路线图 |
 | [UPGRADE.md](./docs/UPGRADE.md) | **v2.0 升级指南（Bot/搜索/风控）** |
-| [neomsg 技术方案](./neomsg/docs/ARCHITECTURE.md) | NeoMsg 下一代架构（Go + Protobuf） |
+| [MTPROTO_UPGRADE.md](./docs/MTPROTO_UPGRADE.md) | **MTProto 2.0 升级指南（类 Telegram 协议）** |
+| [neomsg 技术方案](./neomsg/docs/ARCHITECTURE.md) | NeoMsg 下一代架构（Go + Protobuf + MTProto） |
 
 ---
 

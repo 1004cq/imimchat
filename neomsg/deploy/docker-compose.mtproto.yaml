@@ -1,0 +1,22 @@
+# NeoMsg + MTProto 2.0 部署
+# 用法: docker compose -f docker-compose.yaml -f docker-compose.mtproto.yaml up -d
+
+services:
+  neomsg-mtproto-gateway:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    command: neomsg-mtproto-gateway
+    ports:
+      - "10443:10443"   # MTProto TCP（类 Telegram）
+      - "10444:10444"   # 健康检查
+    environment:
+      MTPROTO_ADDR: ":10443"
+      MTPROTO_HEALTH_ADDR: ":10444"
+      MTPROTO_RSA_KEY: ${MTPROTO_RSA_KEY:-/data/rsa.pem}
+    volumes:
+      - mtproto_rsa:/data
+    restart: unless-stopped
+
+volumes:
+  mtproto_rsa:

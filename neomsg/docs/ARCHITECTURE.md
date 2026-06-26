@@ -119,8 +119,8 @@ sequenceDiagram
 | **后端语言** | **Go 1.22+** | 高并发 goroutine 适合百万连接网关；编译快、部署简单。 |
 | **iOS 客户端** | **Swift 5.9 + SwiftUI** | 原生性能、Keychain 安全存储、Background Tasks。 |
 | **Android** | Kotlin (Phase 2) | 与 iOS 共享 Protobuf 协议。 |
-| **传输协议** | **Protobuf 3** | 比 JSON 体积小 3-5x；跨语言代码生成。 |
-| **长连接** | WebSocket + TCP | WS 穿透性好；TCP 移动端省电。 |
+| **传输协议** | **MTProto 2.0 + Protobuf 3** | MTProto 服务原生客户端（类 TG）；Protobuf 服务 Web/过渡客户端。 |
+| **长连接** | MTProto TCP + WebSocket + Protobuf TCP | MTProto `:10443`；WS 穿透性好；Protobuf TCP 移动端过渡。 |
 | **关系数据库** | **PostgreSQL 16** | ACID、JSONB、分区表支持海量消息。 |
 | **缓存** | **Redis 7** | 在线状态、会话映射、限流。 |
 | **消息队列** | **NATS JetStream** | 轻量持久化、至少一次投递。 |
@@ -143,7 +143,24 @@ sequenceDiagram
 
 ## 5. 通信协议
 
+### 5.1 Protobuf（Web / 自研过渡客户端）
+
 见 `proto/neomsg/v1/envelope.proto` 与 `messages.proto`。
+
+### 5.2 MTProto 2.0（类 Telegram 原生客户端）
+
+实现目录：`backend/internal/mtproto/`
+
+| 层 | 说明 |
+|----|------|
+| Transport | Abridged (`0xef`) / Intermediate |
+| Crypto | RSA + DH → Auth Key；AES-IGE 消息加密 |
+| Handshake | `req_pq_multi` → `dh_gen_ok` |
+| TL | Constructor ID 序列化 |
+
+部署：`docker compose -f docker-compose.yaml -f docker-compose.mtproto.yaml up -d`
+
+完整升级指南见仓库根目录 [docs/MTPROTO_UPGRADE.md](../../docs/MTPROTO_UPGRADE.md)。
 
 ---
 
