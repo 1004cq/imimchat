@@ -121,7 +121,10 @@ export async function warmupNotificationAudio(): Promise<boolean> {
   return ctx.state === 'running';
 }
 
-export async function playNativeMessageAlert(urgent = true): Promise<boolean> {
+export async function playNativeMessageAlert(
+  urgent = true,
+  meta?: { chatId?: string; messageId?: string; senderId?: string; preview?: string },
+): Promise<boolean> {
   const preferences = loadNotificationPreferences();
   if (!preferences.enabled) return false;
   if (!preferences.soundEnabled && !preferences.vibrationEnabled) return false;
@@ -130,13 +133,25 @@ export async function playNativeMessageAlert(urgent = true): Promise<boolean> {
     return false;
   }
 
+  const alertOptions = {
+    urgent,
+    sound: preferences.soundEnabled,
+    vibration: preferences.vibrationEnabled,
+  };
+
   try {
     const { MessageAlert } = await import('capacitor-message-alert');
-    await MessageAlert.playNewMessageAlert({
-      urgent,
-      sound: preferences.soundEnabled,
-      vibration: preferences.vibrationEnabled,
-    });
+    if (meta?.chatId) {
+      await MessageAlert.onNewMessageReceived({
+        chatId: meta.chatId,
+        messageId: meta.messageId,
+        senderId: meta.senderId,
+        preview: meta.preview,
+        ...alertOptions,
+      });
+    } else {
+      await MessageAlert.playNewMessageAlert(alertOptions);
+    }
     return true;
   } catch {
     return false;

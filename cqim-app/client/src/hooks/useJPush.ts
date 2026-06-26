@@ -76,7 +76,10 @@ export function useJPush(isLoggedIn: boolean) {
 
       await JPush.addListener('notificationReceived', (data) => {
         console.log('[JPush] 前台收到推送:', data);
-        void playNativeMessageAlert(true);
+        void playNativeMessageAlert(true, chatId ? {
+          chatId,
+          preview: data.content || data.title,
+        } : undefined);
         const chatId = extractChatId(data);
         if (chatId) {
           window.dispatchEvent(new CustomEvent('cqim:fcm-notification', {

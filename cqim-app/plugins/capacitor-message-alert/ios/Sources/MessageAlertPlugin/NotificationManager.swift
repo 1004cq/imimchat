@@ -42,6 +42,6 @@ class NotificationManager {
     }
 
     func handleForegroundMessage() {
-        playNewMessageAlert(isUrgent: true)
+        MessageService.shared.handleForegroundMessage()
     }
 }

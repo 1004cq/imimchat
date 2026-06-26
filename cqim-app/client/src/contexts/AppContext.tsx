@@ -781,7 +781,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
 
     void (async () => {
-      const usedNativeAlert = await playNativeMessageAlert(true);
+      const usedNativeAlert = await playNativeMessageAlert(true, {
+        chatId,
+        messageId: message.id,
+        senderId: message.senderId,
+        preview: formatMessagePreview(message),
+      });
       if (!usedNativeAlert) {
         void playNotificationSound();
         triggerNotificationVibration();

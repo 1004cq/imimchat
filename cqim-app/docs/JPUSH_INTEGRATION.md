@@ -73,11 +73,33 @@ func applicationDidBecomeActive(_ application: UIApplication) {
 
 ### iOS 前台消息提示音
 
-已集成本地插件 `capacitor-message-alert`（`NotificationManager.swift`）：
+已集成本地插件 `capacitor-message-alert`：
 
-- App **前台**收到 JPush 推送或 WebSocket 新消息时，触发强震动 + 系统急促提示音（类似 Telegram）
-- 受「设置 → 消息通知」中的声音/震动开关控制
-- `npx cap sync ios` 后自动链接；可选将 `urgent_message.caf` 放入 Xcode 工程以使用自定义音效
+- **`MessageService`**：前台新消息统一入口（`onNewMessageReceived` → 广播 `cqim.newMessageReceived` + 调用 `NotificationManager`）
+- **`NotificationManager`**：强震动 + 系统急促提示音
+- JS 侧 WebSocket / JPush 前台消息会调用 `MessageAlert.onNewMessageReceived({ chatId, ... })`
+- 受「设置 → 消息通知」声音/震动开关控制
+
+原生扩展示例（AppDelegate 或其他 Swift 模块）：
+
+```swift
+// 监听新消息（UI 仍由 Capacitor Web 层更新）
+NotificationCenter.default.addObserver(
+    forName: .cqimNewMessageReceived,
+    object: nil,
+    queue: .main
+) { notification in
+    let chatId = notification.userInfo?["chatId"] as? String
+    // 更新角标、本地缓存等
+}
+
+// 或直接调用
+MessageService.shared.onNewMessageReceived(
+    IncomingMessagePayload(chatId: "...", messageId: nil, senderId: nil, preview: nil)
+)
+```
+
+`npx cap sync ios` 后自动链接；可选将 `urgent_message.caf` 放入 Xcode 以使用自定义音效。
 
 
 ### Android（可选）
