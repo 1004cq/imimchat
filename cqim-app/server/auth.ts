@@ -1077,6 +1077,7 @@ router.get('/me', userAuth, async (req: Request, res: Response) => {
       phoneVerified: user.phoneVerified,
       emailVerified: user.emailVerified,
       createdAt: user.createdAt,
+      updatedAt: user.updatedAt ? new Date(user.updatedAt).getTime() : undefined,
     },
   });
 });
@@ -1272,34 +1273,10 @@ router.put('/profile', userAuth, async (req: Request, res: Response) => {
     invalidateSessionCache(token);
   }
 
-  // ★ 实时同步：通过 Redis pub/sub 通知所有在线的好友和群成员，资料已更新
+  // ★ 实时同步：使用数据库 updatedAt 作为版本时间戳
   try {
-    const { publishMessage } = await import('./redis.js');
-    const friends = await prisma.friend.findMany({
-      where: { userId: user.id, status: 'accepted' },
-      select: { friendId: true },
-    });
-    const friendIds = friends.map((f: { friendId: string }) => f.friendId);
-
-    // 获取用户所在的所有群成员
-    const groupMemberships = await prisma.groupMember.findMany({
-      where: { userId: user.id },
-      select: { groupId: true },
-    });
-
-    const profileUpdatePayload = {
-      userId: updated.id,
-      nickname: updated.nickname,
-      avatar: avatarToProxy(updated.avatar),
-      username: updated.username,
-      bio: updated.bio,
-      backgroundUrl: updated.backgroundUrl,
-      updatedAt: Date.now(),
-      targetFriendIds: friendIds,
-      targetGroupIds: groupMemberships.map((m: { groupId: string }) => m.groupId),
-    };
-
-    await publishMessage('user_profile_updated', profileUpdatePayload);
+    const { publishUserProfileUpdated } = await import('./user-profile-sync.js');
+    await publishUserProfileUpdated(updated);
   } catch (pubErr) {
     console.error('[Auth] 发布用户资料更新事件失败:', pubErr);
     // 不影响主流程
@@ -1321,6 +1298,7 @@ router.put('/profile', userAuth, async (req: Request, res: Response) => {
       birthday: updated.birthday || '',
       phoneVerified: updated.phoneVerified,
       emailVerified: updated.emailVerified,
+      updatedAt: updated.updatedAt.getTime(),
     },
     // 兼容 ProfileSettingsPage 的 profile 格式
     profile: {
@@ -1337,6 +1315,7 @@ router.put('/profile', userAuth, async (req: Request, res: Response) => {
       gender: updated.gender || '',
       region: updated.region || '',
       birthday: updated.birthday || '',
+      updatedAt: updated.updatedAt.getTime(),
     },
   });
 });

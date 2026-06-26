@@ -3461,6 +3461,7 @@ async function startServer() {
     }
 
     // 同步写入数据库（支持修改 username）
+    let dbUpdatedAt: number | undefined;
     try {
       const dbUpdate: Record<string, any> = {};
       if (updated.nickname || updated.name) dbUpdate.nickname = updated.nickname || updated.name;
@@ -3473,13 +3474,26 @@ async function startServer() {
       if (dbUser && updated.wechatId && updated.wechatId !== currentUsername) dbUpdate.username = updated.wechatId;
 
       if (Object.keys(dbUpdate).length > 0) {
+        const syncUserId = dbUser?.id || profileKey;
         if (dbUser) {
-          await prisma.user.update({ where: { id: dbUser.id }, data: dbUpdate });
+          const row = await prisma.user.update({
+            where: { id: dbUser.id },
+            data: dbUpdate,
+            select: { updatedAt: true },
+          });
+          dbUpdatedAt = row.updatedAt.getTime();
         } else {
           const byId = await prisma.user.updateMany({ where: { id: userId }, data: dbUpdate });
           if (byId.count === 0) {
             await prisma.user.updateMany({ where: { username: userId }, data: dbUpdate });
           }
+        }
+
+        try {
+          const { publishUserProfileUpdatedById } = await import('./user-profile-sync.js');
+          await publishUserProfileUpdatedById(syncUserId);
+        } catch (pubErr) {
+          console.error('[profile] 发布用户资料更新事件失败:', pubErr);
         }
       }
     } catch (e: any) {
@@ -3495,6 +3509,7 @@ async function startServer() {
         id: profileKey,
         username: updated.wechatId,
         wechatId: updated.wechatId,
+        ...(dbUpdatedAt !== undefined ? { updatedAt: dbUpdatedAt } : {}),
       },
     });
   });

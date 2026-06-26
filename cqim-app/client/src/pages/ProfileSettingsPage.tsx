@@ -87,6 +87,7 @@ interface UserProfile {
   bio: string;
   avatar: string;
   birthday: string;
+  updatedAt?: number;
 }
 
 // ============ 内联编辑页（全屏滑入） ============
@@ -406,6 +407,7 @@ export default function ProfileSettingsPage({ onClose, onProfileUpdate }: Profil
         gender: data.profile?.gender ?? data.user?.gender ?? updated.gender,
         region: data.profile?.region ?? data.user?.region ?? updated.region,
         birthday: data.profile?.birthday ?? data.user?.birthday ?? updated.birthday,
+        updatedAt: data.profile?.updatedAt ?? data.user?.updatedAt ?? updated.updatedAt,
       };
 
       setProfile(savedProfile);
@@ -416,6 +418,7 @@ export default function ProfileSettingsPage({ onClose, onProfileUpdate }: Profil
         bio: savedProfile.bio,
         phone: savedProfile.phone,
         email: savedProfile.email,
+        profileUpdatedAt: savedProfile.updatedAt,
       });
       onProfileUpdate?.(savedProfile);
       toast.success('已保存');

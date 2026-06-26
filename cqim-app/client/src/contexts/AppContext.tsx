@@ -114,7 +114,7 @@ type Action =
   | { type: 'UPDATE_MESSAGE_INTEGRITY'; chatId: string; messageId: string; integrityStatus: 'verified' | 'tampered' | 'unverified' }
   // ===== 用户资料同步 =====
   /** 更新会话列表中缓存的用户头像/昵称 */
-  | { type: 'UPDATE_USER_PROFILE_IN_CHATS'; userId: string; nickname?: string; avatar?: string };
+  | { type: 'UPDATE_USER_PROFILE_IN_CHATS'; userId: string; nickname?: string; avatar?: string; updatedAt?: number };
 
 const OFFICIAL_CHAT_ID = 'c0';
 const BOT_CHAT_ID = 'cBOT';
@@ -623,14 +623,22 @@ function reducer(state: AppState, action: Action): AppState {
 
     // ===== 用户资料实时同步：更新会话列表中缓存的头像/昵称 =====
     case 'UPDATE_USER_PROFILE_IN_CHATS': {
-      const { userId, nickname, avatar } = action;
+      const { userId, nickname, avatar, updatedAt } = action;
       return {
         ...state,
         chats: state.chats.map(c => {
           if (c.type === 'private' && c.members?.includes(userId)) {
+            if (
+              updatedAt !== undefined
+              && c.peerProfileUpdatedAt !== undefined
+              && updatedAt < c.peerProfileUpdatedAt
+            ) {
+              return c;
+            }
             const updates: Partial<Chat> = {};
             if (nickname !== undefined) updates.name = nickname;
             if (avatar !== undefined) updates.avatar = avatar;
+            if (updatedAt !== undefined) updates.peerProfileUpdatedAt = updatedAt;
             return { ...c, ...updates };
           }
           return c;
@@ -1174,7 +1182,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             const { userId, nickname, avatar, username, bio, backgroundUrl, updatedAt } = msg.payload || {};
             if (!userId) return;
             // 更新会话列表中的缓存
-            dispatch({ type: 'UPDATE_USER_PROFILE_IN_CHATS', userId, nickname, avatar });
+            dispatch({ type: 'UPDATE_USER_PROFILE_IN_CHATS', userId, nickname, avatar, updatedAt });
             // 派发全局事件，让各组件自行刷新
             window.dispatchEvent(new CustomEvent('cqim:remote-user-profile-updated', {
               detail: { userId, nickname, avatar, username, bio, backgroundUrl, updatedAt },
