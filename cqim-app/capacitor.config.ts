@@ -18,6 +18,12 @@ const config: CapacitorConfig = {
     captureInput: true,
     webContentsDebuggingEnabled: false,
   },
+  ios: {
+    infoPlist: {
+      UIBackgroundModes: ['remote-notification'],
+      NSUserNotificationsUsageDescription: '用于接收消息通知',
+    },
+  },
   plugins: {
     SplashScreen: {
       launchShowDuration: 2000,
