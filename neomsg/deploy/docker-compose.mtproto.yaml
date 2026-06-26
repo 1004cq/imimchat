@@ -11,11 +11,19 @@ services:
       - "10443:10443"   # MTProto TCP（类 Telegram）
       - "10444:10444"   # 健康检查
     environment:
+      POSTGRES_DSN: postgres://neomsg:${POSTGRES_PASSWORD:-neomsg_dev}@postgres:5432/neomsg?sslmode=disable
+      REDIS_ADDR: redis:6379
+      NATS_URL: nats://nats:4222
       MTPROTO_ADDR: ":10443"
       MTPROTO_HEALTH_ADDR: ":10444"
       MTPROTO_RSA_KEY: ${MTPROTO_RSA_KEY:-/data/rsa.pem}
     volumes:
       - mtproto_rsa:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

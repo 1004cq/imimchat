@@ -127,3 +127,30 @@ func (s *Store) SetChatSeq(ctx context.Context, chatID, seq int64) error {
 func (s *Store) GetChatSeq(ctx context.Context, chatID int64) (int64, error) {
 	return s.client.Get(ctx, fmt.Sprintf("chat:seq:%d", chatID)).Int64()
 }
+
+// MTProto AuthKey → 用户会话绑定
+func (s *Store) BindMTProtoSession(ctx context.Context, authKeyID, userID int64, deviceID string) error {
+	key := fmt.Sprintf("mtproto:auth:%d", authKeyID)
+	return s.client.HSet(ctx, key, map[string]interface{}{
+		"user_id":   userID,
+		"device_id": deviceID,
+	}).Err()
+}
+
+func (s *Store) GetMTProtoSession(ctx context.Context, authKeyID int64) (userID int64, deviceID string, err error) {
+	key := fmt.Sprintf("mtproto:auth:%d", authKeyID)
+	vals, err := s.client.HGetAll(ctx, key).Result()
+	if err != nil {
+		return 0, "", err
+	}
+	if len(vals) == 0 {
+		return 0, "", fmt.Errorf("session not bound")
+	}
+	fmt.Sscanf(vals["user_id"], "%d", &userID)
+	deviceID = vals["device_id"]
+	return userID, deviceID, nil
+}
+
+func (s *Store) UnbindMTProtoSession(ctx context.Context, authKeyID int64) error {
+	return s.client.Del(ctx, fmt.Sprintf("mtproto:auth:%d", authKeyID)).Err()
+}

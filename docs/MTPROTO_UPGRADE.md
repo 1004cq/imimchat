@@ -156,9 +156,33 @@ stream {
 | `set_client_DH_params` → `dh_gen_ok` | ✅ | Auth Key 生成 |
 | AES-IGE 加密消息 | ✅ | 基于 `gotd/ige` |
 | `ping` / `pong` | ✅ | 心跳 |
-| `auth.sendCode` / `auth.signIn` | 🔲 | 待对接 NeoMsg Auth |
-| `messages.sendMessage` | 🔲 | 待对接 Message Service |
-| Updates 推送 | 🔲 | 待实现 |
+| **Message Engine 桥接** | ✅ | 见下文 NeoMsg Bridge TL |
+| `auth.sendCode` / `auth.signIn` | 🔲 | 可用 `bindSession` 替代 |
+
+### 5.1 NeoMsg Bridge TL（MTProto → Wire 协议）
+
+握手完成后，客户端通过 **加密 TL** 调用 NeoMsg 业务：
+
+| Constructor | ID | 说明 |
+|-------------|-----|------|
+| `neomsg.bindSession` | `0x6e656f01` | 绑定 user_id + device_id + token |
+| `neomsg.bindOk` | `0x6e656f11` | 绑定结果 |
+| `neomsg.invokeWire` | `0x6e656f02` | 载荷为 `WirePacket` protobuf 序列化 |
+| `neomsg.wireResult` | `0x6e656f12` | 返回多帧 Wire 响应 |
+| `neomsg.pushWire` | `0x6e656f13` | 服务端推送（NATS 扇出） |
+
+**典型流程：**
+
+```
+1. TCP 连接 → Abridged/Intermediate
+2. DH 握手 → 获得 Auth Key
+3. encrypted neomsg.bindSession(user_id, device_id, token)
+4. encrypted neomsg.invokeWire(WirePacket{Message}) 
+   → Engine.ProcessMessage → MessageAck
+5. 其他在线设备收到 encrypted neomsg.pushWire(WirePacket)
+```
+
+实现路径：`internal/mtproto/bridge/` → `message.Engine` → NATS `msg.deliver.*`
 
 ---
 

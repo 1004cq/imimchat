@@ -8,23 +8,43 @@ import (
 	"sync"
 
 	mtcrypto "github.com/neomsg/neomsg/backend/internal/mtproto/crypto"
+	"github.com/neomsg/neomsg/backend/internal/mtproto/bridge"
+	"github.com/neomsg/neomsg/backend/internal/mtproto/connmgr"
 	"github.com/neomsg/neomsg/backend/internal/mtproto/handshake"
 	"github.com/neomsg/neomsg/backend/internal/mtproto/transport"
+	redisstore "github.com/neomsg/neomsg/backend/internal/store/redis"
 )
 
 type Server struct {
-	addr   string
-	rsaKey *mtcrypto.RSAKeyPair
-	mu     sync.Mutex
-	conns  int
+	addr    string
+	rsaKey  *mtcrypto.RSAKeyPair
+	bridge  *bridge.Handler
+	connMgr *connmgr.Manager
+	redis   *redisstore.Store
+	mu      sync.Mutex
+	conns   int
 }
 
-func NewServer(addr, rsaKeyPath string) (*Server, error) {
-	rsaKey, err := mtcrypto.LoadOrGenerateRSAKey(rsaKeyPath)
+type ServerConfig struct {
+	Addr       string
+	RSAKeyPath string
+	Bridge     *bridge.Handler
+	ConnMgr    *connmgr.Manager
+	Redis      *redisstore.Store
+}
+
+func NewServer(cfg ServerConfig) (*Server, error) {
+	rsaKey, err := mtcrypto.LoadOrGenerateRSAKey(cfg.RSAKeyPath)
 	if err != nil {
 		return nil, err
 	}
-	return &Server{addr: addr, rsaKey: rsaKey}, nil
+	return &Server{
+		addr:    cfg.Addr,
+		rsaKey:  rsaKey,
+		bridge:  cfg.Bridge,
+		connMgr: cfg.ConnMgr,
+		redis:   cfg.Redis,
+	}, nil
 }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
@@ -78,7 +98,11 @@ func (s *Server) handleConn(raw net.Conn) {
 
 	codec := transport.NewCodec(rw, mode)
 	hs := handshake.NewState(s.rsaKey)
-	conn := NewConnection(codec, hs)
+	conn := NewConnection(codec, hs, ConnConfig{
+		Bridge:  s.bridge,
+		ConnMgr: s.connMgr,
+		Redis:   s.redis,
+	})
 
 	if err := conn.Serve(); err != nil && err != io.EOF {
 		log.Printf("[MTProto] connection #%d closed: %v", id, err)
@@ -95,7 +119,6 @@ func negotiateTransport(raw net.Conn) (transport.Mode, io.ReadWriter, error) {
 		return 0, nil, err
 	}
 	if marker[0] != transport.AbridgedMarker && marker[0] != transport.IntermediateMarker {
-		// Client may send length directly (intermediate without marker).
 		mode = transport.ModeIntermediate
 	}
 	return mode, &prefixedConn{Conn: raw, first: marker[0], used: marker[0] == transport.IntermediateMarker}, nil
