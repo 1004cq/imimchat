@@ -4,9 +4,9 @@ services:
     image: registry.cn-shanghai.aliyuncs.com/wukongim/wukongim:v2
     restart: always
     ports:
-      # - "5001:5001" # http api端口（业务端调用，仅限内网开放）
-      - "5100:5100"  # tcp长连接端口（外网开放）
-      - "5200:5200" # websocket端口（外网开放）
+      - "5001:5001" # http api端口（业务端调用）
+      - "5100:5100"  # tcp长连接端口
+      - "5200:5200" # websocket端口
       - "5300:5300" # 监控端口
     volumes:
       - ./wukongim:/root/wukongim
@@ -14,6 +14,18 @@ services:
       - .env
     environment:
       - WK_EXTERNAL_IP=${EXTERNAL_IP}
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "5001"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
   tangsengdaodaoserver:  # 唐僧叨叨的业务服务
     image: registry.cn-shanghai.aliyuncs.com/wukongim/tangsengdaodaoserver:v1.5
     restart: always
@@ -23,10 +35,14 @@ services:
       interval: 10s
       timeout: 10s
       retries: 3
+      start_period: 30s
     depends_on:
-       - redis
-       - mysql
-       - wukongim
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      wukongim:
+        condition: service_started
     ports:
       - "8090:8090"
     volumes:
@@ -35,11 +51,17 @@ services:
     env_file:
       - .env
     environment:
-      - TS_DB_MYSQLADDR=root:${MYSQL_ROOT_PASSWORD}@tcp(mysql)/${MYSQL_DATABASE}?charset=utf8mb4&parseTime=true&loc=Local
+      - TS_DB_MYSQLADDR=root:${MYSQL_ROOT_PASSWORD}@tcp(mysql:3306)/${MYSQL_DATABASE}?charset=utf8mb4&parseTime=true&loc=Local&timeout=10s&readTimeout=30s&writeTimeout=30s
       - TS_EXTERNAL_IP=${EXTERNAL_IP}
       - TS_FILESERVICE=${TS_FILESERVICE}
       - TS_MINIO_ACCESSKEYID=${MINIO_ROOT_USER}
       - TS_MINIO_SECRETACCESSKEY=${MINIO_ROOT_PASSWORD}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
   tangsengdaodaoweb:  # 唐僧叨叨的web服务
     image: registry.cn-shanghai.aliyuncs.com/wukongim/tangsengdaodaoweb:latest
     restart: always
@@ -50,6 +72,12 @@ services:
     depends_on:
       tangsengdaodaoserver:
         condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
   tangsengdaodaomanager:  # 唐僧叨叨的后台管理系统
     image: registry.cn-shanghai.aliyuncs.com/wukongim/tangsengdaodaomanager:latest
     restart: always
@@ -60,11 +88,14 @@ services:
     depends_on:
       tangsengdaodaoserver:
         condition: service_healthy
-  minio: # minio文件管理服务
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+  minio:  # minio文件管理服务
     image: registry.cn-shanghai.aliyuncs.com/wukongim/minio:RELEASE.2023-07-18T17-49-40Z
-    expose:
-      - "9000"
-      - "9001"
     command: "server /data --console-address ':9001'"
     ports:
       - "9000:9000"
@@ -79,26 +110,70 @@ services:
       retries: 3
     volumes:
       - ./miniodata:/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
   mysql:  # mysql数据库
     image: registry.cn-shanghai.aliyuncs.com/wukongim/mysql:8.0.33
-    command: --default-authentication-plugin=mysql_native_password
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max_connections=200
+      - --max_allowed_packet=64M
+      - --innodb_buffer_pool_size=256M
+      - --innodb_log_file_size=128M
+      - --slow_query_log=1
+      - --slow_query_log_file=/var/log/mysql/slow.log
+      - --long_query_time=2
     healthcheck:
-      test: ["CMD", "mysqladmin" ,"ping", "-h", "localhost"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     volumes:
       - ./mysqldata:/var/lib/mysql
     environment:
       - TZ=Asia/Shanghai
       - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
       - MYSQL_DATABASE=${MYSQL_DATABASE}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
   redis:  # redis
     image: registry.cn-shanghai.aliyuncs.com/wukongim/redis:7.2.3
     restart: always
+    command:
+      - redis-server
+      - --appendonly yes
+      - --maxmemory 128mb
+      - --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 1s
       timeout: 3s
       retries: 30
+    volumes:
+      - ./redisdata:/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
   adminer:  # mysql web管理工具（调试用，生产环境建议关闭）
     image: registry.cn-shanghai.aliyuncs.com/wukongim/adminer:latest
     ports:
       - 8306:8080
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "2"

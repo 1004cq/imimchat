@@ -1,8 +1,8 @@
-# imimchat 私有化即时通讯系统
+# imimchat 即时通讯系统
 
 [English Version](./README_en.md) | **中文版**
 
-> 基于 [WuKongIM](https://github.com/WuKongIM/WuKongIM) + [TangSengDaoDao](https://github.com/TangSengDaoDao/TangSengDaoDaoServer) 搭建的端到端加密私有化即时通讯系统，已完成品牌定制、移动端适配和安全加固。
+> 融合两套 IM 系统的统一项目：基于 [WuKongIM](https://github.com/WuKongIM/WuKongIM) 的私有化部署方案 + 自研 [CQIM](./cqim-app/) 全栈 IM 应用，统一在 Docker Compose 下编排管理。
 
 **访问地址：** https://wed.imim.chat  
 **服务器：** 42.194.167.201（腾讯云）  
@@ -11,13 +11,27 @@
 
 ---
 
+## 项目组成
+
+本项目包含两套 IM 系统，可根据需求选择启用：
+
+| 系统 | 技术栈 | 说明 |
+|------|--------|------|
+| **WuKongIM** | Docker 容器 (WuKongIM + TangSengDaoDao) | 私有化 IM 引擎，提供基础聊天能力 |
+| **CQIM** | TypeScript/React + Express + MongoDB | 自研全栈 IM，功能更丰富（朋友圈/贴纸/AI 等） |
+
+---
+
 ## 文档导航
 
-| 文档 | 中文 | English |
-|------|------|---------|
-| 系统架构说明 | [architecture.md](./docs/architecture.md) | [architecture_en.md](./docs/architecture_en.md) |
-| 优化方案路线图 | [optimization.md](./docs/optimization.md) | [optimization_en.md](./docs/optimization_en.md) |
-| 项目移交手册 | [handover.md](./docs/handover.md) | [handover_en.md](./docs/handover_en.md) |
+| 文档 | 说明 |
+|------|------|
+| [architecture.md](./docs/architecture.md) | 系统架构说明 |
+| [optimization.md](./docs/optimization.md) | 优化方案与路线图 |
+| [handover.md](./docs/handover.md) | 项目移交文档 |
+| [register-service.md](./docs/register-service.md) | 注册中间件说明 |
+| [cqim-deploy.md](./docs/cqim-deploy.md) | CQIM 部署指南 |
+| [cqim-dev-roadmap.md](./docs/cqim-dev-roadmap.md) | CQIM 开发路线图 |
 
 ---
 
@@ -26,33 +40,37 @@
 ```
 imimchat/
 ├── docker/                     # Docker 部署配置
-│   ├── docker-compose.yaml     # 当前生产配置（已定制）
+│   ├── docker-compose.yaml     # 统一编排（WuKongIM + CQIM 全部服务）
 │   ├── docker-compose.yaml.original  # 原始官方配置（备份）
-│   └── .env.example            # 环境变量模板（不含真实密码）
+│   └── .env.example            # 环境变量模板
+├── cqim-app/                   # CQIM 自研全栈 IM 应用
+│   ├── server/                 # Express 后端（20+ 模块）
+│   ├── client/                 # React + Vite 前端
+│   ├── prisma/                 # 数据库 Schema
+│   ├── go-gateway/             # Go 群聊 WebSocket 网关
+│   ├── Dockerfile              # 多阶段构建
+│   └── package.json
+├── register-service/           # 注册中间件（Flask）
+│   └── app/                    # 工厂模式模块化结构
 ├── nginx/                      # Nginx 反向代理配置
-│   └── wed.imim.chat.conf      # 主站 HTTPS 配置
-├── frontend/                   # 前端自定义文件（注入到 Web 容器）
-│   ├── index.html              # 入口 HTML（参考，含脚本加载顺序）
-│   ├── manifest.json           # PWA 配置
+│   └── wed.imim.chat.conf      # 双系统路由规则
+├── frontend/                   # WuKongIM 前端定制文件
+│   ├── index.html
+│   ├── manifest.json
 │   └── static/
 │       ├── js/
-│       │   └── imim_adaptive.js    # 移动端适配脚本 v3（核心定制）
+│       │   ├── imim_adaptive.js    # 移动端适配脚本
+│       │   └── imim_trtc.js        # TRTC 视频通话模块
 │       └── css/
-│           └── mobile.css          # 移动端 CSS 补充样式
+│           └── mobile.css
 ├── scripts/                    # 运维脚本
-│   ├── deploy-frontend.sh      # 部署前端自定义文件
-│   ├── backup-db.sh            # 数据库备份
-│   └── manage.sh               # 服务管理（启停/日志/更新）
-├── docs/                       # 项目文档（中英双语）
-│   ├── architecture.md         # 系统架构说明（中文）
-│   ├── architecture_en.md      # System Architecture (English)
-│   ├── optimization.md         # 优化方案与路线图（中文）
-│   ├── optimization_en.md      # Optimization Plan & Roadmap (English)
-│   ├── handover.md             # 项目移交文档（中文）
-│   └── handover_en.md          # Project Handover Document (English)
+│   ├── deploy-frontend.sh
+│   ├── backup-db.sh
+│   └── manage.sh
+├── docs/                       # 项目文档
 ├── .gitignore
-├── README.md                   # 中文说明
-└── README_en.md                # English README
+├── README.md
+└── README_en.md
 ```
 
 ---
@@ -67,8 +85,8 @@ imimchat/
 | Docker | 29.x+ |
 | Docker Compose | v2+ |
 | Nginx | 1.18+ |
-| 内存 | 4GB+ 推荐 |
-| 磁盘 | 40GB+ 推荐 |
+| 内存 | 8GB+ 推荐（双系统运行） |
+| 磁盘 | 80GB+ 推荐 |
 
 ### 全新部署
 
@@ -119,46 +137,62 @@ bash scripts/deploy-frontend.sh
     ▼
 Nginx (443/80) ─── SSL 终止 ─── wed.imim.chat
     │
-    ├── /          → Web 前端 (Docker:82)  [tangsengdaodaoweb]
-    ├── /v1/       → 业务 API (Docker:8090) [tangsengdaodaoserver]
-    ├── /ws        → WebSocket (Docker:5200) [wukongim]
-    └── /admin     → 管理后台 (Docker:83)  [tangsengdaodaomanager]
+    ├── /          → WuKongIM Web 前端 (Docker:82)
+    ├── /cqim      → CQIM 全栈应用 (Docker:3000)
+    ├── /v1/       → 业务 API (Docker:8090)
+    ├── /ws        → WuKongIM WebSocket (Docker:5200)
+    ├── /ws/group  → CQIM 群聊网关 (Docker:8081)
+    ├── /admin     → 管理后台 (Docker:83)
+    ├── /register/ → 注册服务 (Docker:9091)
+    └── /trtc/     → TRTC UserSig (Docker:9091)
          │
          ├── tangsengdaodaoserver:8090 ─── MySQL:3306
          │                             └── Redis:6379
          │                             └── Minio:9000
-         └── wukongim:5001/5200
+         ├── wukongim:5001/5200
+         └── cqim:3000 ─── MongoDB:27017
+                       └── MySQL:3306 (审计)
+                       └── Redis:6379 (缓存)
 ```
+
+### 数据库说明
+
+| 数据库 | 用途 | 端口 |
+|--------|------|------|
+| MySQL (`im`) | WuKongIM/TangSengDaoDao 用户数据 | 3306 |
+| MySQL (`cqim_audit`) | CQIM 审计与运营日志 | 3306 |
+| MongoDB (`cqim`) | CQIM 消息/群组/动态 | 27017 |
+| Redis | 缓存/在线状态/会话 | 6379 |
 
 ---
 
 ## 核心定制说明
 
-### 1. 品牌定制
+### 1. 双系统共存
 
-- **应用名称：** imimchat
-- **主题色：** `#1677ff`（蓝色）
-- **Logo：** 已替换为 imm 品牌图标
-- **PWA 主题色：** `#1a2e8a`
+Nginx 通过路径前缀实现两套系统共存：
+- `/` → WuKongIM（基础 IM，轻量级）
+- `/cqim` → CQIM 全栈应用（朋友圈、贴纸、AI 等高级功能）
 
-### 2. 移动端适配（`imim_adaptive.js` v3）
+如需将 CQIM 设为主应用，交换 nginx 配置中 `/` 和 `/cqim` 的 proxy_pass 目标即可。
 
-这是本项目最核心的定制文件，解决了以下问题：
+### 2. CQIM 功能亮点
 
-| 问题 | 解决方案 |
-|------|----------|
-| 登录 username 格式错误（`0086xxx` vs `86xxx`） | XHR/fetch 拦截器自动修正 |
-| 移动端布局错乱（侧边栏遮挡） | CSS 媒体查询 + DOM 重构 |
-| 缺少底部导航栏 | 动态注入微信风格 TabBar |
-| 聊天页面无滑动动画 | CSS transform 动画 |
-| 折叠按钮过大 | CSS 隐藏 + 替换 |
+- 朋友圈（Moments）系统
+- 贴纸商店与 Lottie 动画贴纸
+- AI 对话（OpenAI 集成）
+- 阅后即焚消息
+- 位置分享（腾讯地图）
+- 多渠道推送（个推/FCM/APNs）
+- TRTC 视频通话
+- Go 网关群聊 WebSocket 加速
 
-### 3. Nginx 定制
+### 3. WuKongIM 定制
 
-- HTTP → HTTPS 自动重定向
-- WebSocket 长连接支持（`/ws` 路径）
-- 管理后台路径前缀 `/admin`
-- 文件上传大小限制 200MB
+- 移动端适配（底部导航栏、滑动动画）
+- TRTC 视频通话前端模块
+- 安全注册中间件（短信验证码）
+- Nginx 安全加固（CSP、HSTS、速率限制）
 
 ---
 
@@ -179,4 +213,6 @@ Nginx (443/80) ─── SSL 终止 ─── wed.imim.chat
 
 - [WuKongIM 官方文档](https://githubim.com)
 - [TangSengDaoDao 官方文档](https://tangsengdaodao.com)
+- [CQIM 源码](./cqim-app/)
+- [TRTC 控制台](https://console.cloud.tencent.com/trtc)
 - [Docker Compose 文档](https://docs.docker.com/compose/)

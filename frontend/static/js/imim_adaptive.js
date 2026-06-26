@@ -1060,47 +1060,8 @@ body[theme-mode=dark] .wk-mobile-tabbar-item.active {
     }
   }
 
-  // ===== 修复 username 格式 =====
-  function fixLoginUsername() {
-    // 拦截 XMLHttpRequest
-    var origOpen = XMLHttpRequest.prototype.open;
-    var origSend = XMLHttpRequest.prototype.send;
-
-    XMLHttpRequest.prototype.open = function(method, url) {
-      this._url = url;
-      this._method = method;
-      return origOpen.apply(this, arguments);
-    };
-
-    XMLHttpRequest.prototype.send = function(body) {
-      if (this._url && this._url.toString().includes('user/login') && body) {
-        try {
-          var data = JSON.parse(body);
-          if (data.username && data.username.startsWith('0086')) {
-            // 0086xxxxxxxxx -> 86xxxxxxxxx (去掉前导00)
-            data.username = data.username.substring(2);
-            body = JSON.stringify(data);
-          }
-        } catch(e) {}
-      }
-      return origSend.call(this, body);
-    };
-
-    // 拦截 fetch
-    var origFetch = window.fetch;
-    window.fetch = function(url, options) {
-      if (url && url.toString().includes('user/login') && options && options.body) {
-        try {
-          var data = JSON.parse(options.body);
-          if (data.username && data.username.startsWith('0086')) {
-            data.username = data.username.substring(2);
-            options = Object.assign({}, options, { body: JSON.stringify(data) });
-          }
-        } catch(e) {}
-      }
-      return origFetch.apply(this, arguments);
-    };
-  }
+  // 注：fixLoginUsername 已在脚本加载时通过 IIFE 立即执行（见文件顶部），
+  // 此处不再重复定义，避免重复拦截。
 
   // ===== 深色/浅色切换按钮 =====
   function injectThemeToggle() {
@@ -1536,7 +1497,6 @@ body[theme-mode=dark] .wk-mobile-tabbar-item.active {
     }
 
     injectCSS();
-    fixLoginUsername();
     injectThemeToggle();
 
     // 登录页 UI 注入（多次尝试确保 React 渲染完成）

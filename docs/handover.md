@@ -17,7 +17,7 @@ imimchat 是一个基于唐僧叨叨（TangSengDaoDao）和悟空 IM（WuKongIM�
 | 服务 | 访问地址 | 说明 |
 |------|---------|------|
 | **Web 客户端** | `https://wed.imim.chat` | 用户访问的主入口，包含登录、注册及聊天功能 |
-| **管理后台** | `https://wed.imim.chat/admin/` | 平台管理系统，默认账号：`superAdmin`，密码：`TsddAdmin@2026` |
+| **管理后台** | `https://wed.imim.chat/admin/` | 平台管理系统，默认账号：`superAdmin`，密码见 `.env` 中的 `TS_ADMINPWD` |
 | **注册接口** | `https://wed.imim.chat/register/` | 独立的注册安全中间件接口 |
 
 ### 1.2 基础设施信息
@@ -90,10 +90,10 @@ Nginx 核心路由规则：
 
 - **MySQL**：
   - 数据库名：`im`
-  - Root 密码：`TsddMysql@2026`
+  - Root 密码：见 `.env` 中的 `MYSQL_ROOT_PASSWORD`
 - **MinIO**：
   - 用户名：`minio`
-  - 密码：`TsddMinio@2026`
+  - 密码：见 `.env` 中的 `MINIO_ROOT_PASSWORD`
 
 ### 3.3 注册中间件服务
 
@@ -200,8 +200,8 @@ Web 前端基于编译后的静态文件运行，修改均通过向 `imim_adapti
 
 建议定期备份 MySQL 数据库：
 ```bash
-# 备份命令
-docker exec tsdd-mysql-1 mysqldump -uroot -pTsddMysql@2026 im > /home/ubuntu/im_backup_$(date +%Y%m%d).sql
+# 备份命令（请从 .env 获取 MYSQL_ROOT_PASSWORD）
+docker exec tsdd-mysql-1 mysqldump -uroot -p"${MYSQL_ROOT_PASSWORD}" im > /home/ubuntu/im_backup_$(date +%Y%m%d).sql
 ```
 
 ---

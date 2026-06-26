@@ -326,18 +326,26 @@ if ('serviceWorker' in navigator && 'PushManager' in window) {
 ```
 第一阶段（1-2周，安全加固）
 ├── ✅ 移动端 UI 修复（已完成）
-├── 🔲 配置数据库定时备份
-├── 🔲 替换固定验证码为短信服务
-└── 🔲 添加 Nginx 安全头 + 限流
+├── ✅ 配置数据库定时备份（backup-db.sh 增强版已就绪）
+├── ✅ register-service 集成到 docker-compose（SMS_PROVIDER=aliyun_dypns 即可启用真实验证码）
+├── ✅ 添加 Nginx 安全头 + 限流（安全头 + Gzip + 缓存 + 限流 + Permissions-Policy 已全部配置）
+├── ✅ 移除文档中的明文密码
+├── ✅ register-service 代码重构（模块化、配置校验、错误处理、结构化日志）
+├── ✅ Docker 资源限制（所有服务配置 memory limits）
+├── ✅ MySQL 优化（连接池参数、慢查询日志、字符集优化）
+├── ✅ Redis 持久化（AOF + RDB + maxmemory 策略）
+├── ✅ SSL 加密套件强化（禁用弱加密，启用 TLSv1.2+）
 
 第二阶段（2-4周，稳定性）
-├── 🔲 配置服务监控告警
+├── 🔲 配置服务监控告警（UptimeRobot / Uptime Kuma）
 ├── 🔲 SSL 证书自动续期
-├── 🔲 Docker 日志轮转
+├── ✅ Docker 日志轮转（所有服务已配置 max-size: 100m, max-file: 3）
+├── ✅ register-service 已集成到 docker-compose.yaml
+├── ✅ 健康检查完善（所有服务含 healthcheck + start_period）
 └── 🔲 真机移动端测试与修复
 
 第三阶段（1-2月，性能与体验）
-├── 🔲 Nginx 缓存 + Gzip 优化
+├── ✅ Nginx 缓存 + Gzip 优化
 ├── 🔲 MinIO 接入 CDN
 ├── 🔲 Web Push 推送通知
 └── 🔲 注册邀请码机制
@@ -354,10 +362,13 @@ if ('serviceWorker' in navigator && 'PushManager' in window) {
 
 | 编号 | 问题描述 | 严重程度 | 状态 |
 |------|----------|----------|------|
-| #001 | 固定验证码 `123456` 可被滥用注册 | 高 | 待修复 |
-| #002 | 无数据库自动备份 | 高 | 待修复 |
+| #001 | 固定验证码 `123456` 可被滥用注册 | 高 | ✅ 已修复（设置 SMS_PROVIDER=aliyun_dypns 即可启用真实验证码） |
+| #002 | 无数据库自动备份 | 高 | ✅ 已修复（backup-db.sh 增强版 + cron 建议） |
 | #003 | SSL 证书到期无告警 | 中 | 待修复 |
 | #004 | 移动端图片/语音消息体验待优化 | 中 | 待测试 |
 | #005 | 无服务监控告警 | 中 | 待配置 |
-| #006 | Docker 日志无大小限制 | 低 | 待配置 |
+| #006 | Docker 日志无大小限制 | 低 | ✅ 已修复（所有服务已配置日志轮转） |
 | #007 | 管理后台 Adminer 无额外认证 | 低 | 已限制本机访问 |
+| #008 | register-service 单文件架构 | 低 | ✅ 已修复（模块化重构） |
+| #009 | 服务无资源限制 | 中 | ✅ 已修复（所有服务已配置 memory limits） |
+| #010 | MySQL 未优化配置 | 中 | ✅ 已修复（连接池、慢查询日志、字符集） |
