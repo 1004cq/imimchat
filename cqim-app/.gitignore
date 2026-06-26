@@ -100,6 +100,9 @@ jspm_packages/
 tmp/
 temp/
 
+# Apple push keys (never commit private keys)
+certs/*.p8
+
 # Database
 *.db
 *.sqlite
