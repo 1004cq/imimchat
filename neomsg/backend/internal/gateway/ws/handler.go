@@ -8,6 +8,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/neomsg/neomsg/backend/internal/gateway/session"
 	"github.com/neomsg/neomsg/backend/internal/message"
+	"github.com/neomsg/neomsg/backend/internal/protocol"
 	"github.com/neomsg/neomsg/backend/internal/push"
 )
 
@@ -54,12 +55,14 @@ func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[WS] connected user=%d device=%s", userID, deviceID)
 
+	codec := protocol.NewFrameCodec()
+
 	for {
 		_, data, err := ws.ReadMessage()
 		if err != nil {
 			break
 		}
-		h.handleFrame(context.Background(), userID, deviceID, data)
+		h.handleFrame(context.Background(), conn, codec, userID, data)
 	}
 }
 
@@ -68,10 +71,22 @@ func (h *Handler) authenticate(token string) (int64, error) {
 	return 1, nil
 }
 
-func (h *Handler) handleFrame(ctx context.Context, userID int64, deviceID string, data []byte) {
-	// TODO: protobuf 解码 Envelope，按 payload 类型分发
-	_ = ctx
-	_ = userID
-	_ = deviceID
-	_ = data
+func (h *Handler) handleFrame(ctx context.Context, conn session.Conn, codec *protocol.FrameCodec, userID int64, data []byte) {
+	pkt, err := codec.DecodeWirePacket(data)
+	if err != nil {
+		log.Printf("[WS] decode wire packet: %v", err)
+		return
+	}
+
+	frames, err := h.msgSvc.HandleWirePacket(ctx, userID, pkt)
+	if err != nil {
+		log.Printf("[WS] handle wire packet: %v", err)
+		return
+	}
+	for _, frame := range frames {
+		if err := conn.Send(frame); err != nil {
+			log.Printf("[WS] send response: %v", err)
+			return
+		}
+	}
 }

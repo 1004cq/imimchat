@@ -51,7 +51,7 @@ neomsg/
 |----|------|
 | 后端 | Go 1.22+ |
 | iOS | Swift 5.9 + SwiftUI |
-| 协议 | Protobuf 3 + WebSocket/TCP |
+| 协议 | Protobuf Wire + MTProto 2.0 + Envelope |
 | 数据库 | PostgreSQL 16 + Redis 7 |
 | 存储 | MinIO (S3 兼容) |
 | 队列 | NATS JetStream |

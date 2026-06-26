@@ -143,11 +143,29 @@ sequenceDiagram
 
 ## 5. 通信协议
 
-### 5.1 Protobuf（Web / 自研过渡客户端）
+### 5.1 Wire 协议（长连接主载荷）
 
-见 `proto/neomsg/v1/envelope.proto` 与 `messages.proto`。
+定义见 `proto/neomsg/v1/wire.proto`：
 
-### 5.2 MTProto 2.0（类 Telegram 原生客户端）
+| 消息 | 方向 | 说明 |
+|------|------|------|
+| `Message` | C↔S | 聊天消息（雪花 ID、`seq_id` 同步） |
+| `MessageAck` | S→C | 发送确认 |
+| `SyncRequest` | C→S | 按 `last_seq` 拉取增量 |
+| `SyncResponse` | S→C | 返回消息列表 |
+| `WirePacket` | C↔S | 统一包装，`[4B 长度][protobuf]` |
+
+生成 Go 代码：
+
+```bash
+./scripts/gen-proto.sh
+```
+
+### 5.2 Envelope（扩展能力）
+
+见 `proto/neomsg/v1/envelope.proto` 与 `messages.proto`（认证、媒体上传、已读回执等）。
+
+### 5.3 MTProto 2.0（类 Telegram 原生客户端）
 
 实现目录：`backend/internal/mtproto/`
 

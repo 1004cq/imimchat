@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package neomsg.v1;
 
+import "neomsg/v1/wire.proto";
+
 option go_package = "github.com/neomsg/neomsg/backend/internal/protocol/pb;pb";
 
 // Envelope — 所有客户端-服务器通信的统一包装层
@@ -19,6 +21,8 @@ message Envelope {
     PingRequest        ping           = 14;
     GetDifferenceRequest get_difference = 15;
     UploadPartRequest  upload_part    = 16;
+    Message              wire_message   = 17;
+    SyncRequest          sync_request  = 18;
 
     // Server → Client
     AuthResponse       auth_response  = 20;
@@ -28,6 +32,8 @@ message Envelope {
     PongResponse       pong           = 24;
     UpdatesEvent       updates        = 25;
     UploadPartResponse upload_part_ack = 26;
+    MessageAck           message_ack    = 27;
+    SyncResponse         sync_response  = 28;
     ErrorResponse      error          = 99;
   }
 }

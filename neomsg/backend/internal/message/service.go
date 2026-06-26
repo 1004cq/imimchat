@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	pb "github.com/neomsg/neomsg/backend/internal/protocol/pb/neomsg/v1"
+	"github.com/neomsg/neomsg/backend/internal/protocol"
 	"github.com/neomsg/neomsg/backend/internal/store/postgres"
 	redisstore "github.com/neomsg/neomsg/backend/internal/store/redis"
 )
@@ -105,8 +107,20 @@ type SendRequest struct {
 }
 
 func (r *SendRequest) BuildEnvelope(seq int64) []byte {
-	// TODO: protobuf 序列化 NewMessageEvent
-	return []byte(fmt.Sprintf(`{"type":"new_message","dialog_id":%d,"seq":%d}`, r.DialogID, seq))
+	msg := &pb.Message{
+		ChatId:    r.DialogID,
+		FromId:    r.SenderID,
+		Content:   r.ContentText,
+		MsgType:   int32(r.MsgType),
+		SeqId:     seq,
+		Timestamp: time.Now().UnixMilli(),
+	}
+	pkt := &pb.WirePacket{Payload: &pb.WirePacket_Message{Message: msg}}
+	frame, err := protocol.NewFrameCodec().EncodeWirePacket(pkt)
+	if err != nil {
+		return []byte(fmt.Sprintf(`{"type":"new_message","dialog_id":%d,"seq":%d}`, r.DialogID, seq))
+	}
+	return frame
 }
 
 type SendResponse struct {
