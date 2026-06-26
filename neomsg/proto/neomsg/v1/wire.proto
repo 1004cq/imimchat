@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package neomsg.v1;
+
+option go_package = "github.com/neomsg/neomsg/backend/internal/protocol/pb;pb";
+
+// 核心消息体 — 长连接主载荷
+message Message {
+  int64 id = 1;           // 雪花 ID
+  int64 chat_id = 2;      // 会话 ID（dialog_id）
+  int64 from_id = 3;
+  int64 to_id = 4;
+  string content = 5;
+  int32 msg_type = 6;     // 0=text, 1=image, 2=voice, 3=file...
+  bytes media_key = 7;    // 媒体文件密钥（小文件可直接带）
+  int64 seq_id = 8;       // 用于同步
+  int64 timestamp = 9;
+  bool is_secret = 10;    // 是否 Secret Chat
+}
+
+message MessageAck {
+  int64 msg_id = 1;
+  int64 seq_id = 2;
+  bool success = 3;
+}
+
+message SyncRequest {
+  int64 user_id = 1;
+  int64 last_seq = 2;
+  int64 chat_id = 3;      // 0 表示全量同步
+}
+
+message SyncResponse {
+  repeated Message messages = 1;
+  int64 last_seq = 2;
+  bool has_more = 3;
+}
+
+// 统一线协议包装（[4B 长度][WirePacket]）
+message WirePacket {
+  oneof payload {
+    Message message = 1;
+    MessageAck message_ack = 2;
+    SyncRequest sync_request = 3;
+    SyncResponse sync_response = 4;
+  }
+}

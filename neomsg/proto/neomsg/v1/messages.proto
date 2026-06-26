@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package neomsg.v1;
+
+option go_package = "github.com/neomsg/neomsg/backend/internal/protocol/pb;pb";
+
+// REST/gRPC 辅助消息类型
+
+message User {
+  int64  id        = 1;
+  string username  = 2;
+  string nickname  = 3;
+  string avatar_url = 4;
+  string bio       = 5;
+  bool   is_bot    = 6;
+  int64  last_seen = 7;
+}
+
+message Dialog {
+  int64  id           = 1;
+  DialogType type     = 2;
+  string title        = 3;
+  string avatar_url   = 4;
+  int64  last_msg_id  = 5;
+  string last_preview = 6;
+  int64  last_msg_time = 7;
+  int32  unread_count = 8;
+  bool   is_pinned    = 9;
+  bool   is_muted     = 10;
+  bool   is_secret    = 11;  // Secret Chat
+}
+
+enum DialogType {
+  DIALOG_TYPE_UNSPECIFIED = 0;
+  DIALOG_TYPE_PRIVATE     = 1;
+  DIALOG_TYPE_GROUP       = 2;
+  DIALOG_TYPE_SUPERGROUP  = 3;
+  DIALOG_TYPE_CHANNEL     = 4;
+  DIALOG_TYPE_SECRET      = 5;
+}
+
+message Device {
+  string device_id   = 1;
+  string platform    = 2;
+  string app_version = 3;
+  string model       = 4;
+  int64  last_active = 5;
+  bool   is_current  = 6;
+}
+
+// Bot API
+message BotInfo {
+  int64  id       = 1;
+  string username = 2;
+  string name     = 3;
+  string token    = 4;
+}
+
+message SendBotMessageRequest {
+  int64  chat_id = 1;
+  string text    = 2;
+  string parse_mode = 3;
+}
+
+// E2EE — Secret Chat 密钥交换
+message PreKeyBundle {
+  int64  user_id          = 1;
+  bytes  identity_key     = 2;
+  bytes  signed_pre_key   = 3;
+  int32  signed_pre_key_id = 4;
+  bytes  signature        = 5;
+  repeated PreKey pre_keys = 6;
+}
+
+message PreKey {
+  int32 key_id     = 1;
+  bytes public_key = 2;
+}
+
+message EncryptedMessage {
+  int32 msg_type = 1;  // 1=PreKeyWhisper, 3=Whisper
+  bytes body     = 2;
+}

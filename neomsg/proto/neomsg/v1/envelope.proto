@@ -1,0 +1,183 @@
+syntax = "proto3";
+
+package neomsg.v1;
+
+import "neomsg/v1/wire.proto";
+
+option go_package = "github.com/neomsg/neomsg/backend/internal/protocol/pb;pb";
+
+// Envelope — 所有客户端-服务器通信的统一包装层
+message Envelope {
+  string request_id = 1;
+  int64  seq        = 2;
+  int64  pts        = 3;  // 持久化时间戳序列（同步用）
+
+  oneof payload {
+    // Client → Server
+    AuthRequest        auth_request   = 10;
+    SendMessageRequest send_message   = 11;
+    AckReadRequest     ack_read       = 12;
+    TypingRequest      typing         = 13;
+    PingRequest        ping           = 14;
+    GetDifferenceRequest get_difference = 15;
+    UploadPartRequest  upload_part    = 16;
+    Message              wire_message   = 17;
+    SyncRequest          sync_request  = 18;
+
+    // Server → Client
+    AuthResponse       auth_response  = 20;
+    NewMessageEvent    new_message    = 21;
+    ReadReceiptEvent   read_receipt   = 22;
+    TypingEvent        typing_event   = 23;
+    PongResponse       pong           = 24;
+    UpdatesEvent       updates        = 25;
+    UploadPartResponse upload_part_ack = 26;
+    MessageAck           message_ack    = 27;
+    SyncResponse         sync_response  = 28;
+    ErrorResponse      error          = 99;
+  }
+}
+
+// ============ 认证 ============
+
+message AuthRequest {
+  string access_token = 1;
+  string device_id    = 2;
+  string app_version  = 3;
+  string platform     = 4;  // ios | android | web
+}
+
+message AuthResponse {
+  bool   ok           = 1;
+  int64  user_id      = 2;
+  int64  pts          = 3;
+  int64  server_time  = 4;
+  string session_id   = 5;
+}
+
+// ============ 消息 ============
+
+enum MessageType {
+  MSG_TYPE_UNSPECIFIED = 0;
+  MSG_TYPE_TEXT        = 1;
+  MSG_TYPE_IMAGE       = 2;
+  MSG_TYPE_VIDEO       = 3;
+  MSG_TYPE_AUDIO       = 4;
+  MSG_TYPE_FILE        = 5;
+  MSG_TYPE_STICKER     = 6;
+  MSG_TYPE_LOCATION    = 7;
+  MSG_TYPE_CONTACT     = 8;
+  MSG_TYPE_SYSTEM      = 9;
+  MSG_TYPE_ENCRYPTED   = 10;  // Secret Chat 密文
+}
+
+message SendMessageRequest {
+  int64       dialog_id   = 1;
+  MessageType msg_type    = 2;
+  bytes       content     = 3;  // 文本 UTF-8 或密文
+  string      client_msg_id = 4;
+  int64       reply_to_id = 5;
+  MediaRef    media       = 6;
+  int32       ttl_seconds = 7;  // 自毁消息（0=不自毁）
+}
+
+message NewMessageEvent {
+  int64       message_id  = 1;
+  int64       dialog_id   = 2;
+  int64       sender_id   = 3;
+  MessageType msg_type    = 4;
+  bytes       content     = 5;
+  int64       server_time = 6;
+  int64       seq         = 7;
+  MediaRef    media       = 8;
+  int32       ttl_seconds = 9;
+}
+
+message MediaRef {
+  string file_id    = 1;
+  string mime_type  = 2;
+  int64  size       = 3;
+  int32  width      = 4;
+  int32  height     = 5;
+  int32  duration   = 6;  // 音视频秒数
+  string thumbnail  = 7;
+}
+
+// ============ 已读回执 ============
+
+message AckReadRequest {
+  int64 dialog_id     = 1;
+  int64 last_read_id  = 2;
+}
+
+message ReadReceiptEvent {
+  int64 dialog_id     = 1;
+  int64 reader_id     = 2;
+  int64 last_read_id  = 3;
+  int64 read_time     = 4;
+}
+
+// ============ 在线状态 ============
+
+message TypingRequest {
+  int64 dialog_id = 1;
+  bool  is_typing = 2;
+}
+
+message TypingEvent {
+  int64 dialog_id = 1;
+  int64 user_id   = 2;
+  bool  is_typing = 3;
+}
+
+// ============ 心跳 ============
+
+message PingRequest {
+  int64 client_time = 1;
+}
+
+message PongResponse {
+  int64 server_time = 1;
+}
+
+// ============ 同步 ============
+
+message GetDifferenceRequest {
+  int64 from_pts = 1;
+  int32 limit    = 2;
+}
+
+message UpdatesEvent {
+  int64 pts = 1;
+  repeated Update updates = 2;
+}
+
+message Update {
+  oneof data {
+    NewMessageEvent  new_message  = 1;
+    ReadReceiptEvent read_receipt = 2;
+  }
+}
+
+// ============ 媒体上传 ============
+
+message UploadPartRequest {
+  string upload_id  = 1;
+  int32  part_index = 2;
+  bytes  data       = 3;
+  bool   is_last    = 4;
+}
+
+message UploadPartResponse {
+  string upload_id = 1;
+  string file_id   = 2;
+  bool   complete  = 3;
+}
+
+// ============ 错误 ============
+
+message ErrorResponse {
+  int32  code        = 1;
+  string message     = 2;
+  string request_id  = 3;
+}

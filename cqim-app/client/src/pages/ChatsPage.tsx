@@ -18,6 +18,7 @@ import { QRCodeModal } from '@/components/QRCodeModal';
 import { ScannerModal } from '@/components/ScannerModal';
 import { AddFriendModal } from '@/components/AddFriendModal';
 import { CreateGroupModal } from '@/components/CreateGroupModal';
+import GlobalSearchPage from './GlobalSearchPage';
 import { getVisibleRange, rafThrottle } from '@/lib/performance';
 
 const CHAT_ITEM_HEIGHT = 80;
@@ -143,6 +144,7 @@ export default function ChatsPage() {
   const [showScanner, setShowScanner] = useState(false);
   const [showAddFriend, setShowAddFriend] = useState(false);
   const [showCreateGroup, setShowCreateGroup] = useState(false);
+  const [showGlobalSearch, setShowGlobalSearch] = useState(false);
   const [scannedUserId, setScannedUserId] = useState<string | undefined>();
   const [activeTab, setActiveTab] = useState<'all' | 'group'>('all');
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -466,9 +468,10 @@ export default function ChatsPage() {
             type="text"
             value={searchText}
             onChange={e => setSearchText(e.target.value)}
-            onFocus={() => setSearchFocused(true)}
+            onFocus={() => { setSearchFocused(true); setShowGlobalSearch(true); }}
             onBlur={() => setSearchFocused(false)}
             placeholder="搜索聊天记录"
+            readOnly
           />
           {searchText && (
             <button onClick={() => setSearchText('')} className="p-0.5">
@@ -691,6 +694,13 @@ export default function ChatsPage() {
           }}
         />
       )}
+
+      {/* 全局搜索 */}
+      <AnimatePresence>
+        {showGlobalSearch && (
+          <GlobalSearchPage onClose={() => setShowGlobalSearch(false)} />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
