@@ -262,6 +262,7 @@ export interface CurrentUserProfileSyncPayload {
   bio?: string;
   phone?: string;
   email?: string;
+  profileUpdatedAt?: number;
 }
 
 export function syncCurrentUserProfile(payload: CurrentUserProfileSyncPayload) {
@@ -289,6 +290,9 @@ export function syncCurrentUserProfile(payload: CurrentUserProfileSyncPayload) {
   if (payload.email !== undefined) {
     CURRENT_USER.email = payload.email;
   }
+  if (payload.profileUpdatedAt !== undefined) {
+    localStorage.setItem('user_profile_updated_at', String(payload.profileUpdatedAt));
+  }
 
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('cqim:user-profile-updated', {
@@ -301,6 +305,7 @@ export function syncCurrentUserProfile(payload: CurrentUserProfileSyncPayload) {
         bio: CURRENT_USER.bio || '',
         phone: CURRENT_USER.phone || '',
         email: CURRENT_USER.email || '',
+        profileUpdatedAt: payload.profileUpdatedAt,
       },
     }));
   }

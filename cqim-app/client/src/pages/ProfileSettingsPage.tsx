@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { CURRENT_USER, syncCurrentUserProfile } from '@/lib/store';
+import { avatarWithVersion } from '@/hooks/useRemoteProfileSync';
 import { authApi, authFetch } from '@/lib/authFetch';
 import { DoveAvatar } from '@/components/DoveAvatar';
 import { QRCardModal } from '@/components/QRCodeCard';
@@ -86,6 +87,7 @@ interface UserProfile {
   bio: string;
   avatar: string;
   birthday: string;
+  updatedAt?: number;
 }
 
 // ============ 内联编辑页（全屏滑入） ============
@@ -460,16 +462,18 @@ export default function ProfileSettingsPage({ onClose, onProfileUpdate }: Profil
         wechatId: key === 'wechatId' ? updated.wechatId : (data.profile?.wechatId || data.user?.username || updated.wechatId),
         name: data.profile?.name || data.profile?.nickname || updated.name,
         nickname: data.profile?.nickname || data.profile?.name || updated.nickname,
+        updatedAt: data.profile?.updatedAt ?? data.user?.updatedAt ?? updated.updatedAt,
       };
 
       setProfile(savedProfile);
       syncCurrentUserProfile({
         nickname: savedProfile.nickname || savedProfile.name,
         uniqueId: savedProfile.wechatId,
-        avatar: savedProfile.avatar,
+        avatar: avatarWithVersion(savedProfile.avatar, savedProfile.updatedAt),
         bio: savedProfile.bio,
         phone: savedProfile.phone,
         email: savedProfile.email,
+        profileUpdatedAt: savedProfile.updatedAt,
       });
       onProfileUpdate?.(savedProfile);
       toast.success('已保存');
@@ -725,8 +729,9 @@ export default function ProfileSettingsPage({ onClose, onProfileUpdate }: Profil
             onSelect={async (val) => {
               // 先即刻本地 + 全局广播，让个人资料页、侧边栏、聊天页等其他场景
               // 头像立即刷新（无需等后端返回）。后端保存后会以同名事件再刷新一次。
-              setProfile(prev => ({ ...prev, avatar: val }));
-              syncCurrentUserProfile({ avatar: val });
+              const busted = avatarWithVersion(val, Date.now()) || val;
+              setProfile(prev => ({ ...prev, avatar: busted }));
+              syncCurrentUserProfile({ avatar: busted, profileUpdatedAt: Date.now() });
               await saveField('avatar', val);
             }}
           />

@@ -366,6 +366,16 @@ router.put('/users/:id', authMiddleware, requireRole('superadmin', 'admin'), asy
   });
 
   await addLog(admin.id, admin.username, '编辑用户', `user:${updatedUser.id}`, changes.join('; '), ip);
+
+  if (updateData.avatar !== undefined || updateData.nickname !== undefined || updateData.bio !== undefined) {
+    try {
+      const { publishUserProfileUpdatedById } = await import('./user-profile-sync.js');
+      await publishUserProfileUpdatedById(updatedUser.id);
+    } catch (pubErr) {
+      console.error('[Admin] 发布用户资料更新事件失败:', pubErr);
+    }
+  }
+
   res.json({ success: true, user: updatedUser });
 });
 
