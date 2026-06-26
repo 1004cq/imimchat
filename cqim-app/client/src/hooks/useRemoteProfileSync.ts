@@ -17,8 +17,8 @@ export interface RemoteProfileUpdate {
 }
 
 /** 为头像 URL 附加版本参数，避免 CDN/浏览器缓存旧图 */
-export function avatarWithVersion(avatar: string | undefined, updatedAt?: number): string | undefined {
-  if (!avatar) return avatar;
+export function avatarWithVersion(avatar: unknown, updatedAt?: number): string | undefined {
+  if (typeof avatar !== 'string' || !avatar) return undefined;
   if (!updatedAt) return avatar;
   const sep = avatar.includes('?') ? '&' : '?';
   return `${avatar}${sep}v=${updatedAt}`;

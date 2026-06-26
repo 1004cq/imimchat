@@ -69,6 +69,10 @@ export interface Message {
   id: string;
   chatId: string;
   senderId: string;
+  /** 群聊/同步场景下的发送者展示名 */
+  senderName?: string;
+  /** 资料更新后写入，用于气泡头像实时刷新 */
+  senderAvatar?: string;
   content: string;
   type: 'text' | 'image' | 'video' | 'file' | 'voice' | 'system' | 'call' | 'location' | 'location_share' | 'sticker';
   timestamp: number;
@@ -432,7 +436,8 @@ export function formatChatTime(timestamp: number): string {
 }
 
 export function getInitials(name: string): string {
-  return name.charAt(0);
+  const safe = typeof name === 'string' && name.length > 0 ? name : '?';
+  return safe.charAt(0);
 }
 
 export function getUserById(id: string): User | undefined {

@@ -116,7 +116,7 @@ type Action =
   // ===== 用户资料同步 =====
   /** 更新会话列表中缓存的用户头像/昵称 */
   | { type: 'UPDATE_USER_PROFILE_IN_CHATS'; userId: string; nickname?: string; avatar?: string; updatedAt?: number }
-  | { type: 'UPDATE_SENDER_PROFILE_IN_MESSAGES'; userId: string; nickname?: string; avatar?: string };
+  | { type: 'UPDATE_SENDER_PROFILE_IN_MESSAGES'; userId: string; nickname?: string; avatar?: string; updatedAt?: number };
 
 const OFFICIAL_CHAT_ID = 'c0';
 const BOT_CHAT_ID = 'cBOT';
@@ -643,14 +643,19 @@ function reducer(state: AppState, action: Action): AppState {
 
     case 'UPDATE_SENDER_PROFILE_IN_MESSAGES': {
       const { userId, nickname, avatar } = action;
+      const versionedAvatar = avatarWithVersion(avatar, action.updatedAt) ?? avatar;
       const nextMessages: Record<string, Message[]> = {};
       for (const [chatId, msgs] of Object.entries(state.messages)) {
+        if (!Array.isArray(msgs)) {
+          nextMessages[chatId] = [];
+          continue;
+        }
         nextMessages[chatId] = msgs.map((m) => {
-          if (m.senderId !== userId) return m;
+          if (!m || m.senderId !== userId) return m;
           return {
             ...m,
             ...(nickname !== undefined ? { senderName: nickname } : {}),
-            ...(avatar !== undefined ? { senderAvatar: avatar } : {}),
+            ...(versionedAvatar !== undefined ? { senderAvatar: versionedAvatar } : {}),
           };
         });
       }
@@ -1217,6 +1222,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               userId,
               nickname,
               avatar: versionedAvatar,
+              updatedAt,
             });
 
             window.dispatchEvent(new CustomEvent('cqim:remote-user-profile-updated', {

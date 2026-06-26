@@ -5217,8 +5217,6 @@ function AliyunPanel() {
   );
 }
 
-}
-
 // ============ 风控配置（类 TG 升级） ============
 
 function RiskControlPanel() {
