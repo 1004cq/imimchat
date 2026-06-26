@@ -2,7 +2,7 @@
  * 用户资料变更实时同步（Redis Pub/Sub）
  * 统一使用数据库 updatedAt 作为版本时间戳，多端按时间戳去重/合并。
  */
-import { prisma } from './prisma.js';
+import prisma from './db.js';
 import { publishMessage } from './redis.js';
 import { avatarToProxy } from './cos-signer.js';
 
