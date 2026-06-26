@@ -76,9 +76,23 @@ func applicationDidBecomeActive(_ application: UIApplication) {
 已集成本地插件 `capacitor-message-alert`：
 
 - **`MessageService`**：前台新消息统一入口（`onNewMessageReceived` → 广播 `cqim.newMessageReceived` + 调用 `NotificationManager`）
-- **`NotificationManager`**：强震动 + 系统急促提示音
+- **`NotificationManager`**：触觉 + 提示音（见下方效果说明）
 - JS 侧 WebSocket / JPush 前台消息会调用 `MessageAlert.onNewMessageReceived({ chatId, ... })`
 - 受「设置 → 消息通知」声音/震动开关控制
+
+#### 效果说明
+
+| 反馈 | 实现 | 说明 |
+|------|------|------|
+| **震动** | `UIImpactFeedbackGenerator`（heavy → 0.1s → medium） | 比老的 `AudioServicesPlayAlertSound` 更强、更现代，走 Taptic Engine |
+| **急促提示音（默认）** | 系统音效 **1005** | 尖锐、短促的系统提示音 |
+| **急促提示音（推荐）** | 自定义 **`urgent_message.caf`** | 短促类似 Telegram 的「叮」声，效果最好 |
+
+**推荐做法：** 准备 `urgent_message.caf`（0.1–0.3 秒），拖入 Xcode **App** target（勾选 Copy items），或放到插件目录  
+`plugins/capacitor-message-alert/ios/Sources/MessageAlertPlugin/Resources/`，然后 `npx cap sync ios`。  
+未放置自定义文件时自动回退系统 1005。
+
+详细步骤见：`plugins/capacitor-message-alert/ios/Sources/MessageAlertPlugin/Resources/README.md`
 
 原生扩展示例（AppDelegate 或其他 Swift 模块）：
 
@@ -99,8 +113,7 @@ MessageService.shared.onNewMessageReceived(
 )
 ```
 
-`npx cap sync ios` 后自动链接；可选将 `urgent_message.caf` 放入 Xcode 以使用自定义音效。
-
+`npx cap sync ios` 后自动链接插件。
 
 ### Android（可选）
 
