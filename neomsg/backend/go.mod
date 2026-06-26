@@ -3,6 +3,7 @@ module github.com/neomsg/neomsg/backend
 go 1.22
 
 require (
+	github.com/golang-jwt/jwt/v5 v5.2.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/gotd/ige v0.2.2
 	github.com/jackc/pgx/v5 v5.7.2

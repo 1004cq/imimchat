@@ -7,6 +7,7 @@ import (
 	"net"
 	"sync"
 
+	"github.com/neomsg/neomsg/backend/internal/auth"
 	mtcrypto "github.com/neomsg/neomsg/backend/internal/mtproto/crypto"
 	"github.com/neomsg/neomsg/backend/internal/mtproto/bridge"
 	"github.com/neomsg/neomsg/backend/internal/mtproto/connmgr"
@@ -21,6 +22,7 @@ type Server struct {
 	bridge  *bridge.Handler
 	connMgr *connmgr.Manager
 	redis   *redisstore.Store
+	auth    *auth.Service
 	mu      sync.Mutex
 	conns   int
 }
@@ -31,6 +33,7 @@ type ServerConfig struct {
 	Bridge     *bridge.Handler
 	ConnMgr    *connmgr.Manager
 	Redis      *redisstore.Store
+	Auth       *auth.Service
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
@@ -44,8 +47,13 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		bridge:  cfg.Bridge,
 		connMgr: cfg.ConnMgr,
 		redis:   cfg.Redis,
+		auth:    cfg.Auth,
 	}, nil
 }
+
+func (s *Server) RSAFingerprint() int64 { return s.rsaKey.Fingerprint() }
+
+func (s *Server) RSAPublicPEM() ([]byte, error) { return s.rsaKey.PublicPEM() }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	ln, err := net.Listen("tcp", s.addr)
@@ -102,6 +110,7 @@ func (s *Server) handleConn(raw net.Conn) {
 		Bridge:  s.bridge,
 		ConnMgr: s.connMgr,
 		Redis:   s.redis,
+		Auth:    s.auth,
 	})
 
 	if err := conn.Serve(); err != nil && err != io.EOF {

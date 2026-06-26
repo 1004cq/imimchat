@@ -2,10 +2,12 @@ package ws
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 
 	"github.com/gorilla/websocket"
+	"github.com/neomsg/neomsg/backend/internal/auth"
 	"github.com/neomsg/neomsg/backend/internal/gateway/session"
 	"github.com/neomsg/neomsg/backend/internal/message"
 	"github.com/neomsg/neomsg/backend/internal/protocol"
@@ -24,10 +26,11 @@ type Handler struct {
 	msgSvc   *message.Service
 	push     *push.Dispatcher
 	redis    *redisstore.Store
+	auth     *auth.Service
 }
 
-func NewHandler(sessions *session.Manager, msgSvc *message.Service, push *push.Dispatcher, redis *redisstore.Store) *Handler {
-	return &Handler{sessions: sessions, msgSvc: msgSvc, push: push, redis: redis}
+func NewHandler(sessions *session.Manager, msgSvc *message.Service, push *push.Dispatcher, redis *redisstore.Store, authSvc *auth.Service) *Handler {
+	return &Handler{sessions: sessions, msgSvc: msgSvc, push: push, redis: redis, auth: authSvc}
 }
 
 func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
@@ -78,8 +81,11 @@ func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) authenticate(token string) (int64, error) {
-	// TODO: JWT 验证
-	return 1, nil
+	if h.auth == nil {
+		return 0, fmt.Errorf("auth not configured")
+	}
+	uid, _, err := h.auth.ValidateAccessToken(token)
+	return uid, err
 }
 
 func (h *Handler) handleFrame(ctx context.Context, conn session.Conn, codec *protocol.FrameCodec, userID int64, data []byte) {

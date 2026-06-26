@@ -56,12 +56,22 @@ func (s *Service) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
 		return
 	}
-	// TODO: 验证密码 + 签发 JWT
+	if req.DeviceID == "" {
+		req.DeviceID = "default"
+	}
+	// TODO: 验证密码 + 查询 users 表
+	userID := int64(1)
+	access, err := s.IssueAccessToken(userID, req.DeviceID, 24*time.Hour)
+	if err != nil {
+		http.Error(w, `{"error":"token issue failed"}`, http.StatusInternalServerError)
+		return
+	}
+	refresh, _ := s.IssueAccessToken(userID, req.DeviceID, 7*24*time.Hour)
 	json.NewEncoder(w).Encode(tokenResponse{
-		AccessToken:  "eyJ...",
-		RefreshToken: "eyJ...",
+		AccessToken:  access,
+		RefreshToken: refresh,
 		ExpiresIn:    int64(24 * time.Hour.Seconds()),
-		UserID:       1,
+		UserID:       userID,
 	})
 }
 

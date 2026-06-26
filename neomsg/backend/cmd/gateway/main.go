@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/neomsg/neomsg/backend/internal/auth"
 	"github.com/neomsg/neomsg/backend/internal/config"
 	"github.com/neomsg/neomsg/backend/internal/gateway/delivery"
 	"github.com/neomsg/neomsg/backend/internal/gateway/session"
@@ -50,6 +51,7 @@ func main() {
 		}
 	}
 
+	authSvc := auth.NewService(pg, rdb, cfg.JWTSecret)
 	pushDisp := push.NewDispatcher(rdb)
 	engine := message.NewEngine(pg, rdb, nc, pushDisp)
 	msgSvc := message.NewService(pg, rdb, engine)
@@ -68,7 +70,7 @@ func main() {
 	})
 
 	// WebSocket 网关
-	wsHandler := wsgw.NewHandler(sessions, msgSvc, pushDisp, rdb)
+	wsHandler := wsgw.NewHandler(sessions, msgSvc, pushDisp, rdb, authSvc)
 	http.HandleFunc("/ws", wsHandler.ServeWS)
 
 	// TCP 网关

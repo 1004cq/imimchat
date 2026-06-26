@@ -8,6 +8,8 @@ COPY . .
 RUN CGO_ENABLED=0 go build -o /gateway ./cmd/gateway
 RUN CGO_ENABLED=0 go build -o /api ./cmd/api
 RUN CGO_ENABLED=0 go build -o /mtproto-gateway ./cmd/mtproto-gateway
+RUN CGO_ENABLED=0 go build -o /wire-client-demo ./cmd/wire-client-demo
+RUN CGO_ENABLED=0 go build -o /mtproto-client-demo ./cmd/mtproto-client-demo
 
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates

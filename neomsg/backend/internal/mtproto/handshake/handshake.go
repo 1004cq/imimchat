@@ -255,7 +255,7 @@ func (s *State) onSetClientDHParams(r *tl.Reader) ([]byte, error) {
 		return nil, err
 	}
 
-	authKeyBytes := mtcrypto.ComputeAuthKey(s.GA[:], []byte(gBClient), s.ClientNonce, s.ServerNonce)
+	authKeyBytes := mtcrypto.ComputeAuthKey(s.GB[:], []byte(gBClient), s.ClientNonce, s.ServerNonce)
 	s.AuthKey.Value = authKeyBytes
 	s.AuthKey.ComputeID()
 	sid, err := mtcrypto.RandomInt64()

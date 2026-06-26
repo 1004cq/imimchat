@@ -36,6 +36,7 @@
 | [cqim-dev-roadmap.md](./docs/cqim-dev-roadmap.md) | CQIM 开发路线图 |
 | [UPGRADE.md](./docs/UPGRADE.md) | **v2.0 升级指南（Bot/搜索/风控）** |
 | [MTPROTO_UPGRADE.md](./docs/MTPROTO_UPGRADE.md) | **MTProto 2.0 升级指南（类 Telegram 协议）** |
+| [MTProto_CLIENT.md](./neomsg/docs/MTProto_CLIENT.md) | **客户端接入（JWT / Wire / MTProto 示例）** |
 | [neomsg 技术方案](./neomsg/docs/ARCHITECTURE.md) | NeoMsg 下一代架构（Go + Protobuf + MTProto） |
 
 ---

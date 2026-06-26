@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/neomsg/neomsg/backend/internal/auth"
 	"github.com/neomsg/neomsg/backend/internal/config"
 	mtdelivery "github.com/neomsg/neomsg/backend/internal/mtproto/delivery"
 	"github.com/neomsg/neomsg/backend/internal/mtproto"
@@ -49,6 +51,7 @@ func main() {
 		}
 	}
 
+	authSvc := auth.NewService(pg, rdb, cfg.JWTSecret)
 	pushDisp := push.NewDispatcher(rdb)
 	engine := message.NewEngine(pg, rdb, nc, pushDisp)
 	msgSvc := message.NewService(pg, rdb, engine)
@@ -68,6 +71,7 @@ func main() {
 		Bridge:     bridgeHandler,
 		ConnMgr:    connManager,
 		Redis:      rdb,
+		Auth:       authSvc,
 	})
 	if err != nil {
 		log.Fatalf("mtproto server: %v", err)
@@ -77,9 +81,20 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	http.HandleFunc("/config", func(w http.ResponseWriter, _ *http.Request) {
+		pem, err := server.RSAPublicPEM()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"rsa_fingerprint": server.RSAFingerprint(),
+			"rsa_public_pem":  string(pem),
+		})
+	})
 
 	go func() {
-		log.Printf("[MTProto Gateway] health on %s", cfg.MTProtoHealthAddr)
+		log.Printf("[MTProto Gateway] health/config on %s", cfg.MTProtoHealthAddr)
 		if err := http.ListenAndServe(cfg.MTProtoHealthAddr, nil); err != nil {
 			log.Fatalf("health server: %v", err)
 		}

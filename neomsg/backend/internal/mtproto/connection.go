@@ -8,6 +8,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/neomsg/neomsg/backend/internal/auth"
 	mtcrypto "github.com/neomsg/neomsg/backend/internal/mtproto/crypto"
 	"github.com/neomsg/neomsg/backend/internal/mtproto/bridge"
 	"github.com/neomsg/neomsg/backend/internal/mtproto/connmgr"
@@ -33,6 +34,7 @@ type Connection struct {
 	bridge  *bridge.Handler
 	connMgr *connmgr.Manager
 	redis   *redisstore.Store
+	auth    *auth.Service
 
 	userID   int64
 	deviceID string
@@ -43,6 +45,7 @@ type ConnConfig struct {
 	Bridge  *bridge.Handler
 	ConnMgr *connmgr.Manager
 	Redis   *redisstore.Store
+	Auth    *auth.Service
 }
 
 func NewConnection(codec *transport.Codec, hs *handshake.State, cfg ConnConfig) *Connection {
@@ -53,6 +56,7 @@ func NewConnection(codec *transport.Codec, hs *handshake.State, cfg ConnConfig) 
 		bridge:   cfg.Bridge,
 		connMgr:  cfg.ConnMgr,
 		redis:    cfg.Redis,
+		auth:     cfg.Auth,
 	}
 }
 
@@ -170,6 +174,12 @@ func (c *Connection) handleBindSession(body []byte) ([]byte, error) {
 	}
 	if userID == 0 || deviceID == "" || token == "" {
 		return c.buildEncrypted(bridge.EncodeBindOk(false))
+	}
+	if c.auth != nil {
+		if err := c.auth.ValidateBindSession(token, userID, deviceID); err != nil {
+			log.Printf("[MTProto] bind auth failed: %v", err)
+			return c.buildEncrypted(bridge.EncodeBindOk(false))
+		}
 	}
 
 	c.userID = userID

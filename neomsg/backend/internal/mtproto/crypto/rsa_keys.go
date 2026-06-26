@@ -35,6 +35,14 @@ func LoadOrGenerateRSAKey(path string) (*RSAKeyPair, error) {
 	return &RSAKeyPair{Private: key, Public: &key.PublicKey}, nil
 }
 
+func (k *RSAKeyPair) PublicPEM() ([]byte, error) {
+	pubDER, err := x509.MarshalPKIXPublicKey(k.Public)
+	if err != nil {
+		return nil, err
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER}), nil
+}
+
 func (k *RSAKeyPair) Fingerprint() int64 {
 	pubDER, err := x509.MarshalPKIXPublicKey(k.Public)
 	if err != nil {
