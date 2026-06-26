@@ -34,7 +34,8 @@
 | [register-service.md](./docs/register-service.md) | 注册中间件说明 |
 | [cqim-deploy.md](./docs/cqim-deploy.md) | CQIM 部署指南 |
 | [cqim-dev-roadmap.md](./docs/cqim-dev-roadmap.md) | CQIM 开发路线图 |
-| [neomsg 技术方案](./neomsg/docs/ARCHITECTURE.md) | NeoMsg 类 TG 高性能 IM 设计方案 |
+| [UPGRADE.md](./docs/UPGRADE.md) | **v2.0 升级指南（Bot/搜索/风控）** |
+| [neomsg 技术方案](./neomsg/docs/ARCHITECTURE.md) | NeoMsg 下一代架构（Go + Protobuf） |
 
 ---
 
@@ -119,6 +120,9 @@ bash scripts/deploy-frontend.sh
 ```bash
 # 查看服务状态
 bash scripts/manage.sh status
+
+# CQIM 架构升级（Bot/搜索/风控）
+bash scripts/upgrade-cqim.sh
 
 # 查看 API 日志
 bash scripts/manage.sh logs tangsengdaodaoserver

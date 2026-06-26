@@ -18,6 +18,7 @@ import prisma, { hashPassword } from './db.js';
 import { generateUserDialogId, dialogIdToString } from './utils/peerId.js';
 import { publishEvent } from './mq.js';
 import { avatarToProxy } from './cos-signer.js';
+import { userAuth } from './auth.js';
 
 const botRouter = Router();
 
@@ -138,7 +139,9 @@ async function broadcastBotMessage(params: {
   return { messageId };
 }
 
-// ============ 管理 API ============
+// ============ 管理 API（需登录） ============
+
+botRouter.use(userAuth);
 
 /** POST /api/bot/create — 创建 Bot */
 botRouter.post('/create', async (req: Request, res: Response) => {

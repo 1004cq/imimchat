@@ -52,14 +52,14 @@ export default function GlobalSearchPage({ onClose }: Props) {
   const userId = state.currentUser?.id;
 
   const doSearch = useCallback(async (q: string, s: SearchScope) => {
-    if (!q.trim() || !userId) {
+    if (!q.trim()) {
       setResults(null);
       return;
     }
     setLoading(true);
     try {
       const data = await authApi(
-        `/api/search?q=${encodeURIComponent(q)}&scope=${s}&userId=${userId}&limit=30`
+        `/api/search?q=${encodeURIComponent(q)}&scope=${s}&limit=30`
       ) as SearchResult;
       setResults(data);
     } catch {
@@ -67,7 +67,7 @@ export default function GlobalSearchPage({ onClose }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [userId]);
+  }, []);
 
   useEffect(() => {
     const timer = setTimeout(() => doSearch(query, scope), 300);

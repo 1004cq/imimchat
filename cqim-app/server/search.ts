@@ -8,8 +8,10 @@
 import { Router, Request, Response } from 'express';
 import prisma from './db.js';
 import { avatarToProxy } from './cos-signer.js';
+import { userAuth } from './auth.js';
 
 const searchRouter = Router();
+searchRouter.use(userAuth);
 
 export type SearchScope = 'all' | 'messages' | 'users' | 'groups' | 'channels' | 'files';
 
@@ -332,16 +334,17 @@ export async function indexMessageAsync(payload: {
 /** GET /api/search?q=&scope=all&limit=20 */
 searchRouter.get('/', async (req: Request, res: Response) => {
   try {
-    const { q, scope = 'all', limit = '20', userId } = req.query as Record<string, string>;
+    const user = (req as any).user;
+    const { q, scope = 'all', limit = '20' } = req.query as Record<string, string>;
     if (!q) {
       return res.status(400).json({ error: '缺少搜索关键词 q' });
     }
-    if (!userId) {
-      return res.status(400).json({ error: '缺少 userId' });
+    if (!user?.id) {
+      return res.status(401).json({ error: '未登录' });
     }
     const result = await globalSearch(
       q,
-      userId,
+      user.id,
       scope as SearchScope,
       Math.min(parseInt(limit) || 20, 50),
     );
