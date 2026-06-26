@@ -27,6 +27,8 @@
 | 文档 | 说明 |
 |------|------|
 | [architecture.md](./docs/architecture.md) | 系统架构说明 |
+| [architecture-tg.md](./docs/architecture-tg.md) | 类 TG 架构图与落地对照 |
+| [architecture-tg.html](./docs/architecture-tg.html) | 类 TG 架构可视化图 |
 | [optimization.md](./docs/optimization.md) | 优化方案与路线图 |
 | [handover.md](./docs/handover.md) | 项目移交文档 |
 | [register-service.md](./docs/register-service.md) | 注册中间件说明 |
@@ -186,6 +188,7 @@ Nginx 通过路径前缀实现两套系统共存：
 - 多渠道推送（个推/FCM/APNs）
 - TRTC 视频通话
 - Go 网关群聊 WebSocket 加速
+- **类 TG 架构扩展**：频道、Bot 平台、全局搜索、风控服务、超级群慢速模式
 
 ### 3. WuKongIM 定制
 

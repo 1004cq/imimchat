@@ -1014,7 +1014,41 @@ groupRouter.post('/send', async (req, res) => {
     if (!groupId || !senderId || !content) {
       return res.status(400).json({ error: '缺少必要参数' });
     }
+
+    // 风控校验
+    const { checkMessage, checkSlowMode } = await import('./risk-control.js');
+    const risk = await checkMessage({
+      userId: senderId,
+      scope: `group:${groupId}`,
+      content: typeof content === 'string' ? content : JSON.stringify(content),
+      msgType,
+    });
+    if (!risk.allowed) {
+      return res.status(429).json({ error: risk.reason, retryAfter: risk.retryAfter });
+    }
+
+    // 慢速模式（超级群/频道）
+    const member = await prisma.groupMember.findUnique({
+      where: { groupId_userId: { groupId, userId: senderId } },
+      select: { role: true },
+    });
+    if (!member) {
+      return res.status(403).json({ error: '非群成员' });
+    }
+    const slowMode = await checkSlowMode(groupId, senderId, member.role);
+    if (!slowMode.allowed) {
+      return res.status(429).json({
+        error: `慢速模式：请 ${slowMode.retryAfter} 秒后再发送`,
+        retryAfter: slowMode.retryAfter,
+      });
+    }
+
     const result = await sendGroupMessage({ groupId, senderId, senderName, msgType, content, replyToId, extra });
+
+    // 异步发布 MQ 事件（搜索索引、审计）
+    const { publishEvent } = await import('./mq.js');
+    void publishEvent('message.sent', { groupId, senderId, msgType, content: String(content).slice(0, 200) }, 'group');
+
     res.json({ ok: true, ...result });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1878,6 +1912,62 @@ groupRouter.put('/announcement', async (req, res) => {
     }
 
     res.json({ ok: true, announcement: announcement || null });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 超级群设置（慢速模式、权限）
+groupRouter.put('/settings', async (req, res) => {
+  try {
+    const { groupId, userId, slowModeSeconds, permissions } = req.body;
+    if (!groupId || !userId) return res.status(400).json({ error: '缺少必要参数' });
+
+    const member = await prisma.groupMember.findUnique({
+      where: { groupId_userId: { groupId, userId } },
+      select: { role: true },
+    });
+    if (!member || member.role !== 'owner') {
+      return res.status(403).json({ error: '仅群主可修改群设置' });
+    }
+
+    const group = await prisma.group.findUnique({
+      where: { id: groupId },
+      select: { type: true },
+    });
+    if (!group || (group.type !== 'super' && group.type !== 'channel')) {
+      return res.status(400).json({ error: '仅超级群和频道支持高级设置' });
+    }
+
+    const data: Record<string, unknown> = {};
+    if (slowModeSeconds !== undefined) {
+      const secs = parseInt(String(slowModeSeconds), 10);
+      if (!Number.isFinite(secs) || secs < 0 || secs > 3600) {
+        return res.status(400).json({ error: '慢速模式间隔需在 0-3600 秒之间' });
+      }
+      data.slowModeSeconds = secs;
+    }
+    if (permissions !== undefined) {
+      data.permissions = typeof permissions === 'string' ? permissions : JSON.stringify(permissions);
+    }
+
+    const updated = await prisma.group.update({
+      where: { id: groupId },
+      data,
+      select: { slowModeSeconds: true, permissions: true },
+    });
+
+    if (slowModeSeconds !== undefined && slowModeSeconds > 0) {
+      sendGroupMessage({
+        groupId,
+        senderId: 'system',
+        senderName: '系统',
+        msgType: 'system',
+        content: `慢速模式已开启：每 ${slowModeSeconds} 秒可发送一条消息`,
+      }).catch(() => {});
+    }
+
+    res.json({ ok: true, ...updated });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
