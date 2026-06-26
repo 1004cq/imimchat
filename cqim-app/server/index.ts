@@ -1626,6 +1626,21 @@ async function startServer() {
   const { default: channelRouter } = await import('./channel.js');
   app.use('/api/channel', channelRouter);
 
+  // ============ 类 TG 架构扩展服务 ============
+  const { default: botPlatformRouter, botApiRouter } = await import('./bot-platform.js');
+  app.use('/api/bot', botPlatformRouter);
+  app.use('/bot', botApiRouter);
+
+  const { default: searchRouter } = await import('./search.js');
+  app.use('/api/search', searchRouter);
+
+  const { default: riskRouter, loadRiskConfig } = await import('./risk-control.js');
+  app.use('/api/risk', riskRouter);
+  await loadRiskConfig();
+
+  const { initMQSubscriptions } = await import('./mq.js');
+  initMQSubscriptions();
+
   // ============ TRTC UserSig 生成接口 ============
 
   /**
@@ -3113,10 +3128,20 @@ async function startServer() {
 
   // ★ 用户资料实时同步：订阅 Redis 频道，将头像/昵称更新推送给好友和群成员
   subscribeChannel('user_profile_updated', (message: any) => {
-    const { userId, nickname, avatar, username, bio, backgroundUrl, updatedAt, targetFriendIds, targetGroupIds } = message || {};
+    const { userId, nickname, avatar, username, bio, backgroundUrl, updatedAt, targetFriendIds, targetGroupIds, notifySelf } = message || {};
     if (!userId) return;
 
     const profilePayload = { userId, nickname, avatar, username, bio, backgroundUrl, updatedAt };
+    const wirePayload = JSON.stringify({
+      type: 'user_profile_updated',
+      from: userId,
+      payload: profilePayload,
+    });
+
+    // 0. 用户自己的其他在线端（多端同步头像/昵称）
+    if (notifySelf) {
+      sendRaw(userId, wirePayload);
+    }
 
     // 1. 通知好友：在线的好友会立即收到更新
     if (Array.isArray(targetFriendIds) && targetFriendIds.length > 0) {
@@ -3124,7 +3149,7 @@ async function startServer() {
         type: 'user_profile_updated',
         from: userId,
         payload: profilePayload,
-      }, userId); // 排除自己
+      }, userId);
     }
 
     // 2. 通知群成员：用户在的所有群，广播给群内在线成员
@@ -3449,6 +3474,16 @@ async function startServer() {
       const message = e?.code === 'P2002' ? '该账号ID已被使用' : '资料更新失败';
       console.error('[profile] 数据库更新失败:', e);
       return res.status(e?.code === 'P2002' ? 409 : 500).json({ error: message });
+    }
+
+    // ★ 实时同步好友/群成员（legacy 路由也需广播）
+    if (dbUser?.id || profileKey) {
+      try {
+        const { publishUserProfileUpdatedById } = await import('./user-profile-sync.js');
+        await publishUserProfileUpdatedById(profileKey);
+      } catch (pubErr) {
+        console.error('[profile] 发布用户资料更新事件失败:', pubErr);
+      }
     }
 
     res.json({

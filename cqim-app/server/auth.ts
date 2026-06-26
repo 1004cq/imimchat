@@ -1237,8 +1237,9 @@ router.put('/profile', userAuth, async (req: Request, res: Response) => {
   if (avatar !== undefined) data.avatar = avatar;
   if (backgroundUrl !== undefined) data.backgroundUrl = backgroundUrl || null;
   if (bio !== undefined) data.bio = bio;
-
-  // 支持修改 username（账号ID），需校验唯一性
+  if (gender !== undefined) data.gender = gender || null;
+  if (region !== undefined) data.region = region || null;
+  if (birthday !== undefined) data.birthday = birthday || null;
   if (newUsername !== undefined && newUsername !== user.username) {
     if (!/^[a-zA-Z0-9_]{1,20}$/.test(newUsername)) {
       return res.status(400).json({ error: '账号ID只能包含字母、数字和下划线，长度1-20位' });
@@ -1261,43 +1262,17 @@ router.put('/profile', userAuth, async (req: Request, res: Response) => {
     return res.status(e?.code === 'P2002' ? 409 : 500).json({ error: msg });
   }
 
-  // 修改 username 后立即清除 session 缓存，确保下次请求能从数据库获取最新 user.username
-  // 避免缓存中的旧 username 导致后续请求跳过更新逻辑，返回旧的 wechatId
-  if (data.username && token) {
+  // 资料更新后清除 session 缓存，确保 /me 等接口返回最新字段
+  if (token) {
     invalidateSessionCache(token);
   }
 
-  // ★ 实时同步：通过 Redis pub/sub 通知所有在线的好友和群成员，资料已更新
+  // ★ 实时同步：使用数据库 updatedAt + 正确的 Friendship 模型
   try {
-    const { publishMessage } = await import('./redis.js');
-    const friends = await prisma.friend.findMany({
-      where: { userId: user.id, status: 'accepted' },
-      select: { friendId: true },
-    });
-    const friendIds = friends.map((f: { friendId: string }) => f.friendId);
-
-    // 获取用户所在的所有群成员
-    const groupMemberships = await prisma.groupMember.findMany({
-      where: { userId: user.id },
-      select: { groupId: true },
-    });
-
-    const profileUpdatePayload = {
-      userId: updated.id,
-      nickname: updated.nickname,
-      avatar: avatarToProxy(updated.avatar),
-      username: updated.username,
-      bio: updated.bio,
-      backgroundUrl: updated.backgroundUrl,
-      updatedAt: Date.now(),
-      targetFriendIds: friendIds,
-      targetGroupIds: groupMemberships.map((m: { groupId: string }) => m.groupId),
-    };
-
-    await publishMessage('user_profile_updated', profileUpdatePayload);
+    const { publishUserProfileUpdated } = await import('./user-profile-sync.js');
+    await publishUserProfileUpdated(updated);
   } catch (pubErr) {
     console.error('[Auth] 发布用户资料更新事件失败:', pubErr);
-    // 不影响主流程
   }
 
   res.json({
@@ -1311,8 +1286,12 @@ router.put('/profile', userAuth, async (req: Request, res: Response) => {
       avatar: avatarToProxy(updated.avatar),
       backgroundUrl: updated.backgroundUrl,
       bio: updated.bio,
+      gender: updated.gender || '',
+      region: updated.region || '',
+      birthday: updated.birthday || '',
       phoneVerified: updated.phoneVerified,
       emailVerified: updated.emailVerified,
+      updatedAt: updated.updatedAt.getTime(),
     },
     // 兼容 ProfileSettingsPage 的 profile 格式
     profile: {
@@ -1326,9 +1305,10 @@ router.put('/profile', userAuth, async (req: Request, res: Response) => {
       bio: updated.bio || '',
       phone: updated.phone || '',
       email: updated.email || '',
-      gender: gender || '',
-      region: region || '',
-      birthday: birthday || '',
+      gender: updated.gender || '',
+      region: updated.region || '',
+      birthday: updated.birthday || '',
+      updatedAt: updated.updatedAt.getTime(),
     },
   });
 });

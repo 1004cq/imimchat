@@ -15,6 +15,8 @@ import {
   triggerNotificationVibration,
   warmupNotificationAudio,
 } from '@/lib/notifications';
+import { avatarWithVersion } from '@/hooks/useRemoteProfileSync';
+import { syncCurrentUserProfile } from '@/lib/store';
 import { useFCM } from '@/hooks/useFCM';
 import { authApi } from '@/lib/authFetch';
 import {
@@ -113,7 +115,8 @@ type Action =
   | { type: 'UPDATE_MESSAGE_INTEGRITY'; chatId: string; messageId: string; integrityStatus: 'verified' | 'tampered' | 'unverified' }
   // ===== 用户资料同步 =====
   /** 更新会话列表中缓存的用户头像/昵称 */
-  | { type: 'UPDATE_USER_PROFILE_IN_CHATS'; userId: string; nickname?: string; avatar?: string };
+  | { type: 'UPDATE_USER_PROFILE_IN_CHATS'; userId: string; nickname?: string; avatar?: string; updatedAt?: number }
+  | { type: 'UPDATE_SENDER_PROFILE_IN_MESSAGES'; userId: string; nickname?: string; avatar?: string; updatedAt?: number };
 
 const OFFICIAL_CHAT_ID = 'c0';
 const BOT_CHAT_ID = 'cBOT';
@@ -622,19 +625,41 @@ function reducer(state: AppState, action: Action): AppState {
 
     // ===== 用户资料实时同步：更新会话列表中缓存的头像/昵称 =====
     case 'UPDATE_USER_PROFILE_IN_CHATS': {
-      const { userId, nickname, avatar } = action;
+      const { userId, nickname, avatar, updatedAt } = action;
+      const versionedAvatar = avatarWithVersion(avatar, updatedAt);
       return {
         ...state,
         chats: state.chats.map(c => {
           if (c.type === 'private' && c.members?.includes(userId)) {
             const updates: Partial<Chat> = {};
             if (nickname !== undefined) updates.name = nickname;
-            if (avatar !== undefined) updates.avatar = avatar;
+            if (versionedAvatar !== undefined) updates.avatar = versionedAvatar;
             return { ...c, ...updates };
           }
           return c;
         }),
       };
+    }
+
+    case 'UPDATE_SENDER_PROFILE_IN_MESSAGES': {
+      const { userId, nickname, avatar } = action;
+      const versionedAvatar = avatarWithVersion(avatar, action.updatedAt) ?? avatar;
+      const nextMessages: Record<string, Message[]> = {};
+      for (const [chatId, msgs] of Object.entries(state.messages)) {
+        if (!Array.isArray(msgs)) {
+          nextMessages[chatId] = [];
+          continue;
+        }
+        nextMessages[chatId] = msgs.map((m) => {
+          if (!m || m.senderId !== userId) return m;
+          return {
+            ...m,
+            ...(nickname !== undefined ? { senderName: nickname } : {}),
+            ...(versionedAvatar !== undefined ? { senderAvatar: versionedAvatar } : {}),
+          };
+        });
+      }
+      return { ...state, messages: nextMessages };
     }
 
     default:
@@ -1171,11 +1196,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (msg.type === 'user_profile_updated') {
             const { userId, nickname, avatar, username, bio, backgroundUrl, updatedAt } = msg.payload || {};
             if (!userId) return;
-            // 更新会话列表中的缓存
-            dispatch({ type: 'UPDATE_USER_PROFILE_IN_CHATS', userId, nickname, avatar });
-            // 派发全局事件，让各组件自行刷新
+
+            const versionedAvatar = avatarWithVersion(avatar, updatedAt);
+            const currentUserId = stateRef.current.currentUser?.id || localStorage.getItem('user_id') || 'me';
+
+            if (userId === currentUserId) {
+              syncCurrentUserProfile({
+                nickname,
+                uniqueId: username,
+                avatar: versionedAvatar,
+                bio,
+                profileUpdatedAt: updatedAt,
+              });
+            }
+
+            dispatch({
+              type: 'UPDATE_USER_PROFILE_IN_CHATS',
+              userId,
+              nickname,
+              avatar: versionedAvatar,
+              updatedAt,
+            });
+            dispatch({
+              type: 'UPDATE_SENDER_PROFILE_IN_MESSAGES',
+              userId,
+              nickname,
+              avatar: versionedAvatar,
+              updatedAt,
+            });
+
             window.dispatchEvent(new CustomEvent('cqim:remote-user-profile-updated', {
-              detail: { userId, nickname, avatar, username, bio, backgroundUrl, updatedAt },
+              detail: { userId, nickname, avatar: versionedAvatar, username, bio, backgroundUrl, updatedAt },
             }));
             console.log(`[AppContext] 收到用户资料更新: userId=${userId} nickname=${nickname}`);
             return;

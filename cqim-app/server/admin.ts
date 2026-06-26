@@ -366,6 +366,16 @@ router.put('/users/:id', authMiddleware, requireRole('superadmin', 'admin'), asy
   });
 
   await addLog(admin.id, admin.username, '编辑用户', `user:${updatedUser.id}`, changes.join('; '), ip);
+
+  if (updateData.avatar !== undefined || updateData.nickname !== undefined || updateData.bio !== undefined) {
+    try {
+      const { publishUserProfileUpdatedById } = await import('./user-profile-sync.js');
+      await publishUserProfileUpdatedById(updatedUser.id);
+    } catch (pubErr) {
+      console.error('[Admin] 发布用户资料更新事件失败:', pubErr);
+    }
+  }
+
   res.json({ success: true, user: updatedUser });
 });
 
@@ -1096,6 +1106,54 @@ router.put('/txmap-config', authMiddleware, requireRole('superadmin', 'admin'), 
   const update = { ...req.body };
   await setConfig('txmap', { ...(await getConfig('txmap') || {}), ...update });
   res.json({ success: true });
+});
+
+// ===== 风控配置（类 TG 架构升级） =====
+
+router.get('/risk-config', authMiddleware, async (_req: Request, res: Response) => {
+  const { getRiskConfig, loadRiskConfig } = await import('./risk-control.js');
+  await loadRiskConfig();
+  const wordCount = await prisma.sensitiveWord.count({ where: { isActive: true } });
+  res.json({ config: getRiskConfig(), sensitiveWordCount: wordCount });
+});
+
+router.put('/risk-config', authMiddleware, requireRole('superadmin', 'admin'), async (req: Request, res: Response) => {
+  const { getRiskConfig } = await import('./risk-control.js');
+  const current = getRiskConfig();
+  const updated = { ...current, ...req.body };
+  await prisma.systemConfig.upsert({
+    where: { key: 'risk_control' },
+    create: { key: 'risk_control', value: JSON.stringify(updated) },
+    update: { value: JSON.stringify(updated) },
+  });
+  res.json({ success: true, config: updated });
+});
+
+// ===== Bot 平台管理 =====
+
+router.get('/bots', authMiddleware, async (_req: Request, res: Response) => {
+  const bots = await prisma.botToken.findMany({ orderBy: { createdAt: 'desc' }, take: 100 });
+  const users = await prisma.user.findMany({
+    where: { id: { in: bots.map(b => b.botUserId) } },
+    select: { id: true, username: true, nickname: true, avatar: true, isBot: true },
+  });
+  const userMap = new Map(users.map(u => [u.id, u]));
+  res.json({
+    bots: bots.map(b => {
+      const u = userMap.get(b.botUserId);
+      return {
+        id: b.id,
+        botUserId: b.botUserId,
+        username: u?.username,
+        name: u?.nickname,
+        isActive: b.isActive,
+        hasWebhook: !!b.webhookUrl,
+        ownerId: b.ownerId,
+        createdAt: b.createdAt,
+      };
+    }),
+    total: bots.length,
+  });
 });
 
 // ===== 导出工具函数供其他模块使用 =====

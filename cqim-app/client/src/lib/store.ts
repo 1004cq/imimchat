@@ -69,6 +69,10 @@ export interface Message {
   id: string;
   chatId: string;
   senderId: string;
+  /** 群聊/同步场景下的发送者展示名 */
+  senderName?: string;
+  /** 资料更新后写入，用于气泡头像实时刷新 */
+  senderAvatar?: string;
   content: string;
   type: 'text' | 'image' | 'video' | 'file' | 'voice' | 'system' | 'call' | 'location' | 'location_share' | 'sticker';
   timestamp: number;
@@ -262,6 +266,7 @@ export interface CurrentUserProfileSyncPayload {
   bio?: string;
   phone?: string;
   email?: string;
+  profileUpdatedAt?: number;
 }
 
 export function syncCurrentUserProfile(payload: CurrentUserProfileSyncPayload) {
@@ -289,6 +294,9 @@ export function syncCurrentUserProfile(payload: CurrentUserProfileSyncPayload) {
   if (payload.email !== undefined) {
     CURRENT_USER.email = payload.email;
   }
+  if (payload.profileUpdatedAt !== undefined) {
+    localStorage.setItem('user_profile_updated_at', String(payload.profileUpdatedAt));
+  }
 
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('cqim:user-profile-updated', {
@@ -301,6 +309,7 @@ export function syncCurrentUserProfile(payload: CurrentUserProfileSyncPayload) {
         bio: CURRENT_USER.bio || '',
         phone: CURRENT_USER.phone || '',
         email: CURRENT_USER.email || '',
+        profileUpdatedAt: payload.profileUpdatedAt,
       },
     }));
   }
@@ -427,7 +436,8 @@ export function formatChatTime(timestamp: number): string {
 }
 
 export function getInitials(name: string): string {
-  return name.charAt(0);
+  const safe = typeof name === 'string' && name.length > 0 ? name : '?';
+  return safe.charAt(0);
 }
 
 export function getUserById(id: string): User | undefined {

@@ -95,6 +95,18 @@ async function createPrivateMessageAndNotify(
     return res.status(403).json({ error: '无权发送消息' });
   }
 
+  // 风控校验
+  const { checkMessage } = await import('./risk-control.js');
+  const risk = await checkMessage({
+    userId: currentUser.id,
+    scope: `private:${chatId}`,
+    content: typeof content === 'string' ? content : JSON.stringify(content),
+    msgType,
+  });
+  if (!risk.allowed) {
+    return res.status(429).json({ error: risk.reason, retryAfter: risk.retryAfter });
+  }
+
   const message = await prisma.privateMessage.create({
     data: {
       chatId,
@@ -136,6 +148,15 @@ async function createPrivateMessageAndNotify(
       payload: result,
     });
   }
+
+  const { publishEvent } = await import('./mq.js');
+  void publishEvent('message.sent', {
+    messageId: message.id,
+    chatId,
+    senderId: currentUser.id,
+    msgType,
+    content: String(content).slice(0, 200),
+  }, 'private');
 
   return res.json({ message: result });
 }

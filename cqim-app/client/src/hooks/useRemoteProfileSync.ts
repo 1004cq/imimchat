@@ -3,10 +3,8 @@
  *
  * 订阅全局事件 `cqim:remote-user-profile-updated`，当好友/群成员更新头像、
  * 昵称等资料时，触发回调以刷新相关 UI 组件（如会话列表、群成员列表）。
- *
- * 事件由 AppContext 的 WebSocket 消息处理器派发，来自服务端 Redis pub/sub。
  */
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef } from 'react';
 
 export interface RemoteProfileUpdate {
   userId: string;
@@ -16,6 +14,14 @@ export interface RemoteProfileUpdate {
   bio?: string;
   backgroundUrl?: string;
   updatedAt?: number;
+}
+
+/** 为头像 URL 附加版本参数，避免 CDN/浏览器缓存旧图 */
+export function avatarWithVersion(avatar: unknown, updatedAt?: number): string | undefined {
+  if (typeof avatar !== 'string' || !avatar) return undefined;
+  if (!updatedAt) return avatar;
+  const sep = avatar.includes('?') ? '&' : '?';
+  return `${avatar}${sep}v=${updatedAt}`;
 }
 
 /**
@@ -33,16 +39,26 @@ export function useRemoteProfileSync(
   const filterRef = useRef(filterUserIds);
   filterRef.current = filterUserIds;
 
+  const lastAppliedRef = useRef<Map<string, number>>(new Map());
+
   useEffect(() => {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<RemoteProfileUpdate>).detail;
       if (!detail || !detail.userId) return;
 
-      // 如果指定了过滤列表，只处理关注的用户
       const filter = filterRef.current;
       if (filter && filter.length > 0 && !filter.includes(detail.userId)) return;
 
-      onUpdateRef.current(detail);
+      const prev = lastAppliedRef.current.get(detail.userId) ?? 0;
+      const nextTs = detail.updatedAt ?? 0;
+      if (nextTs > 0 && nextTs <= prev) return;
+      if (nextTs > 0) lastAppliedRef.current.set(detail.userId, nextTs);
+
+      const normalized: RemoteProfileUpdate = {
+        ...detail,
+        avatar: avatarWithVersion(detail.avatar, detail.updatedAt),
+      };
+      onUpdateRef.current(normalized);
     };
 
     window.addEventListener('cqim:remote-user-profile-updated', handler);
@@ -52,10 +68,6 @@ export function useRemoteProfileSync(
   }, []);
 }
 
-/**
- * 获取更新后的用户资料（用于更新本地缓存）。
- * 返回一个函数，调用后返回更新后的字段。
- */
 export function mergeProfileUpdate<T extends { id?: string; userId?: string; name?: string; avatar?: string }>(
   item: T,
   update: RemoteProfileUpdate

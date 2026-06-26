@@ -33,6 +33,7 @@ import { LinkPreviewCard, extractUrl, renderTextWithLinks } from '@/components/L
 import { deriveIntegrityKey, signMessage, verifyMessage } from '@/lib/messageIntegrity';
 import { useGroupSync, type GroupMessage } from '@/hooks/useGroupSync';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
+import { useRemoteProfileSync, mergeProfileUpdate } from '@/hooks/useRemoteProfileSync';
 import { preFetchVideoStream } from '@/lib/mediaManager';
 import StickerPanel, { type StickerItem } from '@/components/StickerPanel';
 import LottieSticker from '@/components/LottieSticker';
@@ -400,13 +401,16 @@ const ChatBubble: React.FC<{
   // 深度优化头像解析逻辑：
   // 1. 优先识别“自己”：无论 ID 是 'me' 还是实际 UUID，只要匹配当前登录用户，就强制使用 currentUser 实时数据
   // 2. 解决第一秒缺失：不再依赖 message 对象里可能还没同步过来的 senderProfile
+  const messageSenderAvatar = typeof message.senderAvatar === 'string' ? message.senderAvatar : undefined;
+  const messageSenderName = typeof message.senderName === 'string' ? message.senderName : undefined;
   const resolvedSenderAvatar = isSelf
     ? (currentUser.avatar || localStorage.getItem('user_avatar') || '/default-avatar.png')
-    : (sender?.avatar || senderProfile?.avatar || (
+    : (messageSenderAvatar || sender?.avatar || senderProfile?.avatar || (
         message.senderId === 'BOT' ? '/imim-ai-avatar.jpg' : 
         message.senderId === 'official' ? '/imim-official-avatar.jpg' : 
         ''
       ));
+  const displaySenderName = messageSenderName || resolvedSenderName;
   const [showReactions, setShowReactions] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [isVisible, setIsVisible] = useState(false);
@@ -672,7 +676,7 @@ const ChatBubble: React.FC<{
         )}
         <div className={`flex gap-2 px-4 py-1 ${isSelf ? 'flex-row-reverse' : 'flex-row'}`}>
           {showAvatar && !isSelf ? (
-            <DoveAvatar name={resolvedSenderName} id={message.senderId} avatar={resolvedSenderAvatar} size="sm" className="mt-1" onClick={() => onShowProfile?.(message.senderId)} />
+            <DoveAvatar name={displaySenderName} id={message.senderId} avatar={resolvedSenderAvatar} size="sm" className="mt-1" onClick={() => onShowProfile?.(message.senderId)} />
           ) : (
             <div className="w-8 flex-shrink-0" />
           )}
@@ -758,7 +762,7 @@ const ChatBubble: React.FC<{
         >
           {/* 头像 */}
           {showAvatar && !isSelf ? (
-            <DoveAvatar name={resolvedSenderName} id={message.senderId} avatar={resolvedSenderAvatar} size="sm" className="mt-0.5 shadow-sm" onClick={() => onShowProfile?.(message.senderId)} />
+            <DoveAvatar name={displaySenderName} id={message.senderId} avatar={resolvedSenderAvatar} size="sm" className="mt-0.5 shadow-sm" onClick={() => onShowProfile?.(message.senderId)} />
           ) : (
             <div className="w-9 flex-shrink-0" />
           )}
@@ -851,7 +855,7 @@ const ChatBubble: React.FC<{
       >
         {/* 头像 */}
         {showAvatar && !isSelf ? (
-          <DoveAvatar name={resolvedSenderName} id={message.senderId} avatar={resolvedSenderAvatar} size="sm" className="mt-0.5 shadow-sm" onClick={() => onShowProfile?.(message.senderId)} />
+          <DoveAvatar name={displaySenderName} id={message.senderId} avatar={resolvedSenderAvatar} size="sm" className="mt-0.5 shadow-sm" onClick={() => onShowProfile?.(message.senderId)} />
         ) : (
           <div className="w-9 flex-shrink-0" />
         )}
@@ -860,7 +864,7 @@ const ChatBubble: React.FC<{
           {/* 群聊发送者名称 */}
           {showAvatar && !isSelf && message.senderId !== 'system' && message.senderId !== 'BOT' && message.senderId !== 'official' && senderProfile && (
             <span className="text-[11px] font-medium text-muted-foreground/70 mb-0.5 ml-1 truncate max-w-[200px]">
-              {resolvedSenderName}
+              {displaySenderName}
             </span>
           )}
           {/* 气泡 */}
@@ -1142,6 +1146,10 @@ const MemoizedChatBubble = React.memo(ChatBubble, (prevProps, nextProps) => {
     prevProps.message.integrityStatus === nextProps.message.integrityStatus &&
     prevProps.showAvatar === nextProps.showAvatar &&
     prevProps.showTimeGroup === nextProps.showTimeGroup &&
+    prevProps.senderProfile?.name === nextProps.senderProfile?.name &&
+    prevProps.senderProfile?.avatar === nextProps.senderProfile?.avatar &&
+    prevProps.message.senderName === nextProps.message.senderName &&
+    prevProps.message.senderAvatar === nextProps.message.senderAvatar &&
     JSON.stringify(prevProps.message.reactions) === JSON.stringify(nextProps.message.reactions) &&
     prevProps.voicePlaybackState === nextProps.voicePlaybackState
   );
@@ -1286,10 +1294,14 @@ export default function ChatDetailPage() {
   // 将 GroupMessage 转换为 Message 格式
   const groupMessagesAsMessages = useMemo((): Message[] => {
     if (!isGroupChat || !chatId) return [];
-    return groupSync.messages.map((gm: GroupMessage): Message => ({
+    return groupSync.messages.map((gm: GroupMessage): Message => {
+      const member = groupMembers.find((m) => m.id === gm.senderId);
+      return {
       id: gm.id,
       chatId,
       senderId: gm.senderId,
+      ...(member?.name ? { senderName: member.name } : gm.senderName ? { senderName: gm.senderName } : {}),
+      ...(member?.avatar ? { senderAvatar: member.avatar } : {}),
       content: gm.isRevoked ? '消息已撤回' : gm.content,
       type: (gm.msgType || 'text') as Message['type'],
       timestamp: gm.timestamp,
@@ -1305,13 +1317,25 @@ export default function ChatDetailPage() {
       ...(gm.extra?.voiceUrl ? { voiceUrl: gm.extra.voiceUrl, duration: gm.extra.duration || 0 } : {}),
       ...(gm.replyToId ? { replyTo: gm.replyToId } : {}),
       ...(gm.extra?.mentions ? { mentions: gm.extra.mentions } : {}),
-    }));
-  }, [isGroupChat, chatId, groupSync.messages]);
+    };
+    });
+  }, [isGroupChat, chatId, groupSync.messages, groupMembers]);
 
   // 统一消息列表：群聊用 groupSync，私聊用 AppContext
-  const messages = isGroupChat
-    ? groupMessagesAsMessages
-    : (chatId ? (state.messages[chatId] || []) : []);
+  const privateMessages = chatId && Array.isArray(state.messages[chatId]) ? state.messages[chatId] : [];
+  const messages = isGroupChat ? groupMessagesAsMessages : privateMessages;
+
+  const groupMemberIds = useMemo(
+    () => (isGroupChat ? groupMembers.map((m) => m.id) : []),
+    [isGroupChat, groupMembers]
+  );
+
+  useRemoteProfileSync(
+    useCallback((update) => {
+      setGroupMembers((prev) => prev.map((m) => mergeProfileUpdate(m, update)));
+    }, []),
+    groupMemberIds.length > 0 ? groupMemberIds : undefined
+  );
 
   // E2EE Hook
   const e2ee = useE2EE();

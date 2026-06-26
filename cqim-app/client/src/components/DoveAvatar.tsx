@@ -45,12 +45,13 @@ function resolveSize(size: DoveAvatarProps['size']) {
 }
 
 /** 给 COS 代理 URL 添加缓存破坏参数，避免浏览器/CDN 缓存旧的失败响应 */
-function appendCacheBuster(url: string): string {
-  if (!url || !url.includes('/api/cos/proxy/')) return url;
-  const sep = url.includes('?') ? '&' : '?';
+function appendCacheBuster(url: unknown): string {
+  const safeUrl = typeof url === 'string' ? url : '';
+  if (!safeUrl || !safeUrl.includes('/api/cos/proxy/')) return safeUrl;
+  const sep = safeUrl.includes('?') ? '&' : '?';
   // 使用 10 分钟粒度的时间戳，平衡缓存命中率与及时性
   const bucket = Math.floor(Date.now() / 600000);
-  return `${url}${sep}_v=${bucket}`;
+  return `${safeUrl}${sep}_v=${bucket}`;
 }
 
 const MAX_RETRY = 3;
@@ -95,13 +96,14 @@ export const DoveAvatar: React.FC<DoveAvatarProps> = ({
     }
 
     // 对 COS 代理头像进行自动重试（最多1次）
-    if (avatar && avatar.includes('/api/cos/proxy/') && retryCountRef.current < MAX_RETRY) {
+    const avatarStr = typeof avatar === 'string' ? avatar : '';
+    if (avatarStr && avatarStr.includes('/api/cos/proxy/') && retryCountRef.current < MAX_RETRY) {
       retryCountRef.current += 1;
       const delay = RETRY_DELAY * retryCountRef.current;
       setTimeout(() => {
         if (!mountedRef.current) return;
-        const sep = avatar.includes('?') ? '&' : '?';
-        setImgSrc(`${avatar}${sep}_r=${Date.now()}`);
+        const sep = avatarStr.includes('?') ? '&' : '?';
+        setImgSrc(`${avatarStr}${sep}_r=${Date.now()}`);
       }, delay);
       return;
     }

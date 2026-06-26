@@ -75,7 +75,7 @@ interface DashboardData {
   messageTypes: Array<{ type: string; count: number }>;
 }
 
-type NavItem = 'dashboard' | 'users' | 'reports' | 'sensitive-words' | 'ip-blacklist' | 'announcements' | 'logs' | 'admins' | 'onebot' | 'smtp' | 'amap' | 'pyq' | 'aliyun' | 'cos';
+type NavItem = 'dashboard' | 'users' | 'reports' | 'sensitive-words' | 'ip-blacklist' | 'announcements' | 'logs' | 'admins' | 'onebot' | 'bot-platform' | 'risk-control' | 'smtp' | 'amap' | 'pyq' | 'aliyun' | 'cos';
 
 // ============ 格式化工具 ============
 
@@ -5217,6 +5217,113 @@ function AliyunPanel() {
   );
 }
 
+// ============ 风控配置（类 TG 升级） ============
+
+function RiskControlPanel() {
+  const [config, setConfig] = useState<any>(null);
+  const [wordCount, setWordCount] = useState(0);
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    const data = await api('/risk-config');
+    setConfig(data.config);
+    setWordCount(data.sensitiveWordCount ?? 0);
+  }, []);
+
+  useEffect(() => { load().catch(console.error); }, [load]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api('/risk-config', { method: 'PUT', body: JSON.stringify(config) });
+      await load();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!config) return <div className="text-slate-400 p-8">加载中...</div>;
+
+  return (
+    <div className="space-y-6">
+      <h2 className="text-xl font-bold text-white flex items-center gap-2">
+        <ShieldAlert className="w-5 h-5 text-amber-400" /> 风控配置
+      </h2>
+      <div className="grid gap-4 md:grid-cols-2">
+        <label className="flex items-center justify-between bg-white/5 rounded-xl p-4 border border-white/10">
+          <span className="text-sm text-slate-300">敏感词过滤</span>
+          <input type="checkbox" checked={config.enableSensitiveFilter}
+            onChange={e => setConfig({ ...config, enableSensitiveFilter: e.target.checked })} />
+        </label>
+        <label className="flex items-center justify-between bg-white/5 rounded-xl p-4 border border-white/10">
+          <span className="text-sm text-slate-300">消息频率限制</span>
+          <input type="checkbox" checked={config.enableRateLimit}
+            onChange={e => setConfig({ ...config, enableRateLimit: e.target.checked })} />
+        </label>
+        <label className="bg-white/5 rounded-xl p-4 border border-white/10 space-y-2">
+          <span className="text-sm text-slate-300">每分钟最大消息数</span>
+          <input type="number" className="w-full bg-black/30 rounded px-3 py-2 text-white"
+            value={config.maxMessagesPerMinute}
+            onChange={e => setConfig({ ...config, maxMessagesPerMinute: parseInt(e.target.value) || 30 })} />
+        </label>
+        <div className="bg-white/5 rounded-xl p-4 border border-white/10">
+          <span className="text-sm text-slate-400">活跃敏感词</span>
+          <p className="text-2xl font-bold text-white mt-1">{wordCount}</p>
+        </div>
+      </div>
+      <button onClick={save} disabled={saving}
+        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm disabled:opacity-50">
+        {saving ? '保存中...' : '保存配置'}
+      </button>
+    </div>
+  );
+}
+
+// ============ Bot 平台管理 ============
+
+function BotPlatformPanel() {
+  const [bots, setBots] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api('/bots').then(d => { setBots(d.bots || []); setLoading(false); }).catch(() => setLoading(false));
+  }, []);
+
+  if (loading) return <div className="text-slate-400 p-8">加载中...</div>;
+
+  return (
+    <div className="space-y-6">
+      <h2 className="text-xl font-bold text-white flex items-center gap-2">
+        <Bot className="w-5 h-5 text-violet-400" /> Bot 平台
+      </h2>
+      <p className="text-sm text-slate-400">
+        类 Telegram Bot API：<code className="text-violet-300">POST /api/bot/create</code> ·
+        <code className="text-violet-300 ml-1">GET /bot{'{token}'}/getMe</code>
+      </p>
+      {bots.length === 0 ? (
+        <div className="text-center py-12 text-slate-500">暂无 Bot，用户可通过 API 创建</div>
+      ) : (
+        <div className="space-y-2">
+          {bots.map(b => (
+            <div key={b.id} className="flex items-center justify-between bg-white/5 rounded-xl p-4 border border-white/10">
+              <div>
+                <p className="text-white font-medium">{b.name || b.username}</p>
+                <p className="text-xs text-slate-400">@{b.username} · Owner: {b.ownerId?.slice(0, 8)}...</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {b.hasWebhook && <span className="text-xs px-2 py-0.5 bg-violet-500/20 text-violet-300 rounded">Webhook</span>}
+                <span className={`text-xs px-2 py-0.5 rounded ${b.isActive ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-300'}`}>
+                  {b.isActive ? '活跃' : '停用'}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AdminDashboard({ admin, onLogout }: { admin: AdminInfo; onLogout: () => void }) {
   const [activeNav, setActiveNav] = useState<NavItem>('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -5232,6 +5339,8 @@ function AdminDashboard({ admin, onLogout }: { admin: AdminInfo; onLogout: () =>
     { id: 'announcements', label: '系统公告', icon: Megaphone, color: 'text-purple-400' },
     { id: 'logs', label: '操作日志', icon: ScrollText, color: 'text-slate-400' },
     { id: 'onebot', label: 'OneBot 配置', icon: Bot, color: 'text-violet-400' },
+    { id: 'bot-platform', label: 'Bot 平台', icon: Zap, color: 'text-fuchsia-400' },
+    { id: 'risk-control', label: '风控配置', icon: ShieldAlert, color: 'text-amber-400' },
     { id: 'smtp', label: '邮箱配置', icon: Mail, color: 'text-sky-400' },
     { id: 'amap', label: '地图服务', icon: Globe, color: 'text-teal-400' },
     { id: 'pyq', label: '外链朋友圈', icon: Rss, color: 'text-emerald-400' },
@@ -5250,6 +5359,8 @@ function AdminDashboard({ admin, onLogout }: { admin: AdminInfo; onLogout: () =>
       case 'announcements': return <AnnouncementsPanel />;
       case 'logs': return <LogsPanel />;
       case 'onebot': return <OneBotPanel />;
+      case 'bot-platform': return <BotPlatformPanel />;
+      case 'risk-control': return <RiskControlPanel />;
       case 'smtp': return <SmtpPanel />;
       case 'amap': return <AmapPanel />;
       case 'pyq': return <PyqPanel />;
