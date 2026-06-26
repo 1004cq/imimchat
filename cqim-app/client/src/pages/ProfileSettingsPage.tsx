@@ -86,6 +86,7 @@ interface UserProfile {
   bio: string;
   avatar: string;
   birthday: string;
+  updatedAt?: number;
 }
 
 // ============ 内联编辑页（全屏滑入） ============
@@ -460,6 +461,7 @@ export default function ProfileSettingsPage({ onClose, onProfileUpdate }: Profil
         wechatId: key === 'wechatId' ? updated.wechatId : (data.profile?.wechatId || data.user?.username || updated.wechatId),
         name: data.profile?.name || data.profile?.nickname || updated.name,
         nickname: data.profile?.nickname || data.profile?.name || updated.nickname,
+        updatedAt: data.profile?.updatedAt ?? data.user?.updatedAt ?? updated.updatedAt,
       };
 
       setProfile(savedProfile);
@@ -470,6 +472,7 @@ export default function ProfileSettingsPage({ onClose, onProfileUpdate }: Profil
         bio: savedProfile.bio,
         phone: savedProfile.phone,
         email: savedProfile.email,
+        profileUpdatedAt: savedProfile.updatedAt,
       });
       onProfileUpdate?.(savedProfile);
       toast.success('已保存');

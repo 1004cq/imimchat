@@ -56,16 +56,31 @@ export function useRemoteProfileSync(
  * 获取更新后的用户资料（用于更新本地缓存）。
  * 返回一个函数，调用后返回更新后的字段。
  */
-export function mergeProfileUpdate<T extends { id?: string; userId?: string; name?: string; avatar?: string }>(
+export function mergeProfileUpdate<T extends {
+  id?: string;
+  userId?: string;
+  name?: string;
+  avatar?: string;
+  profileUpdatedAt?: number;
+}>(
   item: T,
   update: RemoteProfileUpdate
 ): T {
   const itemUserId = item.id || item.userId || '';
   if (itemUserId !== update.userId) return item;
 
+  if (
+    update.updatedAt !== undefined
+    && item.profileUpdatedAt !== undefined
+    && update.updatedAt < item.profileUpdatedAt
+  ) {
+    return item;
+  }
+
   const changes: Partial<T> = {} as Partial<T>;
   if (update.nickname !== undefined) (changes as any).name = update.nickname;
   if (update.avatar !== undefined) (changes as any).avatar = update.avatar;
+  if (update.updatedAt !== undefined) (changes as any).profileUpdatedAt = update.updatedAt;
 
   return { ...item, ...changes };
 }

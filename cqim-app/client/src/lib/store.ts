@@ -39,6 +39,8 @@ export interface User {
   deviceLabel?: string | null;
   /** 最后在线时间（Unix ms，离线时有值） */
   lastSeen?: number | null;
+  /** 资料最后更新时间（Unix ms，用于多端合并去重） */
+  profileUpdatedAt?: number;
 }
 
 /** 好友请求 */
@@ -182,6 +184,8 @@ export interface Chat {
   isEncrypted?: boolean;
   /** 群聊的数据库 groupId（用于群消息撤回匹配） */
   groupId?: string;
+  /** 私聊对方资料版本时间戳（Unix ms） */
+  peerProfileUpdatedAt?: number;
   // ===== 消失消息模式 =====
   /** 消失消息模式：会话级别的自动销毁定时器（秒），undefined 表示未开启 */
   ephemeralTimer?: BurnAfterReadTimer;
@@ -227,6 +231,8 @@ function getStoredUser(): User {
     const username = localStorage.getItem('user_username') || id;
     const avatar = localStorage.getItem('user_avatar') || '';
     const bio = localStorage.getItem('user_bio') || '';
+    const profileUpdatedAtRaw = localStorage.getItem('user_profile_updated_at');
+    const profileUpdatedAt = profileUpdatedAtRaw ? Number(profileUpdatedAtRaw) : undefined;
     return {
       id,
       uniqueId: username,
@@ -234,6 +240,7 @@ function getStoredUser(): User {
       avatar,
       status: 'online',
       bio,
+      ...(profileUpdatedAt && !Number.isNaN(profileUpdatedAt) ? { profileUpdatedAt } : {}),
       privacy: {
         allowSearchById: true,
         allowSearchByPhone: true,
@@ -262,6 +269,7 @@ export interface CurrentUserProfileSyncPayload {
   bio?: string;
   phone?: string;
   email?: string;
+  profileUpdatedAt?: number;
 }
 
 export function syncCurrentUserProfile(payload: CurrentUserProfileSyncPayload) {
@@ -289,6 +297,10 @@ export function syncCurrentUserProfile(payload: CurrentUserProfileSyncPayload) {
   if (payload.email !== undefined) {
     CURRENT_USER.email = payload.email;
   }
+  if (payload.profileUpdatedAt !== undefined) {
+    CURRENT_USER.profileUpdatedAt = payload.profileUpdatedAt;
+    localStorage.setItem('user_profile_updated_at', String(payload.profileUpdatedAt));
+  }
 
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('cqim:user-profile-updated', {
@@ -301,6 +313,7 @@ export function syncCurrentUserProfile(payload: CurrentUserProfileSyncPayload) {
         bio: CURRENT_USER.bio || '',
         phone: CURRENT_USER.phone || '',
         email: CURRENT_USER.email || '',
+        profileUpdatedAt: CURRENT_USER.profileUpdatedAt,
       },
     }));
   }
