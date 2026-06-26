@@ -148,6 +148,9 @@ importers:
       busboy:
         specifier: ^1.6.0
         version: 1.6.0
+      capacitor-plugin-jpush:
+        specifier: 4.0.1
+        version: 4.0.1(@capacitor/core@8.3.0)
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -2708,6 +2711,11 @@ packages:
 
   caniuse-lite@1.0.30001748:
     resolution: {integrity: sha512-5P5UgAr0+aBmNiplks08JLw+AW/XG/SurlgZLgB1dDLfAw7EfRGxIwzPHxdSCGY/BTKDqIVyJL87cCN6s0ZR0w==}
+
+  capacitor-plugin-jpush@4.0.1:
+    resolution: {integrity: sha512-OuhWuMoAMN/xG+Ls6Cg6nZIac0XVxWC1qdjq8WHsc4bXUrDqM9AFodPuqK2w3mB34FQMjY67WV3v+05Vt/YTIQ==}
+    peerDependencies:
+      '@capacitor/core': '>=8.0.0'
 
   caseless@0.12.0:
     resolution: {integrity: sha512-4tYFyifaFfGacoiObjJegolkwSU4xQNGbVgUiNYVUxbQ2x2lUsFvY4hVgVzGiIe6WLOPqycWXA40l+PWsxthUw==}
@@ -8409,6 +8417,10 @@ snapshots:
   camelcase@5.3.1: {}
 
   caniuse-lite@1.0.30001748: {}
+
+  capacitor-plugin-jpush@4.0.1(@capacitor/core@8.3.0):
+    dependencies:
+      '@capacitor/core': 8.3.0
 
   caseless@0.12.0: {}
 

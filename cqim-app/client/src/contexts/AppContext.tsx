@@ -16,6 +16,7 @@ import {
   warmupNotificationAudio,
 } from '@/lib/notifications';
 import { useFCM } from '@/hooks/useFCM';
+import { useJPush } from '@/hooks/useJPush';
 import { authApi } from '@/lib/authFetch';
 import {
   loadChatsFromLocalDb,
@@ -718,6 +719,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   stateRef.current = state;
 
   // FCM 推送通知（仅在 Native App 环境中生效）
+  useJPush(state.isLoggedIn);
   useFCM(state.isLoggedIn);
 
   useEffect(() => {

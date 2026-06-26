@@ -157,6 +157,13 @@ export function useFCM(isLoggedIn: boolean) {
   }, []);
 
   const initFCM = useCallback(async () => {
+    // Native 推送由 JPush 接管（见 useJPush.ts）
+    if (Capacitor.isNativePlatform()) {
+      console.log('[FCM] Native 环境由 JPush 接管，跳过 Capacitor PushNotifications');
+      void initGetuiCID();
+      return;
+    }
+
     const push = await getPushNotifications();
     if (!push) {
       console.log('[FCM] 非 Native 环境，跳过 FCM 初始化');

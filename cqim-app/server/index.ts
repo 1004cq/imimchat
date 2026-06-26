@@ -50,6 +50,7 @@ import qrRouter from "./qr";
 import fcmRouter from "./fcm";
 import getuiRouter from "./getui";
 import apnsRouter from "./apns";
+import jpushRouter from "./jpush";
 import cookieParser from "cookie-parser";
 import compression from "compression";
 import stickerRouter, { STICKER_STATIC_PREFIX, STICKER_FILES_DIR, ensureStickerStore } from "./sticker";
@@ -802,6 +803,19 @@ async function handleMessage(client: SignalClient, raw: string) {
               roomId: callRoomId,
             }).catch((e: any) => console.error('[APNs] VoIP 来电推送异常:', e));
           } else {
+            const { parseJPushToken, sendJPushPush } = await import('./jpush.js');
+            if (parseJPushToken(calleeUser?.fcmToken)) {
+              await sendJPushPush({
+                toUserId: msg.to,
+                title: callTitle,
+                body: callBody,
+                extras: {
+                  type: 'call_invite',
+                  chatId: callPushPayload.call_id,
+                  callerId: client.userId,
+                },
+              }).catch((e: any) => console.error('[JPush] 来电推送异常:', e));
+            } else {
             const { parseGetuiToken } = await import('./getui.js');
             if (parseGetuiToken(calleeUser?.fcmToken)) {
               const { sendGetuiPush } = await import('./getui.js');
@@ -820,6 +834,7 @@ async function handleMessage(client: SignalClient, raw: string) {
                 body: callBody,
                 data: callPushPayload,
               }).catch((e: any) => console.error('[FCM] 来电推送异常:', e));
+            }
             }
           }
           console.log(`[CallSignal] 被叫方 ${msg.to} 离线，已发送来电推送`);
@@ -1335,7 +1350,6 @@ async function handleMessage(client: SignalClient, raw: string) {
               // 优先使用自建 APNs，其次个推，最后 FCM
               const { parseAPNsToken: parseAPNs } = await import('./apns.js');
               if (parseAPNs(peerUser?.fcmToken)) {
-                // 自建 APNs 推送
                 const { sendAPNsPush } = await import('./apns.js');
                 await sendAPNsPush({
                   toUserId: peerId,
@@ -1345,6 +1359,18 @@ async function handleMessage(client: SignalClient, raw: string) {
                   customData: { chatId: pChatId, senderId: client.userId, sender_name: senderName },
                 }).catch((e: any) => console.error('[APNs] 推送异常:', e));
               } else {
+                const { parseJPushToken, sendJPushPush } = await import('./jpush.js');
+                if (parseJPushToken(peerUser?.fcmToken)) {
+                  await sendJPushPush({
+                    toUserId: peerId,
+                    title: senderName,
+                    body: previewText,
+                    extras: {
+                      chatId: pChatId,
+                      senderId: client.userId,
+                    },
+                  }).catch((e: any) => console.error('[JPush] 推送异常:', e));
+                } else {
                 const { parseGetuiToken: parseGT } = await import('./getui.js');
                 if (parseGT(peerUser?.fcmToken)) {
                   // 使用个推推送（国内高到达率）
@@ -1365,6 +1391,7 @@ async function handleMessage(client: SignalClient, raw: string) {
                     body: previewText,
                     data: { chatId: pChatId, senderId: client.userId, sender_avatar: senderAvatarUrl },
                   }).catch((e: any) => console.error('[FCM] 推送异常:', e));
+                }
                 }
               }
             }
@@ -1601,6 +1628,7 @@ async function startServer() {
   app.use('/api/fcm', fcmRouter);
   app.use('/api/getui', getuiRouter);
   app.use('/api/apns', apnsRouter);
+  app.use('/api/jpush', jpushRouter);
 
   // ============ 贴纸 API ============
   // 注册 TGS 和 WebP 的正确 MIME 类型，确保浏览器能正确处理
