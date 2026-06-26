@@ -26,13 +26,16 @@ type Handler func(ctx context.Context, evt *Event) error
 type Service struct {
 	pg       *postgres.Store
 	redis    *redisstore.Store
+	engine   *Engine
 	handlers []Handler
 	mu       sync.RWMutex
 }
 
-func NewService(pg *postgres.Store, redis *redisstore.Store) *Service {
-	return &Service{pg: pg, redis: redis}
+func NewService(pg *postgres.Store, redis *redisstore.Store, engine *Engine) *Service {
+	return &Service{pg: pg, redis: redis, engine: engine}
 }
+
+func (s *Service) Engine() *Engine { return s.engine }
 
 func (s *Service) OnMessage(h Handler) {
 	s.mu.Lock()

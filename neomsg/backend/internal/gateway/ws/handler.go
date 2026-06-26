@@ -10,6 +10,7 @@ import (
 	"github.com/neomsg/neomsg/backend/internal/message"
 	"github.com/neomsg/neomsg/backend/internal/protocol"
 	"github.com/neomsg/neomsg/backend/internal/push"
+	redisstore "github.com/neomsg/neomsg/backend/internal/store/redis"
 )
 
 var upgrader = websocket.Upgrader{
@@ -22,10 +23,11 @@ type Handler struct {
 	sessions *session.Manager
 	msgSvc   *message.Service
 	push     *push.Dispatcher
+	redis    *redisstore.Store
 }
 
-func NewHandler(sessions *session.Manager, msgSvc *message.Service, push *push.Dispatcher) *Handler {
-	return &Handler{sessions: sessions, msgSvc: msgSvc, push: push}
+func NewHandler(sessions *session.Manager, msgSvc *message.Service, push *push.Dispatcher, redis *redisstore.Store) *Handler {
+	return &Handler{sessions: sessions, msgSvc: msgSvc, push: push, redis: redis}
 }
 
 func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
@@ -51,7 +53,16 @@ func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 	conn := session.NewWSConn(ws, userID, deviceID)
 	h.sessions.Register(userID, deviceID, conn)
-	defer h.sessions.Unregister(userID, deviceID)
+	defer func() {
+		h.sessions.Unregister(userID, deviceID)
+		_ = h.redis.UnregisterDeviceSession(context.Background(), userID, deviceID)
+	}()
+
+	_ = h.redis.RegisterDeviceSession(context.Background(), userID, redisstore.DeviceSession{
+		DeviceID: deviceID,
+		Platform: r.URL.Query().Get("platform"),
+	})
+	_ = h.redis.SetOnline(context.Background(), userID, deviceID)
 
 	log.Printf("[WS] connected user=%d device=%s", userID, deviceID)
 
@@ -78,7 +89,7 @@ func (h *Handler) handleFrame(ctx context.Context, conn session.Conn, codec *pro
 		return
 	}
 
-	frames, err := h.msgSvc.HandleWirePacket(ctx, userID, pkt)
+	frames, err := h.msgSvc.HandleWirePacket(ctx, userID, conn.DeviceID(), pkt)
 	if err != nil {
 		log.Printf("[WS] handle wire packet: %v", err)
 		return

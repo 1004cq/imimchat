@@ -76,6 +76,26 @@ func (s *Store) GetPeerUserID(ctx context.Context, dialogID, userID int64) (int6
 	return peerID, err
 }
 
+func (s *Store) ListDialogMemberIDs(ctx context.Context, dialogID int64) ([]int64, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT user_id FROM dialog_members WHERE dialog_id = $1
+	`, dialogID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func (s *Store) GetMessageBySeq(ctx context.Context, dialogID, seq int64) (*Message, error) {
 	m := &Message{}
 	err := s.pool.QueryRow(ctx, `

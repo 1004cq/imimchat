@@ -66,3 +66,64 @@ func (s *Store) SetTyping(ctx context.Context, dialogID, userID int64) error {
 	key := fmt.Sprintf("typing:%d:%d", dialogID, userID)
 	return s.client.Set(ctx, key, "1", 5*time.Second).Err()
 }
+
+// DeviceSession 在线设备会话
+type DeviceSession struct {
+	DeviceID  string
+	SessionID int64
+	Platform  string
+}
+
+func (s *Store) RegisterDeviceSession(ctx context.Context, userID int64, device DeviceSession) error {
+	key := fmt.Sprintf("device:%d:%s", userID, device.DeviceID)
+	pipe := s.client.Pipeline()
+	pipe.HSet(ctx, key, map[string]interface{}{
+		"session_id": device.SessionID,
+		"platform":   device.Platform,
+	})
+	pipe.SAdd(ctx, fmt.Sprintf("online:%d", userID), device.DeviceID)
+	pipe.SAdd(ctx, fmt.Sprintf("user:devices:%d", userID), device.DeviceID)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+func (s *Store) UnregisterDeviceSession(ctx context.Context, userID int64, deviceID string) error {
+	key := fmt.Sprintf("device:%d:%s", userID, deviceID)
+	pipe := s.client.Pipeline()
+	pipe.Del(ctx, key)
+	pipe.SRem(ctx, fmt.Sprintf("online:%d", userID), deviceID)
+	pipe.SRem(ctx, fmt.Sprintf("user:devices:%d", userID), deviceID)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+func (s *Store) ListUserDevices(ctx context.Context, userID int64) ([]DeviceSession, error) {
+	deviceIDs, err := s.client.SMembers(ctx, fmt.Sprintf("user:devices:%d", userID)).Result()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]DeviceSession, 0, len(deviceIDs))
+	for _, deviceID := range deviceIDs {
+		key := fmt.Sprintf("device:%d:%s", userID, deviceID)
+		vals, err := s.client.HGetAll(ctx, key).Result()
+		if err != nil {
+			continue
+		}
+		var sessionID int64
+		fmt.Sscanf(vals["session_id"], "%d", &sessionID)
+		out = append(out, DeviceSession{
+			DeviceID:  deviceID,
+			SessionID: sessionID,
+			Platform:  vals["platform"],
+		})
+	}
+	return out, nil
+}
+
+func (s *Store) SetChatSeq(ctx context.Context, chatID, seq int64) error {
+	return s.client.Set(ctx, fmt.Sprintf("chat:seq:%d", chatID), seq, 0).Err()
+}
+
+func (s *Store) GetChatSeq(ctx context.Context, chatID int64) (int64, error) {
+	return s.client.Get(ctx, fmt.Sprintf("chat:seq:%d", chatID)).Int64()
+}

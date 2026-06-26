@@ -11,10 +11,10 @@ import (
 )
 
 // HandleWirePacket 处理 WirePacket（Message / SyncRequest）
-func (s *Service) HandleWirePacket(ctx context.Context, userID int64, pkt *pb.WirePacket) ([][]byte, error) {
+func (s *Service) HandleWirePacket(ctx context.Context, userID int64, deviceID string, pkt *pb.WirePacket) ([][]byte, error) {
 	switch body := pkt.Payload.(type) {
 	case *pb.WirePacket_Message:
-		return s.handleWireMessage(ctx, userID, body.Message)
+		return s.handleWireMessage(ctx, userID, deviceID, body.Message)
 	case *pb.WirePacket_SyncRequest:
 		return s.handleSyncRequest(ctx, userID, body.SyncRequest)
 	default:
@@ -22,92 +22,37 @@ func (s *Service) HandleWirePacket(ctx context.Context, userID int64, pkt *pb.Wi
 	}
 }
 
-func (s *Service) handleWireMessage(ctx context.Context, userID int64, msg *pb.Message) ([][]byte, error) {
+func (s *Service) handleWireMessage(ctx context.Context, userID int64, deviceID string, msg *pb.Message) ([][]byte, error) {
 	if msg == nil {
 		return nil, fmt.Errorf("empty message")
 	}
 	if msg.ChatId == 0 {
 		return nil, fmt.Errorf("chat_id required")
 	}
-	if msg.FromId != 0 && msg.FromId != userID {
-		return nil, fmt.Errorf("from_id mismatch")
-	}
-	if msg.Id == 0 {
-		msg.Id = NewWireMessageID()
-	}
 
-	req := &SendRequest{
-		DialogID:    msg.ChatId,
-		SenderID:    userID,
-		MsgType:     int16(msg.MsgType),
-		Content:     []byte(msg.Content),
-		ContentText: msg.Content,
-		ClientMsgID: fmt.Sprintf("%d", msg.Id),
+	header := &protocol.MTHeader{
+		UserID:   userID,
+		DeviceID: deviceID,
 	}
-	if len(msg.MediaKey) > 0 {
-		req.Content = append(msg.MediaKey, req.Content...)
-	}
-
-	resp, err := s.Send(ctx, req)
+	ack, err := s.engine.ProcessMessage(ctx, header, msg)
 	if err != nil {
-		ack := &pb.WirePacket{
-			Payload: &pb.WirePacket_MessageAck{
-				MessageAck: &pb.MessageAck{
-					MsgId:   msg.Id,
-					SeqId:   msg.SeqId,
-					Success: false,
-				},
-			},
+		failAck := &pb.MessageAck{
+			MsgId:   msg.Id,
+			SeqId:   msg.SeqId,
+			Success: false,
 		}
-		frame, encErr := protocol.NewFrameCodec().EncodeWirePacket(ack)
+		frame, encErr := protocol.EncodeAck(failAck)
 		if encErr != nil {
 			return nil, err
 		}
 		return [][]byte{frame}, nil
 	}
 
-	saved, err := s.pg.GetMessageBySeq(ctx, msg.ChatId, resp.Seq)
-	if err != nil {
-		saved = &postgres.Message{
-			ID:       resp.MessageID,
-			DialogID: msg.ChatId,
-			SenderID: userID,
-			MsgType:  int16(msg.MsgType),
-			Seq:      resp.Seq,
-		}
-	}
-
-	wireMsg, err := s.toWireMessage(ctx, saved, userID)
+	ackFrame, err := protocol.EncodeAck(ack)
 	if err != nil {
 		return nil, err
 	}
-
-	codec := protocol.NewFrameCodec()
-	var frames [][]byte
-
-	ackFrame, err := codec.EncodeWirePacket(&pb.WirePacket{
-		Payload: &pb.WirePacket_MessageAck{
-			MessageAck: &pb.MessageAck{
-				MsgId:   wireMsg.Id,
-				SeqId:   wireMsg.SeqId,
-				Success: true,
-			},
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-	frames = append(frames, ackFrame)
-
-	pushFrame, err := codec.EncodeWirePacket(&pb.WirePacket{
-		Payload: &pb.WirePacket_Message{Message: wireMsg},
-	})
-	if err != nil {
-		return nil, err
-	}
-	frames = append(frames, pushFrame)
-
-	return frames, nil
+	return [][]byte{ackFrame}, nil
 }
 
 func (s *Service) handleSyncRequest(ctx context.Context, userID int64, req *pb.SyncRequest) ([][]byte, error) {

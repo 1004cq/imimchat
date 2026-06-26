@@ -145,21 +145,16 @@ sequenceDiagram
 
 ### 5.1 Wire 协议（长连接主载荷）
 
-定义见 `proto/neomsg/v1/wire.proto`：
+定义见 `proto/neomsg/v1/wire.proto`。
 
-| 消息 | 方向 | 说明 |
-|------|------|------|
-| `Message` | C↔S | 聊天消息（雪花 ID、`seq_id` 同步） |
-| `MessageAck` | S→C | 发送确认 |
-| `SyncRequest` | C→S | 按 `last_seq` 拉取增量 |
-| `SyncResponse` | S→C | 返回消息列表 |
-| `WirePacket` | C↔S | 统一包装，`[4B 长度][protobuf]` |
+**消息引擎**（`internal/message/engine.go`）处理链路：
 
-生成 Go 代码：
-
-```bash
-./scripts/gen-proto.sh
-```
+1. `validateSession` — 校验 MTHeader / AuthKey
+2. `storage.MessageStore.SaveMessage` — 持久化
+3. `updateChatSeq` — Redis 更新 `chat:seq:{id}`
+4. `fanoutToOnlineDevices` — NATS `msg.deliver.{deviceID}`
+5. `pushToOfflineUsers` — APNs/FCM 离线推送
+6. 返回 `MessageAck`
 
 ### 5.2 Envelope（扩展能力）
 

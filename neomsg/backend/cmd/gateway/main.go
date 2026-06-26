@@ -9,7 +9,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/neomsg/neomsg/backend/internal/config"
+	"github.com/neomsg/neomsg/backend/internal/gateway/delivery"
 	"github.com/neomsg/neomsg/backend/internal/gateway/session"
 	tcpgw "github.com/neomsg/neomsg/backend/internal/gateway/tcp"
 	wsgw "github.com/neomsg/neomsg/backend/internal/gateway/ws"
@@ -38,10 +40,27 @@ func main() {
 	}
 	defer rdb.Close()
 
-	// 业务层
-	msgSvc := message.NewService(pg, rdb)
+	var nc *nats.Conn
+	if cfg.NATSUrl != "" {
+		nc, err = nats.Connect(cfg.NATSUrl)
+		if err != nil {
+			log.Printf("[Gateway] nats connect failed (fanout disabled): %v", err)
+		} else {
+			defer nc.Close()
+		}
+	}
+
 	pushDisp := push.NewDispatcher(rdb)
+	engine := message.NewEngine(pg, rdb, nc, pushDisp)
+	msgSvc := message.NewService(pg, rdb, engine)
 	sessions := session.NewManager()
+
+	if nc != nil {
+		sub := delivery.NewSubscriber(sessions)
+		if err := sub.Start(nc); err != nil {
+			log.Fatalf("nats subscriber: %v", err)
+		}
+	}
 
 	// 注册消息处理
 	msgSvc.OnMessage(func(ctx context.Context, evt *message.Event) error {
@@ -49,7 +68,7 @@ func main() {
 	})
 
 	// WebSocket 网关
-	wsHandler := wsgw.NewHandler(sessions, msgSvc, pushDisp)
+	wsHandler := wsgw.NewHandler(sessions, msgSvc, pushDisp, rdb)
 	http.HandleFunc("/ws", wsHandler.ServeWS)
 
 	// TCP 网关
