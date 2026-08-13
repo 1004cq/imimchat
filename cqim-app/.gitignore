@@ -103,6 +103,10 @@ temp/
 # Apple push keys (never commit private keys)
 certs/*.p8
 
+# Let's Encrypt / Certbot live material
+certbot/conf/
+certbot/www/
+
 # Database
 *.db
 *.sqlite

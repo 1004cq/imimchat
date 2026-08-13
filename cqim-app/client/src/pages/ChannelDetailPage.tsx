@@ -11,6 +11,7 @@ import { Hash, ArrowLeft, Send, Users, MoreVertical, Bell, BellOff, Share2, LogO
 import { useCurrentUser } from '../hooks/useCurrentUser';
 import { authFetch } from '../lib/authFetch';
 import { avatarToProxy } from '../lib/utils';
+import { publicUrl } from '../lib/publicUrl';
 
 interface ChannelDetail {
   id: string;
@@ -280,7 +281,7 @@ export default function ChannelDetailPage() {
                   setShowMenu(false);
                   navigator.clipboard.writeText(
                     channel?.username
-                      ? `https://wed.imim.chat/im/${channel.username}`
+                      ? publicUrl(`/im/${channel.username}`)
                       : window.location.href
                   );
                 }}

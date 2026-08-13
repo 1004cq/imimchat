@@ -13,6 +13,7 @@
 import { Router } from 'express';
 import prisma from './db';
 import { avatarToProxy } from './cos-signer.js';
+import { publicUrl } from './public-url.js';
 import {
   sendGroupMessage,
   pullGroupMessages,
@@ -98,7 +99,7 @@ channelRouter.post('/create', async (req, res) => {
         isPublic: channel.isPublic,
         memberCount: channel.memberCount,
         publicUrl: channel.username
-          ? `https://wed.imim.chat/im/${channel.username}`
+          ? publicUrl(`/im/${channel.username}`)
           : null,
         createdAt: channel.createdAt,
       },
@@ -179,7 +180,7 @@ channelRouter.get('/resolve', async (req, res) => {
     res.json({
       ...channel,
       avatar: avatarToProxy(channel.avatar),
-      publicUrl: `https://wed.imim.chat/im/${channel.username}`,
+      publicUrl: publicUrl(`/im/${channel.username}`),
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

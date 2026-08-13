@@ -10,7 +10,7 @@ const config: CapacitorConfig = {
   webDir: 'dist/public',
   server: {
     androidScheme: 'https',
-    url: 'https://wed.imim.chat',
+    url: 'https://cq.je',
     cleartext: false,
   },
   android: {

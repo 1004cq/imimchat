@@ -11,6 +11,7 @@ import {
 import { DoveAvatar } from '@/components/DoveAvatar';
 import { GroupQRCodePage } from '@/components/GroupQRCodePage';
 import { toast } from 'sonner';
+import { publicUrl, publicHostPath } from '@/lib/publicUrl';
 
 interface GroupInfo {
   id: string;
@@ -1029,7 +1030,7 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
                   <>
                     <AtSign size={14} className="text-emerald-500 flex-shrink-0" />
                     <p className="text-sm font-medium text-gray-900 dark:text-gray-100">@{groupInfo.username}</p>
-                    <button onClick={() => { navigator.clipboard?.writeText(`https://wed.imim.chat/im/${groupInfo.username}`).then(() => toast.success('公开链接已复制')); }} className="ml-auto text-gray-400 hover:text-emerald-500 transition-colors">
+                    <button onClick={() => { navigator.clipboard?.writeText(publicUrl(`/im/${groupInfo.username}`)).then(() => toast.success('公开链接已复制')); }} className="ml-auto text-gray-400 hover:text-emerald-500 transition-colors">
                       <Link2 size={14} />
                     </button>
                   </>
@@ -1049,9 +1050,9 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
                 <Link2 size={14} className="text-emerald-500 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
                   <p className="text-[10px] font-medium text-emerald-600 dark:text-emerald-400 mb-0.5">公开链接</p>
-                  <p className="text-xs text-emerald-700 dark:text-emerald-300 truncate">wed.imim.chat/im/{groupInfo.username}</p>
+                  <p className="text-xs text-emerald-700 dark:text-emerald-300 truncate">{publicHostPath(`/im/${groupInfo.username}`)}</p>
                 </div>
-                <button onClick={() => { navigator.clipboard?.writeText(`https://wed.imim.chat/im/${groupInfo.username}`).then(() => toast.success('链接已复制')).catch(() => toast.error('复制失败')); }} className="px-3 py-1.5 bg-emerald-500 text-white text-[10px] font-medium rounded-lg hover:bg-emerald-600 transition-colors">
+                <button onClick={() => { navigator.clipboard?.writeText(publicUrl(`/im/${groupInfo.username}`)).then(() => toast.success('链接已复制')).catch(() => toast.error('复制失败')); }} className="px-3 py-1.5 bg-emerald-500 text-white text-[10px] font-medium rounded-lg hover:bg-emerald-600 transition-colors">
                   复制
                 </button>
               </div>

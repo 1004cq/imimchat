@@ -4,8 +4,8 @@
 
 > **CQIM** 是一套高性能、高安全性的全栈即时通讯系统。本仓库的核心迭代已全面转向 **[cqim-app](./cqim-app/)**，支持强制端到端加密（Signal/MLS）、朋友圈、贴纸商店及万人群聊优化。
 
-**访问地址：** https://wed.imim.chat（以实际部署为准）  
-**管理后台：** https://wed.imim.chat/admin  
+**访问地址：** https://cq.je  
+**管理后台：** https://cq.je/admin  
 **核心目录：** `./cqim-app`  
 **部署方式：** Docker Compose + Nginx 反向代理
 

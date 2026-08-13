@@ -15,6 +15,7 @@ import RegionPicker from '@/components/RegionPicker';
 import { authApi, authFetch } from '@/lib/authFetch';
 import { DoveAvatar } from '@/components/DoveAvatar';
 import { QRCardModal } from '@/components/QRCodeCard';
+import { publicUrl } from '@/lib/publicUrl';
 async function uploadFileToLocal(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -560,7 +561,7 @@ export default function ProfileSettingsPage({ onClose, onProfileUpdate }: Profil
               }
               onClick={() => {
                 const username = profile.wechatId || CURRENT_USER.username;
-                const link = `https://wed.imim.chat/im/${username}`;
+                const link = publicUrl(`/im/${username}`);
                 if (navigator.clipboard) {
                   navigator.clipboard.writeText(link).then(() => toast.success('外链已复制: ' + link)).catch(() => toast.error('复制失败'));
                 } else {
