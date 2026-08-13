@@ -823,7 +823,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   }, [dispatch]);
 
-  // ===== 登录后从 API 加载私聊会话列表 =====
+  // ===== 登录后初始化 E2EE 并加载会话列表 =====
   useEffect(() => {
     if (!state.isLoggedIn) return;
     const token = localStorage.getItem('user_token');
@@ -831,14 +831,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     const currentUserId = stateRef.current.currentUser?.id || localStorage.getItem('user_id') || 'me';
 
-    Promise.all([
-      fetch('/api/chat/list', {
-        headers: { 'Authorization': `Bearer ${token}` },
-      }).then(r => r.ok ? r.json() : null),
-      fetch(`/api/group/list?userId=${encodeURIComponent(currentUserId)}`).then(r => r.ok ? r.json() : null),
-    ])
-      .then(([privateData, groupData]) => {
-        const privateChats: Chat[] = (privateData?.chats || []).map((c: any) => {
+    // P0: 登录后强制初始化 E2EE 并注册 Bundle
+    (async () => {
+      try {
+        const { E2EEManager } = await import('../lib/e2ee/E2EEManager');
+        const e2ee = E2EEManager.shared();
+        await e2ee.initialize();
+        await e2ee.registerBundleToServer(currentUserId);
+        await e2ee.checkAndReplenishServerPreKeys(currentUserId);
+        console.log('[E2EE] 身份凭证已就绪');
+      } catch (err) {
+        console.error('[E2EE] 初始化失败:', err);
+      }
+    })();
+
+    const authHeaders = { 'Authorization': `Bearer ${token}` };
+
+    // P1：首页聚合接口优先，失败时回退到原有双接口，避免新接口异常影响登录
+    fetch('/api/home/sync', { headers: authHeaders })
+      .then(async (response) => {
+        if (response.ok) {
+          const payload = await response.json();
+          if (payload?.data) return { aggregated: true, ...payload.data };
+        }
+        const [privateData, groupData] = await Promise.all([
+          fetch('/api/chat/list', { headers: authHeaders }).then(r => r.ok ? r.json() : null),
+          fetch(`/api/group/list?userId=${encodeURIComponent(currentUserId)}`).then(r => r.ok ? r.json() : null),
+        ]);
+        return { aggregated: false, chats: privateData?.chats || [], groups: groupData?.groups || [] };
+      })
+      .then((homeData: any) => {
+        const privateChats: Chat[] = (homeData?.chats || []).map((c: any) => {
           const peerId = c.peer?.id;
           const peerName = c.peer?.nickname || c.peer?.username || '未知用户';
 
@@ -857,7 +880,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           });
         });
 
-        const groupChats: Chat[] = (groupData?.groups || []).map((g: any) => ({
+        const groupChats: Chat[] = (homeData?.groups || []).map((g: any) => ({
           id: `group_${g.groupId || g.id}`,
           groupId: g.groupId || g.id,
           type: 'group' as const,
@@ -874,7 +897,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         const mergedChats = [...privateChats, ...groupChats];
         dispatch({ type: 'SET_CHATS', chats: mergedChats });
-        console.log(`[AppContext] 加载了 ${privateChats.length} 个私聊会话，${groupChats.length} 个群聊会话`);
+        console.log(`[AppContext] ${homeData?.aggregated ? '聚合' : '回退'}加载了 ${privateChats.length} 个私聊会话，${groupChats.length} 个群聊会话`);
       })
       .catch(err => console.error('[AppContext] 加载会话列表失败:', err));
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -899,6 +922,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       ws.onopen = () => {
         console.log('[AppContext] 持久信令连接已建立');
+        // 通知群聊同步模块：这是一个新的连接，可按各群 lastSeq 增量补消息
+        window.dispatchEvent(new CustomEvent('cqim:signal-open', { detail: { ws } }));
         // 开启心跳：每 25s 发送一次（服务端 30s 超时，留 5s 容错）
         heartbeatTimer = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
@@ -946,41 +971,60 @@ export function AppProvider({ children }: { children: ReactNode }) {
               console.log(`[AppContext] 私聊消息确认: tempId=${tempId} -> realId=${id}`);
             } else if (senderId !== currentUserId) {
               // 收到对方消息
-              const newMsg: Message = {
-                id,
-                chatId,
-                senderId,
-                content: isRevoked ? '消息已撤回' : (content || ''),
-                type: msgType || 'text',
-                timestamp: createdAt || Date.now(),
-                isEncrypted: true,
-                reactions: {},
-                status: 'delivered',
-                isRecalled: isRevoked || false,
-                replyTo: replyToId || undefined,
-                ...(extra?.voiceUrl ? { voiceUrl: extra.voiceUrl, duration: extra.duration || 0 } : {}),
-                ...(extra?.voiceCiphertext ? {
-                  duration: extra.duration || 0,
-                  voiceCiphertext: extra.voiceCiphertext,
-                  voiceIv: extra.voiceIv,
-                  voiceKeyBase64: extra.voiceKeyBase64,
-                  voiceMimeType: extra.voiceMimeType || 'audio/webm',
-                  voiceWaveform: extra.voiceWaveform || [],
-                } : {}),
-                ...(extra?.imageUrl ? { imageUrl: extra.imageUrl } : {}),
-                ...(extra?.videoUrl ? { videoUrl: extra.videoUrl } : {}),
-                ...(extra?.locationData ? { locationData: extra.locationData } : {}),
-                // 贴纸消息字段
-                ...(extra?.stickerUrl ? { stickerUrl: extra.stickerUrl, stickerEmoji: extra.stickerEmoji, stickerSetName: extra.stickerSetName } : {}),
-                // 阅后即焚字段
-                ...(burnAfterRead ? { burnAfterRead } : {}),
-                // 消息防篡改 HMAC 签名
-                ...(hmac ? { hmac, integrityStatus: 'unverified' as const } : {}),
-              };
-              dispatch({ type: 'RECEIVE_MESSAGE', chatId, message: newMsg });
-              notifyIncomingMessage(chatId, newMsg);
+              (async () => {
+                let decryptedContent = isRevoked ? '消息已撤回' : (content || '');
+                let finalMsgType = msgType || 'text';
+                let finalExtra = extra;
+                let decryptionFailed = false;
 
-              // 如果该会话不在列表中，动态创建
+                // P0: 强制 E2EE 解密
+                if (msgType === 'encrypted' && content && !isRevoked) {
+                  try {
+                    const { E2EEManager } = await import('../lib/e2ee/E2EEManager');
+                    const e2ee = E2EEManager.shared();
+                    const envelope = JSON.parse(content);
+                    const decryptedStr = await e2ee.decrypt(senderId, envelope);
+                    const decrypted = JSON.parse(decryptedStr);
+                    
+                    decryptedContent = decrypted.content;
+                    finalMsgType = decrypted.msgType || 'text';
+                    finalExtra = { ...extra, ...decrypted.extra };
+                  } catch (err) {
+                    console.error('[E2EE] 解密失败:', err);
+                    decryptedContent = '🔒 无法解密消息，请重置安全会话';
+                    decryptionFailed = true;
+                  }
+                }
+
+                const newMsg: Message = {
+                  id,
+                  chatId,
+                  senderId,
+                  content: decryptedContent,
+                  type: finalMsgType as any,
+                  timestamp: createdAt || Date.now(),
+                  isEncrypted: true,
+                  reactions: {},
+                  status: 'delivered',
+                  isRecalled: isRevoked || false,
+                  replyTo: replyToId || undefined,
+                  decryptionFailed,
+                  ...(finalExtra?.voiceUrl ? { voiceUrl: finalExtra.voiceUrl, duration: finalExtra.duration || 0 } : {}),
+                  ...(finalExtra?.imageUrl ? { imageUrl: finalExtra.imageUrl } : {}),
+                  ...(finalExtra?.videoUrl ? { videoUrl: finalExtra.videoUrl } : {}),
+                  ...(finalExtra?.locationData ? { locationData: finalExtra.locationData } : {}),
+                  ...(finalExtra?.stickerUrl ? { stickerUrl: finalExtra.stickerUrl, stickerEmoji: finalExtra.stickerEmoji, stickerSetName: finalExtra.stickerSetName } : {}),
+                  ...(burnAfterRead ? { burnAfterRead } : {}),
+                  ...(hmac ? { hmac, integrityStatus: 'unverified' as const } : {}),
+                };
+                dispatch({ type: 'RECEIVE_MESSAGE', chatId, message: newMsg });
+                notifyIncomingMessage(chatId, newMsg);
+              })();
+            }
+            return;
+          }
+
+          // 如果该会话不在列表中，动态创建
               const currentState = stateRef.current;
               if (!currentState.chats.find(c => c.id === chatId)) {
                 // 从 API 获取会话信息

@@ -208,13 +208,33 @@ export class E2EEManager {
     const keyPair = await generateKeyPair();
     const exported = await exportKeyPair(keyPair);
 
-    // 使用 Identity Key 签名（简化：使用 HMAC 模拟签名）
-    const identityPriv = await importPrivateKey(this._identityKeyPair!.privKey);
+    // 使用 Identity Key 签名
+    // 导入私钥（用于签名，必须是 ECDSA 类型）
+    // 注意：目前的 generateKeyPair 生成的是 ECDH 密钥，用于协商；
+    // Identity Key 在 Signal 中既用于协商也用于签名。
+    // 在 Web Crypto P-256 中，ECDH 密钥不能直接用于 ECDSA 签名。
+    // 为了合规，我们需要为 Identity 额外生成一对签名密钥，或者使用相同的种子。
+    // 这里采用最简单的合规做法：Identity Key 实际上包含两对 P-256，一对用于 ECDH，一对用于 ECDSA。
+    
+    // 获取本地注册信息中的签名私钥
+    const reg = await this.store.getLocalRegistration();
+    if (!reg || !(reg as any).signingKeyPair) {
+      // 如果没有签名密钥对，重新生成（平滑升级）
+      const signingKP = await import('../lib/e2ee/CryptoUtils').then(m => m.generateSigningKeyPair());
+      const exportedSigning = await import('../lib/e2ee/CryptoUtils').then(m => m.exportKeyPair(signingKP as any));
+      await this.store.saveLocalRegistration({
+        ...reg!,
+        signingKeyPair: exportedSigning,
+      } as any);
+      this._identityKeyPair = { ...this._identityKeyPair!, signingKeyPair: exportedSigning } as any;
+    }
+
+    const signingPrivKeyBase64 = (this._identityKeyPair as any).signingKeyPair.privKey;
+    const signingPriv = await import('../lib/e2ee/CryptoUtils').then(m => m.importPrivateKey(signingPrivKeyBase64, 'ECDSA'));
     const signedPubBuf = base64ToBuffer(exported.pubKey);
 
-    // 简化签名：使用 ECDH(identityPriv, signedPub) 的哈希作为"签名"
-    // 真实实现应使用 Ed25519 签名
-    const signatureData = bufferToBase64(signedPubBuf);
+    const signatureBuf = await import('../lib/e2ee/CryptoUtils').then(m => m.sign(signingPriv, signedPubBuf));
+    const signatureData = bufferToBase64(signatureBuf);
 
     await this.store.saveSignedPreKey({
       id,
@@ -303,47 +323,36 @@ export class E2EEManager {
 
   /**
    * 从服务器获取对端的 PreKey Bundle
-   * 如果服务器没有，回退到本地生成 mock bundle
+   * 强制要求从服务器获取，禁止使用 Mock Bundle
    */
   async fetchRemoteBundle(peerId: string): Promise<PreKeyBundle> {
-    // 先检查缓存
-    if (this.mockBundles.has(peerId)) {
-      return this.mockBundles.get(peerId)!;
+    const resp = await fetch(`/api/crypto/get-bundle?userId=${encodeURIComponent(peerId)}`);
+    if (!resp.ok) {
+      const errorText = await resp.text();
+      throw new Error(`无法获取用户 ${peerId} 的安全凭证 (Bundle): ${errorText}`);
     }
 
-    try {
-      const resp = await fetch(`/api/crypto/get-bundle?userId=${encodeURIComponent(peerId)}`);
-      if (resp.ok) {
-        const data = await resp.json();
-        const bundle: PreKeyBundle = {
-          registrationId: data.registrationId,
-          identityKey: data.identityKey,
-          signedPreKeyId: data.signedPreKey.keyId,
-          signedPreKey: data.signedPreKey.publicKey,
-          signedPreKeySignature: data.signedPreKey.signature,
-          oneTimePreKeyId: data.preKey?.keyId,
-          oneTimePreKey: data.preKey?.publicKey,
-        };
+    const data = await resp.json();
+    const bundle: PreKeyBundle = {
+      registrationId: data.registrationId,
+      identityKey: data.identityKey,
+      signedPreKeyId: data.signedPreKey.keyId,
+      signedPreKey: data.signedPreKey.publicKey,
+      signedPreKeySignature: data.signedPreKey.signature,
+      oneTimePreKeyId: data.preKey?.keyId,
+      oneTimePreKey: data.preKey?.publicKey,
+    };
 
-        this.mockBundles.set(peerId, bundle);
+    // 保存对端 Identity Key（TOFU）
+    await this.store.saveIdentity({
+      userId: peerId,
+      identityKey: data.identityKey,
+      trusted: true,
+      addedAt: Date.now(),
+    });
 
-        // 保存对端 Identity Key（TOFU）
-        await this.store.saveIdentity({
-          userId: peerId,
-          identityKey: data.identityKey,
-          trusted: true,
-          addedAt: Date.now(),
-        });
-
-        console.log(`[E2EE] 从服务器获取到 ${peerId} 的 Bundle`);
-        return bundle;
-      }
-    } catch (err) {
-      console.warn('[E2EE] 从服务器获取 Bundle 失败，回退到本地生成:', err);
-    }
-
-    // 回退：本地生成 mock bundle
-    return this.getOrCreateMockBundle(peerId);
+    console.log(`[E2EE] 从服务器成功获取到 ${peerId} 的真实 Bundle`);
+    return bundle;
   }
 
   /**
@@ -446,6 +455,19 @@ export class E2EEManager {
 
     console.log('[E2EE] 开始 X3DH 密钥协商，对端:', peerId);
 
+    // 验证对端 Signed PreKey 签名 (P0 安全要求)
+    try {
+      const remoteIdentityPubForVerify = await importPublicKey(bundle.identityKey, 'ECDSA');
+      const signatureBuf = base64ToBuffer(bundle.signedPreKeySignature);
+      const signedPubBuf = base64ToBuffer(bundle.signedPreKey);
+      const isValid = await import('../lib/e2ee/CryptoUtils').then(m => m.verify(remoteIdentityPubForVerify, signatureBuf, signedPubBuf));
+      if (!isValid) {
+        throw new Error('对端安全凭证签名验证失败');
+      }
+    } catch (err: any) {
+      throw new Error(`安全凭证验证失败: ${err.message}`);
+    }
+
     // 导入密钥
     const identityPriv = await importPrivateKey(this._identityKeyPair.privKey);
     const remoteIdentityPub = await importPublicKey(bundle.identityKey);
@@ -525,6 +547,31 @@ export class E2EEManager {
     });
 
     console.log('[E2EE] X3DH 完成，会话已建立');
+  }
+
+  // ============================================================
+  // 媒体文件加密 (P0)
+  // ============================================================
+
+  /** 加密附件文件 */
+  async encryptFile(fileBuffer: ArrayBuffer): Promise<{ ciphertext: ArrayBuffer; fileKey: string; iv: string }> {
+    const fileKeyMaterial = randomBytes(32);
+    const encrypted = await aesEncrypt(fileBuffer, fileKeyMaterial);
+    return {
+      ciphertext: base64ToBuffer(encrypted.ciphertext),
+      fileKey: bufferToBase64(fileKeyMaterial),
+      iv: encrypted.iv,
+    };
+  }
+
+  /** 解密附件文件 */
+  async decryptFile(ciphertext: ArrayBuffer, fileKey: string, iv: string): Promise<ArrayBuffer> {
+    const fileKeyMaterial = base64ToBuffer(fileKey);
+    return aesDecrypt({
+      ciphertext: bufferToBase64(ciphertext),
+      iv,
+      tag: '',
+    }, fileKeyMaterial);
   }
 
   // ============================================================

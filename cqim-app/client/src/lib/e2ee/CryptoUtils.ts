@@ -129,26 +129,26 @@ export async function exportKeyPair(keyPair: ECKeyPair): Promise<ExportedKeyPair
 }
 
 /** 从 Base64 导入公钥 */
-export async function importPublicKey(base64: string): Promise<CryptoKey> {
+export async function importPublicKey(base64: string, type: 'ECDH' | 'ECDSA' = 'ECDH'): Promise<CryptoKey> {
   const buffer = base64ToBuffer(base64);
   return crypto.subtle.importKey(
     'spki',
     buffer,
-    { name: 'ECDH', namedCurve: 'P-256' },
+    { name: type, namedCurve: 'P-256' },
     true,
-    []
+    type === 'ECDSA' ? ['verify'] : []
   );
 }
 
 /** 从 Base64 导入私钥 */
-export async function importPrivateKey(base64: string): Promise<CryptoKey> {
+export async function importPrivateKey(base64: string, type: 'ECDH' | 'ECDSA' = 'ECDH'): Promise<CryptoKey> {
   const buffer = base64ToBuffer(base64);
   return crypto.subtle.importKey(
     'pkcs8',
     buffer,
-    { name: 'ECDH', namedCurve: 'P-256' },
+    { name: type, namedCurve: 'P-256' },
     true,
-    ['deriveBits']
+    type === 'ECDSA' ? ['sign'] : ['deriveBits']
   );
 }
 

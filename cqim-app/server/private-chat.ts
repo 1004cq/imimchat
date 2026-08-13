@@ -8,6 +8,14 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import prisma from './db.js';
+import {
+  getCachedConversationList,
+  setCachedConversationList,
+  invalidateConversationList,
+  getUnreadCount,
+  incrUnreadCount,
+  clearUnreadCount,
+} from './redis.js';
 import { userAuth } from './auth.js';
 import { avatarToProxy } from './cos-signer.js';
 
@@ -363,6 +371,12 @@ router.get('/list', async (req: Request, res: Response) => {
     const peerIds = visibleChats.map(c => c.participantA === userId ? c.participantB : c.participantA);
     const uniquePeerIds = [...new Set(peerIds)];
 
+    // Cache-Aside 模式：先查 Redis 缓存
+    const cachedList = await getCachedConversationList(userId);
+    if (cachedList) {
+      return res.json({ chats: cachedList });
+    }
+
     // 批量查询对方用户信息
     const peers = await prisma.user.findMany({
       where: { id: { in: uniquePeerIds } },
@@ -370,18 +384,22 @@ router.get('/list', async (req: Request, res: Response) => {
     });
     const peerMap = new Map(peers.map(p => [p.id, p]));
 
-    // 查询每个会话的未读消息数
+    // 查询每个会话的未读消息数（优先从 Redis Hash 获取，miss 时查 DB 并回填）
     const unreadCounts = await Promise.all(
-      visibleChats.map(c =>
-        prisma.privateMessage.count({
-          where: {
-            chatId: c.id,
-            senderId: { not: userId },
-            status: { not: 'read' },
-            isRevoked: false,
-          },
-        })
-      )
+      visibleChats.map(async c => {
+        let unread = await getUnreadCount(userId, c.id);
+        if (unread === 0) {
+          unread = await prisma.privateMessage.count({
+            where: {
+              chatId: c.id,
+              senderId: { not: userId },
+              status: { not: 'read' },
+              isRevoked: false,
+            },
+          });
+        }
+        return unread;
+      })
     );
 
     const result = visibleChats.map((c, i) => {
@@ -411,6 +429,8 @@ router.get('/list', async (req: Request, res: Response) => {
       };
     });
 
+    // 缓存会话列表 60s
+    await setCachedConversationList(userId, result);
     res.json({ chats: result });
   } catch (err) {
     console.error('[PrivateChat] 获取会话列表失败:', err);
@@ -519,14 +539,20 @@ router.post('/:chatId/messages', async (req: Request, res: Response) => {
   try {
     const currentUser = (req as any).user;
     const { chatId } = req.params;
-    const { content, msgType = 'text', replyToId, extra: rawExtra, burnAfterRead, hmac } = req.body;
+    const { content, msgType, replyToId, extra: rawExtra, burnAfterRead, hmac } = req.body;
+
+    // 强制 P0：私聊必须加密，禁止明文发送
+    if (msgType !== 'encrypted') {
+      return res.status(400).json({ error: '私聊强制要求端到端加密，请发送加密消息' });
+    }
+
     // 安全处理 extra：如果客户端传入了字符串，尝试解析为对象
     let extra = rawExtra;
     if (typeof rawExtra === 'string') {
       try { extra = JSON.parse(rawExtra); } catch { extra = undefined; }
     }
-    if (!content && msgType === 'text') {
-      return res.status(400).json({ error: '消息内容不能为空' });
+    if (!content) {
+      return res.status(400).json({ error: '加密信封不能为空' });
     }
 
     // 验证会话存在且用户有权限
@@ -547,8 +573,8 @@ router.post('/:chatId/messages', async (req: Request, res: Response) => {
       data: {
         chatId,
         senderId: currentUser.id,
-        msgType,
-        content: content || '',
+        msgType: 'encrypted',
+        content: content || '', // 此时 content 存储的是加密信封 JSON
         replyToId: replyToId || null,
         extra: extra ? JSON.stringify(extra) : null,
         status: 'sent',
@@ -560,7 +586,7 @@ router.post('/:chatId/messages', async (req: Request, res: Response) => {
     await prisma.chat.update({
       where: { id: chatId },
       data: {
-        lastMessage: messagePreview(msgType, content || ''),
+        lastMessage: '🔒 [加密消息]', // 强制脱敏预览
         lastMessageAt: message.createdAt,
       },
     });
@@ -581,6 +607,12 @@ router.post('/:chatId/messages', async (req: Request, res: Response) => {
     };
 
     const peerId = chat.participantA === currentUser.id ? chat.participantB : chat.participantA;
+
+    // 严格一致性策略：更新 Redis 未读并删除会话列表缓存，最后推送
+    await incrUnreadCount(peerId, chatId, 1);
+    await invalidateConversationList(currentUser.id);
+    await invalidateConversationList(peerId);
+
     const sendTo = req.app.locals.sendTo as undefined | ((userId: string, msg: Record<string, any>) => void);
     if (sendTo) {
       sendTo(peerId, {
@@ -662,18 +694,22 @@ router.get('/:chatId/messages', async (req: Request, res: Response) => {
 });
 
 /**
- * POST /api/chat/:chatId/read
- * 标记会话中对方发送的消息为已读
- * Body: { messageIds?: string[] } (可选，不传则标记所有未读)
- * Returns: { updated: number }
- */
-router.post('/:chatId/read', async (req: Request, res: Response) => {
-  try {
-    const currentUser = (req as any).user;
-    const { chatId } = req.params;
-    const { messageIds } = req.body;
+	 * POST /api/chat/:chatId/read
+	 * 标记会话中对方发送的消息为已读
+	 * Body: { messageIds?: string[] } (可选，不传则标记所有未读)
+	 * Returns: { updated: number }
+	 */
+	router.post('/:chatId/read', async (req: Request, res: Response) => {
+	  try {
+	    const currentUser = (req as any).user;
+	    const { chatId } = req.params;
+	    const { messageIds } = req.body;
 
-    const chat = await prisma.chat.findUnique({ where: { id: chatId } });
+    // 严格一致性策略：进入会话置 0 未读并删除会话列表缓存
+    await clearUnreadCount(currentUser.id, chatId);
+    await invalidateConversationList(currentUser.id);
+
+	    const chat = await prisma.chat.findUnique({ where: { id: chatId } });
     if (!chat) {
       return res.status(404).json({ error: '会话不存在' });
     }

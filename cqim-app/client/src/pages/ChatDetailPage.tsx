@@ -368,6 +368,65 @@ const ChatSkeleton: React.FC = () => (
   </div>
 );
 
+// ============================================================
+// 子组件：加密媒体加载器 (P0)
+// ============================================================
+const EncryptedMediaLoader = React.memo(({ url, fileKey, iv, type }: { url: string, fileKey: string, iv: string, type: 'image' | 'video' }) => {
+  const [decryptedUrl, setDecryptedUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let objectUrl: string | null = null;
+    (async () => {
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error('下载失败');
+        const buffer = await resp.arrayBuffer();
+        
+        const { E2EEManager } = await import('@/lib/e2ee/E2EEManager');
+        const e2ee = E2EEManager.shared();
+        const decrypted = await e2ee.decryptFile(buffer, fileKey, iv);
+        
+        const blob = new Blob([decrypted]);
+        objectUrl = URL.createObjectURL(blob);
+        setDecryptedUrl(objectUrl);
+      } catch (err) {
+        console.error('[E2EE] 媒体解密失败:', err);
+      } finally {
+        setLoading(false);
+      }
+    })();
+    return () => { if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [url, fileKey, iv]);
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center w-[180px] h-[120px] bg-dove-warm-gray/20 rounded-lg gap-2">
+        <Loader2 size={16} className="animate-spin text-dove-green/40" />
+        <span className="text-[10px] text-muted-foreground/50">正在解密媒体...</span>
+      </div>
+    );
+  }
+
+  if (!decryptedUrl) {
+    return (
+      <div className="flex flex-col items-center justify-center w-[180px] h-[120px] bg-red-50 rounded-lg border border-red-100">
+        <Ban size={16} className="text-red-300" />
+        <span className="text-[10px] text-red-400 mt-1">解密失败</span>
+      </div>
+    );
+  }
+
+  if (type === 'image') {
+    return <img src={decryptedUrl} alt="" className="rounded-lg max-w-[240px] max-h-[180px] object-cover" />;
+  }
+
+  return (
+    <video src={decryptedUrl} controls className="rounded-lg max-w-[240px] max-h-[180px] object-cover" preload="metadata" />
+  );
+});
+EncryptedMediaLoader.displayName = 'EncryptedMediaLoader';
+
 // ===== 消息气泡组件（含阅后即焚倒计时 + 焚毁动画）=====
 // 使用 React.memo 避免不必要的重渲染
 const ChatBubble: React.FC<{
@@ -888,12 +947,26 @@ const ChatBubble: React.FC<{
               </div>
             )}
 
-            {message.type === 'image' && message.imageUrl ? (
+            {message.type === 'image' && (message as any).fileKey && (message as any).iv ? (
+              <EncryptedMediaLoader 
+                url={message.imageUrl!} 
+                fileKey={(message as any).fileKey} 
+                iv={(message as any).iv} 
+                type="image" 
+              />
+            ) : message.type === 'image' && message.imageUrl ? (
               <img
                 src={message.imageUrl}
                 alt=""
                 className="rounded-lg max-w-[240px] max-h-[180px] object-cover"
-                onContextMenu={(e) => e.preventDefault()} // 防止右键保存图片（防转发）
+                onContextMenu={(e) => e.preventDefault()}
+              />
+            ) : message.type === 'video' && (message as any).fileKey && (message as any).iv ? (
+              <EncryptedMediaLoader 
+                url={message.videoUrl!} 
+                fileKey={(message as any).fileKey} 
+                iv={(message as any).iv} 
+                type="video" 
               />
             ) : message.type === 'video' && message.videoUrl ? (
               <div className="relative rounded-lg max-w-[240px] overflow-hidden">
@@ -1384,37 +1457,53 @@ export default function ChatDetailPage() {
       headers: { 'Authorization': `Bearer ${token}` },
     })
       .then(r => r.ok ? r.json() : null)
-      .then(data => {
+      .then(async data => {
         if (!data?.messages) return;
-        const msgs: Message[] = data.messages.map((m: any) => ({
-          id: m.id,
-          chatId: m.chatId,
-          senderId: m.senderId,
-          content: m.isRevoked ? '消息已撤回' : (m.content || ''),
-          type: m.msgType || 'text',
-          timestamp: m.createdAt || Date.now(),
-          isEncrypted: true,
-          reactions: {},
-          status: m.status || 'sent',
-          isRecalled: m.isRevoked || false,
-          replyTo: m.replyToId || undefined,
-          ...(m.extra?.voiceUrl ? { voiceUrl: m.extra.voiceUrl, duration: m.extra.duration || 0 } : {}),
-          ...(m.extra?.voiceCiphertext ? {
-            duration: m.extra.duration || 0,
-            voiceCiphertext: m.extra.voiceCiphertext,
-            voiceIv: m.extra.voiceIv,
-            voiceKeyBase64: m.extra.voiceKeyBase64,
-            voiceMimeType: m.extra.voiceMimeType || 'audio/webm',
-            voiceWaveform: m.extra.voiceWaveform || [],
-          } : {}),
-          ...(m.extra?.imageUrl ? { imageUrl: m.extra.imageUrl } : {}),
-          ...(m.extra?.videoUrl ? { videoUrl: m.extra.videoUrl } : {}),
-          ...(m.extra?.locationData ? { locationData: m.extra.locationData } : {}),
-          // 贴纸消息字段
-          ...(m.extra?.stickerUrl ? { stickerUrl: m.extra.stickerUrl, stickerEmoji: m.extra.stickerEmoji, stickerSetName: m.extra.stickerSetName } : {}),
-          // 消息防篡改 HMAC
-          ...(m.hmac ? { hmac: m.hmac, integrityStatus: 'unverified' as const } : {}),
+        
+        const msgs: Message[] = await Promise.all(data.messages.map(async (m: any) => {
+          let decryptedContent = m.isRevoked ? '消息已撤回' : (m.content || '');
+          let finalMsgType = m.msgType || 'text';
+          let finalExtra = typeof m.extra === 'string' ? JSON.parse(m.extra) : m.extra;
+          let decryptionFailed = false;
+
+          // P0: 历史消息解密
+          if (m.msgType === 'encrypted' && m.content && !m.isRevoked) {
+            try {
+              const envelope = JSON.parse(m.content);
+              const decryptedStr = await e2ee.decrypt(m.senderId, envelope);
+              const decrypted = JSON.parse(decryptedStr);
+              decryptedContent = decrypted.content;
+              finalMsgType = decrypted.msgType || 'text';
+              finalExtra = { ...finalExtra, ...decrypted.extra };
+            } catch (err) {
+              console.error('[E2EE] 历史消息解密失败:', err);
+              decryptedContent = '🔒 无法解密历史消息';
+              decryptionFailed = true;
+            }
+          }
+
+          return {
+            id: m.id,
+            chatId: m.chatId,
+            senderId: m.senderId,
+            content: decryptedContent,
+            type: finalMsgType as any,
+            timestamp: m.createdAt || Date.now(),
+            isEncrypted: true,
+            decryptionFailed,
+            reactions: {},
+            status: m.status || 'sent',
+            isRecalled: m.isRevoked || false,
+            replyTo: m.replyToId || undefined,
+            ...(finalExtra?.voiceUrl ? { voiceUrl: finalExtra.voiceUrl, duration: finalExtra.duration || 0 } : {}),
+            ...(finalExtra?.imageUrl ? { imageUrl: finalExtra.imageUrl } : {}),
+            ...(finalExtra?.videoUrl ? { videoUrl: finalExtra.videoUrl } : {}),
+            ...(finalExtra?.locationData ? { locationData: finalExtra.locationData } : {}),
+            ...(finalExtra?.stickerUrl ? { stickerUrl: finalExtra.stickerUrl, stickerEmoji: finalExtra.stickerEmoji, stickerSetName: finalExtra.stickerSetName } : {}),
+            ...(m.hmac ? { hmac: m.hmac, integrityStatus: 'unverified' as const } : {}),
+          };
         }));
+
         setMessages(chatId, msgs);
         setHasMoreMessages(data.hasMore || false);
       })
@@ -1734,136 +1823,99 @@ export default function ChatDetailPage() {
     // 确定消息的阅后即焚定时器（优先使用会话级消失模式）
     const effectiveBurnTimer = chat?.ephemeralTimer ?? burnTimer;
 
-    // E2EE 加密发送
-    if (e2ee.isReady && otherMember) {
-      addLog(`加密消息: "${text.slice(0, 20)}${text.length > 20 ? '...' : ''}"`);
-
-      const envelope = await e2ee.encrypt(otherMember, text);
-      if (envelope) {
-        addLog(`✓ 加密成功 | 类型: ${envelope.type} | 计数: ${envelope.counter}`);
-        addLog(`  密文长度: ${envelope.ciphertext.ciphertext.length} 字符`);
-        addLog(`  棘轮密钥: ${envelope.senderRatchetKey.slice(0, 20)}...`);
-
-        if (!sessionEstablished) {
+    // P0 安全铁律：私聊强制 E2EE
+    if (chat?.type === 'private' && otherMember && chatId !== 'c0' && chatId !== 'cBOT') {
+      try {
+        addLog(`[E2EE] 正在加密消息...`);
+        
+        // 1. 建立会话（如果不存在）
+        const sessionInfo = await e2ee.getSessionInfo(otherMember);
+        if (!sessionInfo?.established) {
+          const bundle = await e2ee.fetchRemoteBundle(otherMember);
+          await e2ee.establishSession(otherMember, bundle);
           setSessionEstablished(true);
-          addLog('✓ X3DH 会话已建立');
         }
 
-        const detectedUrl = extractUrl(text);
-        const encTempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        // 2. 准备加密载荷（包含真实消息类型和内容）
+        const payload = JSON.stringify({
+          content: text,
+          msgType: 'text',
+          extra: {
+            mentions: currentMentions.length > 0 ? currentMentions : undefined,
+          }
+        });
+
+        // 3. 执行加密得到信封
+        const envelope = await e2ee.encrypt(otherMember, payload);
+        const envelopeStr = JSON.stringify(envelope);
+
+        const encTempId = `enc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const msgTimestamp = Date.now();
-        // 消息防篡改：计算 HMAC-SHA256 签名
+
+        // 4. 消息防篡改：对密文计算 HMAC
         let msgHmac: string | undefined;
         if (integrityKey) {
           try {
-            msgHmac = await signMessage({ content: text, senderId: currentUserId, chatId, msgType: 'text', timestamp: msgTimestamp, integrityKey });
+            msgHmac = await signMessage({ content: envelopeStr, senderId: currentUserId, chatId, msgType: 'encrypted', timestamp: msgTimestamp, integrityKey });
           } catch (e) { console.warn('[Integrity] HMAC 签名失败:', e); }
         }
+
         const msg: Message = {
           id: encTempId,
           chatId,
           senderId: currentUserId,
-          senderProfile: { name: currentUser.name, avatar: currentUser.avatar }, // 强制注入当前用户 Profile
-          content: text,
+          senderProfile: { name: currentUser.name, avatar: currentUser.avatar },
+          content: text, // UI 本地显示明文
           type: 'text',
           timestamp: msgTimestamp,
           isEncrypted: true,
-          reactions: {},
           status: 'sending',
-          encryptedEnvelope: envelope,
-          decryptedContent: text,
           burnAfterRead: effectiveBurnTimer,
           forwardRestricted: forwardRestricted,
-          linkUrl: detectedUrl || undefined,
           hmac: msgHmac,
           integrityStatus: msgHmac ? 'verified' : 'unverified',
           replyTo: activeReply?.id,
         };
         sendMessage(chatId, msg);
 
-        // 通过 WebSocket 发送私聊消息
+        // 5. 发送加密信封给服务器
         const ws = signalWs?.current;
-        if (ws && ws.readyState === WebSocket.OPEN && chatId !== 'c0' && chatId !== 'cBOT') {
+        if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({
             type: 'private_send',
-            payload: { chatId, content: text, msgType: 'text', tempId: encTempId, ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), ...(msgHmac ? { hmac: msgHmac } : {}), ...(activeReply ? { replyToId: activeReply.id } : {}) },
+            payload: { 
+              chatId, 
+              content: envelopeStr, 
+              msgType: 'encrypted', 
+              tempId: encTempId, 
+              ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), 
+              ...(msgHmac ? { hmac: msgHmac } : {}), 
+              ...(activeReply ? { replyToId: activeReply.id } : {}) 
+            },
           }));
+        } else {
+          const token = localStorage.getItem('user_token');
+          if (token) {
+            fetch(`/api/chat/${chatId}/messages`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+              body: JSON.stringify({ content: envelopeStr, msgType: 'encrypted', ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), ...(msgHmac ? { hmac: msgHmac } : {}), ...(activeReply ? { replyToId: activeReply.id } : {}) }),
+            })
+              .then(r => r.ok ? r.json() : null)
+              .then(data => { if (data?.message) dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId: encTempId, realId: data.message.id }); });
+          }
         }
-
         return;
-      } else {
-        addLog('⚠ 加密失败，使用明文发送');
+      } catch (err: any) {
+        console.error('[E2EE] 发送失败:', err);
+        toast.error(`无法建立加密连接: ${err.message}`);
+        addLog(`❌ E2EE 错误: ${err.message}`);
+        return;
       }
     }
 
-    // 降级：明文发送（通过 WebSocket 持久化）
+    // 非私聊保留原有逻辑（降级/Mock）
     const detectedUrlFallback = extractUrl(text);
-    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const plainTimestamp = Date.now();
-    // 消息防篡改：计算 HMAC-SHA256 签名
-    let plainHmac: string | undefined;
-    if (integrityKey) {
-      try {
-        plainHmac = await signMessage({ content: text, senderId: currentUserId, chatId, msgType: 'text', timestamp: plainTimestamp, integrityKey });
-      } catch (e) { console.warn('[Integrity] HMAC 签名失败:', e); }
-    }
-    const msg: Message = {
-      id: tempId,
-      chatId,
-      senderId: currentUserId,
-      senderProfile: { name: currentUser.name, avatar: currentUser.avatar }, // 强制注入当前用户 Profile
-      content: text,
-      type: 'text',
-      timestamp: plainTimestamp,
-      isEncrypted: true,
-      reactions: {},
-      status: 'sending',
-      burnAfterRead: effectiveBurnTimer,
-      forwardRestricted: forwardRestricted,
-      linkUrl: detectedUrlFallback || undefined,
-      mentions: currentMentions.length > 0 ? currentMentions : undefined,
-      hmac: plainHmac,
-      integrityStatus: plainHmac ? 'verified' : 'unverified',
-      replyTo: activeReply?.id,
-    };
-    sendMessage(chatId, msg);
-
-    // 通过 WebSocket 发送私聊消息（服务端存库并推送给对方）
-    const ws = signalWs?.current;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        type: 'private_send',
-        payload: {
-          chatId,
-          content: text,
-          msgType: 'text',
-          tempId,
-          ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}),
-          ...(plainHmac ? { hmac: plainHmac } : {}),
-          ...(activeReply ? { replyToId: activeReply.id } : {}),
-        },
-      }));
-    } else {
-      // WebSocket 不可用时回退到 REST API
-      const token = localStorage.getItem('user_token');
-      if (token) {
-        fetch(`/api/chat/${chatId}/messages`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`,
-          },
-          body: JSON.stringify({ content: text, msgType: 'text', ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), ...(plainHmac ? { hmac: plainHmac } : {}), ...(activeReply ? { replyToId: activeReply.id } : {}) }),
-        })
-          .then(r => r.ok ? r.json() : null)
-          .then(data => {
-            if (data?.message) {
-              dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId, realId: data.message.id });
-            }
-          })
-          .catch(() => {});
-      }
-    }
   }, [inputText, chatId, sendMessage, chat, e2ee, otherMember, sessionEstablished, addLog, burnTimer, forwardRestricted, signalWs, currentUserId, dispatch, integrityKey, pendingMentions, replyingTo, isGroupChat, groupSync]);
 
   const handleSendEmoji = useCallback(async (emoji: string) => {
@@ -1873,50 +1925,56 @@ export default function ChatDetailPage() {
       groupSync.sendMessage(emoji, 'text');
       return;
     }
-    const effectiveBurnTimer = chat?.ephemeralTimer ?? burnTimer;
-    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const emojiTimestamp = Date.now();
-    let emojiHmac: string | undefined;
-    if (integrityKey) {
-      try { emojiHmac = await signMessage({ content: emoji, senderId: currentUserId, chatId, msgType: 'text', timestamp: emojiTimestamp, integrityKey }); } catch {}
+
+    // P0: 私聊强制 E2EE
+    if (chat?.type === 'private' && otherMember && chatId !== 'c0' && chatId !== 'cBOT') {
+      try {
+        const payload = JSON.stringify({ content: emoji, msgType: 'text' });
+        const envelope = await e2ee.encrypt(otherMember, payload);
+        const envelopeStr = JSON.stringify(envelope);
+        const tempId = `enc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        
+        const msg: Message = {
+          id: tempId,
+          chatId,
+          senderId: currentUserId,
+          content: emoji,
+          type: 'text',
+          timestamp: Date.now(),
+          isEncrypted: true,
+          status: 'sending',
+          burnAfterRead: chat?.ephemeralTimer ?? burnTimer,
+        };
+        sendMessage(chatId, msg);
+
+        const ws = signalWs?.current;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'private_send',
+            payload: { chatId, content: envelopeStr, msgType: 'encrypted', tempId, burnAfterRead: msg.burnAfterRead },
+          }));
+        }
+        return;
+      } catch (err) {
+        toast.error('发送失败，安全连接异常');
+        return;
+      }
     }
+
+    // 兜底逻辑（非私聊）
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const msg: Message = {
       id: tempId,
       chatId,
       senderId: currentUserId,
       content: emoji,
       type: 'text',
-      timestamp: emojiTimestamp,
-      isEncrypted: true,
-      reactions: {},
+      timestamp: Date.now(),
+      isEncrypted: false,
       status: 'sending',
-      burnAfterRead: effectiveBurnTimer,
-      forwardRestricted: forwardRestricted,
-      hmac: emojiHmac,
-      integrityStatus: emojiHmac ? 'verified' : 'unverified',
     };
     sendMessage(chatId, msg);
-    // 通过 WS 发送
-    const ws = signalWs?.current;
-    if (ws && ws.readyState === WebSocket.OPEN && chatId !== 'c0' && chatId !== 'cBOT') {
-      ws.send(JSON.stringify({
-        type: 'private_send',
-        payload: { chatId, content: emoji, msgType: 'text', tempId, ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), ...(emojiHmac ? { hmac: emojiHmac } : {}) },
-      }));
-    } else if (chatId !== 'c0' && chatId !== 'cBOT') {
-      const token = localStorage.getItem('user_token');
-      if (token) {
-        fetch(`/api/chat/${chatId}/messages`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          body: JSON.stringify({ content: emoji, msgType: 'text', ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), ...(emojiHmac ? { hmac: emojiHmac } : {}) }),
-        })
-          .then(r => r.ok ? r.json() : null)
-          .then(data => { if (data?.message) dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId, realId: data.message.id }); })
-          .catch(() => {});
-      }
-    }
-  }, [chatId, sendMessage, burnTimer, forwardRestricted, chat, currentUserId, signalWs, dispatch, integrityKey]);
+  }, [chatId, sendMessage, burnTimer, chat, currentUserId, signalWs, otherMember, e2ee, isGroupChat, groupSync]);
 
   // ===== 贴纸消息发送 =====
   const handleSendSticker = useCallback(async (sticker: StickerItem) => {
@@ -2003,52 +2061,63 @@ export default function ChatDetailPage() {
         stickerSetName: sticker.packName || sticker.name || '贴纸',
         ...(sticker.mediaType === 'meme' ? { imageUrl: sticker.thumbUrl || sticker.url } : {}),
       };
-      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const stickerTimestamp = Date.now();
-      const effectiveBurnTimer = chat?.ephemeralTimer ?? burnTimer;
-      let stickerHmac: string | undefined;
-      if (integrityKey) {
-        try { stickerHmac = await signMessage({ content: stickerLabel, senderId: currentUserId, chatId, msgType: 'sticker', timestamp: stickerTimestamp, integrityKey }); } catch {}
+
+      // P0: 私聊强制 E2EE
+      if (chat?.type === 'private' && otherMember && chatId !== 'c0' && chatId !== 'cBOT') {
+        try {
+          const payload = JSON.stringify({
+            content: stickerLabel,
+            msgType: 'sticker',
+            extra: stickerExtra
+          });
+          const envelope = await e2ee.encrypt(otherMember, payload);
+          const envelopeStr = JSON.stringify(envelope);
+          const tempId = `enc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+          const msg: Message = {
+            id: tempId,
+            chatId,
+            senderId: currentUserId,
+            content: stickerLabel,
+            type: 'sticker',
+            timestamp: Date.now(),
+            isEncrypted: true,
+            status: 'sending',
+            stickerUrl: sticker.url,
+            stickerEmoji: sticker.emoji,
+            stickerSetName: stickerExtra.stickerSetName,
+            burnAfterRead: chat?.ephemeralTimer ?? burnTimer,
+          };
+          sendMessage(chatId, msg);
+
+          const ws = signalWs?.current;
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+              type: 'private_send',
+              payload: { chatId, content: envelopeStr, msgType: 'encrypted', tempId, burnAfterRead: msg.burnAfterRead },
+            }));
+          }
+          return;
+        } catch (err) {
+          toast.error('贴纸发送失败，安全会话异常');
+          return;
+        }
       }
+
+      // 非私聊兜底
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const msg: Message = {
         id: tempId,
         chatId,
         senderId: currentUserId,
         content: stickerLabel,
         type: 'sticker',
-        timestamp: stickerTimestamp,
-        isEncrypted: true,
-        reactions: {},
+        timestamp: Date.now(),
+        isEncrypted: false,
         status: 'sending',
         stickerUrl: sticker.url,
-        stickerEmoji: sticker.emoji,
-        stickerSetName: stickerExtra.stickerSetName,
-        ...(sticker.mediaType === 'meme' ? { imageUrl: sticker.thumbUrl || sticker.url } : {}),
-        burnAfterRead: effectiveBurnTimer,
-        forwardRestricted,
-        hmac: stickerHmac,
-        integrityStatus: stickerHmac ? 'verified' : 'unverified',
       };
       sendMessage(chatId, msg);
-      const ws = signalWs?.current;
-      if (ws && ws.readyState === WebSocket.OPEN && chatId !== 'c0' && chatId !== 'cBOT') {
-        ws.send(JSON.stringify({
-          type: 'private_send',
-          payload: { chatId, content: stickerLabel, msgType: 'sticker', tempId, extra: stickerExtra, ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), ...(stickerHmac ? { hmac: stickerHmac } : {}) },
-        }));
-      } else if (chatId !== 'c0' && chatId !== 'cBOT') {
-        const token = localStorage.getItem('user_token');
-        if (token) {
-          fetch(`/api/chat/${chatId}/messages`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-            body: JSON.stringify({ content: stickerLabel, msgType: 'sticker', extra: stickerExtra, ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), ...(stickerHmac ? { hmac: stickerHmac } : {}) }),
-          })
-            .then(r => r.ok ? r.json() : null)
-            .then(data => { if (data?.message) dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId, realId: data.message.id }); })
-            .catch(() => {});
-        }
-      }
     } catch (error) {
       console.error('[pages/ChatDetailPage] 发送贴纸失败:', error, sticker);
       toast.error('发送失败，请重新选择一个贴纸');
@@ -2062,18 +2131,24 @@ export default function ChatDetailPage() {
     setShowExtra(false);
 
     try {
-      // 读取文件为 Base64
-      const reader = new FileReader();
-      const dataBase64 = await new Promise<string>((resolve, reject) => {
-        reader.onload = () => {
-          const result = reader.result as string;
-          // 去掉 data:xxx;base64, 前缀
-          const base64 = result.split(',')[1];
-          resolve(base64);
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
+      let dataBase64 = '';
+      let fileKey: string | undefined;
+      let iv: string | undefined;
+
+      const isPrivate = chat?.type === 'private' && otherMember && chatId !== 'c0' && chatId !== 'cBOT';
+      const { bufferToBase64 } = await import('../lib/e2ee/CryptoUtils');
+
+      if (isPrivate) {
+        addLog('[E2EE] 正在加密媒体文件...');
+        const buffer = await file.arrayBuffer();
+        const encrypted = await e2ee.encryptFile(buffer);
+        dataBase64 = bufferToBase64(encrypted.ciphertext);
+        fileKey = encrypted.fileKey;
+        iv = encrypted.iv;
+      } else {
+        const buffer = await file.arrayBuffer();
+        dataBase64 = bufferToBase64(buffer);
+      }
 
       // 上传到服务器
       const resp = await fetch('/api/media/upload', {
@@ -2108,103 +2183,74 @@ export default function ChatDetailPage() {
 
       const effectiveBurnTimer = chat?.ephemeralTimer ?? burnTimer;
 
+      // 私聊 E2EE 发送
+      if (isPrivate) {
+        const label = mediaType === 'image' ? '[图片]' : '[视频]';
+        const payload = JSON.stringify({
+          content: label,
+          msgType: mediaType,
+          extra: {
+            [mediaType === 'image' ? 'imageUrl' : 'videoUrl']: data.url,
+            fileKey,
+            iv,
+            isEncryptedMedia: true,
+          }
+        });
+
+        const envelope = await e2ee.encrypt(otherMember, payload);
+        const envelopeStr = JSON.stringify(envelope);
+        const encTempId = `enc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const msgTimestamp = Date.now();
+
+        const msg: Message = {
+          id: encTempId,
+          chatId,
+          senderId: currentUserId,
+          content: label,
+          type: mediaType,
+          timestamp: msgTimestamp,
+          isEncrypted: true,
+          status: 'sending',
+          imageUrl: mediaType === 'image' ? data.url : undefined,
+          videoUrl: mediaType === 'video' ? data.url : undefined,
+          burnAfterRead: effectiveBurnTimer,
+          forwardRestricted,
+        };
+        sendMessage(chatId, msg);
+
+        const ws = signalWs?.current;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'private_send',
+            payload: { 
+              chatId, 
+              content: envelopeStr, 
+              msgType: 'encrypted', 
+              tempId: encTempId, 
+              burnAfterRead: effectiveBurnTimer 
+            },
+          }));
+        }
+        toast.success(`${mediaType === 'image' ? '图片' : '视频'}已加密发送`);
+        return;
+      }
+
+      // 非私聊兜底逻辑
       const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const mediaTimestamp = Date.now();
-      if (mediaType === 'image') {
-        let imgHmac: string | undefined;
-        if (integrityKey) {
-          try { imgHmac = await signMessage({ content: '[图片]', senderId: currentUserId, chatId, msgType: 'image', timestamp: mediaTimestamp, integrityKey }); } catch {}
-        }
-        const msg: Message = {
-          id: tempId,
-          chatId,
-          senderId: currentUserId,
-          content: '[图片]',
-          type: 'image',
-          timestamp: mediaTimestamp,
-          isEncrypted: true,
-          reactions: {},
-          status: 'sending',
-          imageUrl: data.url,
-          burnAfterRead: effectiveBurnTimer,
-          forwardRestricted: forwardRestricted,
-          hmac: imgHmac,
-          integrityStatus: imgHmac ? 'verified' : 'unverified',
-        };
-        sendMessage(chatId, msg);
-        // WS 发送
-        const ws = signalWs?.current;
-        if (ws && ws.readyState === WebSocket.OPEN && chatId !== 'c0' && chatId !== 'cBOT') {
-          ws.send(JSON.stringify({
-            type: 'private_send',
-            payload: { chatId, content: '[图片]', msgType: 'image', tempId, extra: { imageUrl: data.url }, ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), ...(imgHmac ? { hmac: imgHmac } : {}) },
-          }));
-        } else if (chatId !== 'c0' && chatId !== 'cBOT') {
-          const token = localStorage.getItem('user_token');
-          if (token) {
-            fetch(`/api/chat/${chatId}/messages`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-              body: JSON.stringify({ content: '[图片]', msgType: 'image', extra: { imageUrl: data.url }, ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), ...(imgHmac ? { hmac: imgHmac } : {}) }),
-            })
-              .then(r => r.ok ? r.json() : null)
-              .then(res => {
-                if (res?.message) {
-                  dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId, realId: res.message.id });
-                }
-              })
-              .catch(() => {});
-          }
-        }
-        toast.success('图片发送成功');
-      } else {
-        let vidHmac: string | undefined;
-        if (integrityKey) {
-          try { vidHmac = await signMessage({ content: '[视频]', senderId: currentUserId, chatId, msgType: 'video', timestamp: mediaTimestamp, integrityKey }); } catch {}
-        }
-        const msg: Message = {
-          id: tempId,
-          chatId,
-          senderId: currentUserId,
-          content: '[视频]',
-          type: 'video',
-          timestamp: mediaTimestamp,
-          isEncrypted: true,
-          reactions: {},
-          status: 'sending',
-          videoUrl: data.url,
-          burnAfterRead: effectiveBurnTimer,
-          forwardRestricted: forwardRestricted,
-          hmac: vidHmac,
-          integrityStatus: vidHmac ? 'verified' : 'unverified',
-        };
-        sendMessage(chatId, msg);
-        // WS 发送
-        const ws = signalWs?.current;
-        if (ws && ws.readyState === WebSocket.OPEN && chatId !== 'c0' && chatId !== 'cBOT') {
-          ws.send(JSON.stringify({
-            type: 'private_send',
-            payload: { chatId, content: '[视频]', msgType: 'video', tempId, extra: { videoUrl: data.url }, ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), ...(vidHmac ? { hmac: vidHmac } : {}) },
-          }));
-        } else if (chatId !== 'c0' && chatId !== 'cBOT') {
-          const token = localStorage.getItem('user_token');
-          if (token) {
-            fetch(`/api/chat/${chatId}/messages`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-              body: JSON.stringify({ content: '[视频]', msgType: 'video', extra: { videoUrl: data.url }, ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), ...(vidHmac ? { hmac: vidHmac } : {}) }),
-            })
-              .then(r => r.ok ? r.json() : null)
-              .then(res => {
-                if (res?.message) {
-                  dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId, realId: res.message.id });
-                }
-              })
-              .catch(() => {});
-          }
-        }
-        toast.success('视频发送成功');
-      }
+      const msg: Message = {
+        id: tempId,
+        chatId,
+        senderId: currentUserId,
+        content: mediaType === 'image' ? '[图片]' : '[视频]',
+        type: mediaType,
+        timestamp: mediaTimestamp,
+        isEncrypted: false,
+        status: 'sending',
+        imageUrl: mediaType === 'image' ? data.url : undefined,
+        videoUrl: mediaType === 'video' ? data.url : undefined,
+      };
+      sendMessage(chatId, msg);
     } catch (err) {
       console.error('[Media] 上传失败:', err);
       toast.error('文件上传失败，请重试');

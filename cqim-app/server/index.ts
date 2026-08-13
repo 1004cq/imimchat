@@ -45,6 +45,7 @@ import cryptoRouter from "./crypto";
 import mlsRouter from "./mls-group";
 import burnRouter, { startBurnCleanupCron } from "./burn-message";
 import privateChatRouter from "./private-chat";
+import homeRouter from "./home";
 import friendRouter from "./friend";
 import qrRouter from "./qr";
 import fcmRouter from "./fcm";
@@ -906,12 +907,14 @@ async function handleMessage(client: SignalClient, raw: string) {
     }
 
     case "group_pull": {
-      const { groupId, afterSeq, beforeSeq, limit } = msg.payload || {};
+      const { groupId, afterSeq, lastSeq, beforeSeq, limit } = msg.payload || {};
+      // lastSeq 是重连协议的语义名称；afterSeq 保留用于旧客户端兼容
+      const resumeSeq = lastSeq !== undefined ? Number(lastSeq) : afterSeq;
       if (groupId) {
         pullGroupMessages({
           groupId,
           userId: client.userId,
-          afterSeq,
+          afterSeq: resumeSeq,
           beforeSeq,
           limit,
         }).then(result => {
@@ -1239,12 +1242,22 @@ async function handleMessage(client: SignalClient, raw: string) {
     case "private_send": {
       // payload: { chatId, content, msgType, replyToId, extra, tempId, burnAfterRead, hmac }
       const { chatId: pChatId, content: pContent, msgType: pMsgType, replyToId: pReplyToId, extra: rawPExtra, tempId, burnAfterRead: pBurnAfterRead, hmac: pHmac } = msg.payload || {};
+
+      // 强制 P0：私聊必须加密，禁止明文发送
+      if (pMsgType !== 'encrypted') {
+        sendTo(client.userId, {
+          type: 'private_message' as any,
+          payload: { ack: true, error: '私聊强制要求端到端加密，请发送加密消息', tempId },
+        });
+        break;
+      }
+
       // 安全处理 extra：如果客户端传入了字符串，尝试解析为对象
       let pExtra = rawPExtra;
       if (typeof rawPExtra === 'string') {
         try { pExtra = JSON.parse(rawPExtra); } catch { pExtra = undefined; }
       }
-      if (pChatId && (pContent || pMsgType !== 'text')) {
+      if (pChatId && pContent) {
         // 存储消息到数据库
         (async () => {
           try {
@@ -1255,14 +1268,14 @@ async function handleMessage(client: SignalClient, raw: string) {
 
             // 解析阅后即焚参数（合法值：5, 10, 30, 60, 300, 3600, 86400, 604800）
             const validBurnTimers = [5, 10, 30, 60, 300, 3600, 86400, 604800];
-            const burnSeconds = (typeof pBurnAfterRead === 'number' && validBurnTimers.includes(pBurnAfterRead)) ? pBurnAfterRead : null;
+            const burnSeconds = (typeof pBurnAfterRead === 'number' && validBurnTimers.includes(pBurnAfterRead)) ? burnAfterRead : null;
 
             const message = await prisma.privateMessage.create({
               data: {
                 chatId: pChatId,
                 senderId: client.userId,
-                msgType: pMsgType || 'text',
-                content: pContent || '',
+                msgType: 'encrypted',
+                content: pContent || '', // 存储加密信封 JSON
                 replyToId: pReplyToId || null,
                 extra: pExtra ? JSON.stringify(pExtra) : null,
                 status: 'sent',
@@ -1272,15 +1285,7 @@ async function handleMessage(client: SignalClient, raw: string) {
             });
 
             // 更新会话最后消息
-            const preview = (pMsgType || 'text') === 'text' ? (pContent || '').slice(0, 100) :
-              pMsgType === 'image' ? '[图片]' :
-              pMsgType === 'voice' ? '[语音消息]' :
-              pMsgType === 'video' ? '[视频]' :
-              pMsgType === 'file' ? '[文件]' :
-              pMsgType === 'sticker' ? '[贴纸]' :
-              pMsgType === 'location' ? '[位置]' :
-              pMsgType === 'location_share' ? '[位置共享]' :
-              (pContent || '').slice(0, 100);
+            const preview = '🔒 [加密消息]';
 
             await prisma.chat.update({
               where: { id: pChatId },
@@ -1335,13 +1340,7 @@ async function handleMessage(client: SignalClient, raw: string) {
               // 获取发送者头像的完整 URL（用于推送通知显示）
               const senderAvatarPath = avatarToProxy(senderUser?.avatar);
               const senderAvatarUrl = senderAvatarPath ? `https://wed.imim.chat${senderAvatarPath}` : '';
-              const previewText = (pMsgType || 'text') === 'text' ? (pContent || '').slice(0, 50) :
-                pMsgType === 'image' ? '[图片]' :
-                pMsgType === 'voice' ? '[语音消息]' :
-                pMsgType === 'video' ? '[视频]' :
-                pMsgType === 'file' ? '[文件]' :
-                pMsgType === 'sticker' ? '[贴纸]' :
-                pMsgType === 'location' ? '[位置]' : '[新消息]';
+              const previewText = '🔒 [加密消息]';
               // 查询接收方的推送 Token 类型
               const peerUser = await prisma.user.findUnique({
                 where: { id: peerId },
@@ -1616,7 +1615,8 @@ async function startServer() {
   startBurnCleanupCron(60000);
 
   // ============ 私聊消息 API ============
-  app.use('/api/chat', privateChatRouter);
+  app.use("/api/chat", privateChatRouter);
+app.use("/api/home", homeRouter);
 
   // 好友关系 API
   app.use('/api/friend', friendRouter);

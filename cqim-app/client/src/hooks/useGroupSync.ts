@@ -124,6 +124,7 @@ export function useGroupSync(options: UseGroupSyncOptions) {
 
   const lastAckSeqRef = useRef(0);
   const localSeqRef = useRef(0);
+  const lastPullAtRef = useRef(0);
   const batcherRef = useRef<MessageBatcher | null>(null);
   const messagesRef = useRef<GroupMessage[]>([]);
   const onNewMessageRef = useRef(onNewMessage);
@@ -192,6 +193,17 @@ export function useGroupSync(options: UseGroupSyncOptions) {
     }
   }, [groupId, userId, pageSize]);
 
+  const lastSeqStorageKey = `cqim:last-seq:${groupId}:${userId}`;
+
+  const persistLastSeq = useCallback((seq: number) => {
+    if (!groupId || !userId || seq <= 0) return;
+    try {
+      localStorage.setItem(lastSeqStorageKey, String(seq));
+    } catch {
+      // localStorage 不可用时不影响实时消息
+    }
+  }, [groupId, userId, lastSeqStorageKey]);
+
   // ============ 初始加载 ============
 
   const loadInitial = useCallback(async () => {
@@ -200,13 +212,21 @@ export function useGroupSync(options: UseGroupSyncOptions) {
     try {
       const msgs = await pullMessages();
       setMessages(msgs);
-      if (msgs.length > 0) {
-        localSeqRef.current = msgs[msgs.length - 1].seq;
+      let initialSeq = 0;
+      try {
+        initialSeq = Number(localStorage.getItem(lastSeqStorageKey) || 0);
+      } catch {
+        initialSeq = 0;
       }
+      if (msgs.length > 0) {
+        initialSeq = Math.max(initialSeq, msgs[msgs.length - 1].seq);
+      }
+      localSeqRef.current = initialSeq;
+      persistLastSeq(initialSeq);
     } finally {
       setLoading(false);
     }
-  }, [enabled, pullMessages]);
+  }, [enabled, pullMessages, lastSeqStorageKey, persistLastSeq]);
 
   // 首次进入加载
   useEffect(() => {
@@ -376,6 +396,7 @@ export function useGroupSync(options: UseGroupSyncOptions) {
           // 通过合并器处理
           batcherRef.current?.add(msg);
           localSeqRef.current = Math.max(localSeqRef.current, msg.seq);
+          persistLastSeq(localSeqRef.current);
 
           // 触发新消息回调（用于更新会话列表）
           onNewMessageRef.current?.(msg);
@@ -415,6 +436,7 @@ export function useGroupSync(options: UseGroupSyncOptions) {
               localSeqRef.current,
               Math.max(...batchMsgs.map(m => m.seq))
             );
+            persistLastSeq(localSeqRef.current);
             // 触发最后一条消息回调
             onNewMessageRef.current?.(batchMsgs[batchMsgs.length - 1]);
           }
@@ -443,7 +465,7 @@ export function useGroupSync(options: UseGroupSyncOptions) {
     return () => {
       ws.removeEventListener('message', handleWsMessage);
     };
-  }, [ws, enabled, groupId, handleBatchMessages]);
+  }, [ws, enabled, groupId, handleBatchMessages, persistLastSeq]);
 
   // ============ 加入/离开群在线列表 ============
 
@@ -580,24 +602,37 @@ export function useGroupSync(options: UseGroupSyncOptions) {
     setUnreadCount(0);
   }, [ws, groupId]);
 
-  // ============ 离线补偿（重连后自动补拉） ============
+  // ============ 离线补偿（重连后按 lastSeq 自动补拉） ============
 
   useEffect(() => {
-    if (!ws || !enabled) return;
+    if (!enabled || !groupId) return;
 
-    const handleOpen = () => {
-      // 重连后补拉离线消息
-      if (localSeqRef.current > 0) {
-        ws.send(JSON.stringify({
-          type: 'group_pull',
-          payload: { groupId, afterSeq: localSeqRef.current, limit: 100 },
-        }));
-      }
+    const pullAfterReconnect = (candidate?: WebSocket | null) => {
+      const activeWs = candidate || ws;
+      const lastSeq = localSeqRef.current;
+      if (!activeWs || activeWs.readyState !== WebSocket.OPEN || lastSeq <= 0) return;
+
+      // 同一次重连可能同时触发 open 与全局事件，避免重复补拉
+      const now = Date.now();
+      if (now - lastPullAtRef.current < 500) return;
+      lastPullAtRef.current = now;
+      activeWs.send(JSON.stringify({
+        type: 'group_pull',
+        payload: { groupId, lastSeq, limit: 100 },
+      }));
     };
 
-    ws.addEventListener('open', handleOpen);
+    const handleOpen = () => pullAfterReconnect(ws);
+    const handleGlobalOpen = (event: Event) => {
+      const detail = (event as CustomEvent<{ ws?: WebSocket }>).detail;
+      pullAfterReconnect(detail?.ws || null);
+    };
+
+    ws?.addEventListener('open', handleOpen);
+    window.addEventListener('cqim:signal-open', handleGlobalOpen);
     return () => {
-      ws.removeEventListener('open', handleOpen);
+      ws?.removeEventListener('open', handleOpen);
+      window.removeEventListener('cqim:signal-open', handleGlobalOpen);
     };
   }, [ws, enabled, groupId]);
 
