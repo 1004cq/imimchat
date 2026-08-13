@@ -235,12 +235,15 @@ router.post('/send', async (req: Request, res: Response) => {
     const contentType = String(req.headers['content-type'] || '');
 
     if (!contentType.includes('multipart/form-data')) {
-      const { chatId, type = 'text', content = '', replyTo } = req.body || {};
+      const { chatId, msgType, content = '', replyTo } = req.body || {};
       if (!chatId) return res.status(400).json({ error: '缺少 chatId' });
-      if (type === 'text' && !String(content).trim()) {
-        return res.status(400).json({ error: '消息内容不能为空' });
+      if (msgType !== 'encrypted') {
+        return res.status(400).json({ error: '私聊强制要求端到端加密，请发送加密消息 (msgType=encrypted)' });
       }
-      return await createPrivateMessageAndNotify(req, res, chatId, type, String(content || ''), replyTo || null);
+      if (!String(content).trim()) {
+        return res.status(400).json({ error: '加密信封内容不能为空' });
+      }
+      return await createPrivateMessageAndNotify(req, res, chatId, 'encrypted', String(content), replyTo || null);
     }
 
     const busboy = (await import('busboy')).default;
@@ -272,9 +275,13 @@ router.post('/send', async (req: Request, res: Response) => {
       try {
         if (truncated) return res.status(400).json({ error: '文件过大，最大 200MB' });
         const chatId = fields.chatId;
-        const msgType = fields.type || 'text';
+        const msgType = fields.type || fields.msgType || 'text';
         const replyToId = fields.replyTo || fields.replyToId || null;
         if (!chatId) return res.status(400).json({ error: '缺少 chatId' });
+
+        if (msgType !== 'encrypted') {
+          return res.status(400).json({ error: '私聊强制要求端到端加密，请发送加密消息 (msgType=encrypted)' });
+        }
 
         let content = fields.content || messagePreview(msgType, '');
         const extra: Record<string, any> = {};

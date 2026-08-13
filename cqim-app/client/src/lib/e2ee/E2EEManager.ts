@@ -121,8 +121,7 @@ export class E2EEManager {
   private _registrationId = 0;
   private _identityKeyPair: KeyPairB64 | null = null;
 
-  // 模拟的对端 PreKey Bundle 缓存（真实场景从服务器获取）
-  private mockBundles: Map<string, PreKeyBundle> = new Map();
+  // 已彻底禁用 Mock Bundle，强制使用服务器获取真实凭证
 
   private static _instance: E2EEManager | null = null;
 
@@ -386,46 +385,7 @@ export class E2EEManager {
     }
   }
 
-  /**
-   * 为指定对端生成模拟的 PreKey Bundle（回退方案）
-   */
-  async getOrCreateMockBundle(peerId: string): Promise<PreKeyBundle> {
-    if (this.mockBundles.has(peerId)) {
-      return this.mockBundles.get(peerId)!;
-    }
-
-    const identityKP = await generateKeyPair();
-    const identityExported = await exportKeyPair(identityKP);
-    const signedPreKP = await generateKeyPair();
-    const signedPreExported = await exportKeyPair(signedPreKP);
-    const oneTimePreKP = await generateKeyPair();
-    const oneTimePreExported = await exportKeyPair(oneTimePreKP);
-
-    const bundle: PreKeyBundle = {
-      registrationId: generateRegistrationId(),
-      identityKey: identityExported.pubKey,
-      signedPreKeyId: 1,
-      signedPreKey: signedPreExported.pubKey,
-      signedPreKeySignature: bufferToBase64(base64ToBuffer(signedPreExported.pubKey)),
-      oneTimePreKeyId: 0,
-      oneTimePreKey: oneTimePreExported.pubKey,
-    };
-
-    (bundle as any)._signedPreKeyPriv = signedPreExported.privKey;
-    (bundle as any)._oneTimePreKeyPriv = oneTimePreExported.privKey;
-    (bundle as any)._identityPriv = identityExported.privKey;
-
-    this.mockBundles.set(peerId, bundle);
-
-    await this.store.saveIdentity({
-      userId: peerId,
-      identityKey: identityExported.pubKey,
-      trusted: true,
-      addedAt: Date.now(),
-    });
-
-    return bundle;
-  }
+  // 严格隔离 Mock，不再提供 getOrCreateMockBundle
 
   // ============================================================
   // X3DH 密钥协商
@@ -712,12 +672,7 @@ export class E2EEManager {
   /** 处理 PreKey 消息（作为接收方建立会话） */
   private async handlePreKeyMessage(peerId: string, envelope: SignalEnvelope): Promise<void> {
     console.log('[E2EE] 处理 PreKey 消息，建立被动会话');
-
-    // 优先从缓存获取，否则从服务器获取
-    let bundle = this.mockBundles.get(peerId);
-    if (!bundle) {
-      bundle = await this.fetchRemoteBundle(peerId);
-    }
+    const bundle = await this.fetchRemoteBundle(peerId);
     if (bundle) {
       await this.establishSession(peerId, bundle);
     }
@@ -771,11 +726,6 @@ export class E2EEManager {
 
     const identity = await this.store.getIdentity(peerId);
     if (!identity) {
-      // 如果没有存储的 identity，尝试从 mock bundle 获取
-      const bundle = this.mockBundles.get(peerId);
-      if (bundle) {
-        return computeSafetyNumber(this._identityKeyPair.pubKey, bundle.identityKey);
-      }
       return '';
     }
 
@@ -792,8 +742,6 @@ export class E2EEManager {
   async getRemoteFingerprint(peerId: string): Promise<string> {
     const identity = await this.store.getIdentity(peerId);
     if (!identity) {
-      const bundle = this.mockBundles.get(peerId);
-      if (bundle) return computeFingerprint(bundle.identityKey);
       return '';
     }
     return computeFingerprint(identity.identityKey);
@@ -825,20 +773,7 @@ export class E2EEManager {
     const identity = await this.store.getIdentity(peerId);
 
     if (!session && !identity) {
-      // 检查 mock bundle
-      const bundle = this.mockBundles.get(peerId);
-      if (!bundle) return null;
-
-      return {
-        peerId,
-        established: false,
-        remoteIdentityKey: bundle.identityKey,
-        remoteFingerprint: await computeFingerprint(bundle.identityKey),
-        safetyNumber: await this.getSafetyNumber(peerId),
-        lastUpdated: Date.now(),
-        messagesSent: 0,
-        messagesReceived: 0,
-      };
+      return null;
     }
 
     const remoteKey = identity?.identityKey || '';
@@ -866,14 +801,12 @@ export class E2EEManager {
   /** 重置与对端的会话 */
   async resetSession(peerId: string): Promise<void> {
     await this.store.removeSession(peerId);
-    this.mockBundles.delete(peerId);
     console.log('[E2EE] 已重置与', peerId, '的会话');
   }
 
   /** 重置所有数据（退出登录） */
   async resetAll(): Promise<void> {
     await this.store.clearAll();
-    this.mockBundles.clear();
     this._initialized = false;
     this._registrationId = 0;
     this._identityKeyPair = null;

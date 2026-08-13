@@ -977,7 +977,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 let finalExtra = extra;
                 let decryptionFailed = false;
 
-                // P0: 强制 E2EE 解密
+                // P0: 强制 E2EE 解密，拒绝旧明文投递
                 if (msgType === 'encrypted' && content && !isRevoked) {
                   try {
                     const { E2EEManager } = await import('../lib/e2ee/E2EEManager');
@@ -994,6 +994,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
                     decryptedContent = '🔒 无法解密消息，请重置安全会话';
                     decryptionFailed = true;
                   }
+                } else if (msgType !== 'encrypted' && !isRevoked) {
+                  decryptedContent = '⚠️ [不支持的旧明文消息]';
+                  decryptionFailed = true;
                 }
 
                 const newMsg: Message = {
@@ -1044,7 +1047,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                             type: 'private',
                             name: c.peer?.nickname || c.peer?.username || '未知用户',
                             avatar: c.peer?.avatar || '',
-                            lastMessage: content || '',
+                            lastMessage: '🔒 [加密消息]',
                             lastMessageTime: createdAt || Date.now(),
                             unreadCount: 1,
                             isPinned: false,

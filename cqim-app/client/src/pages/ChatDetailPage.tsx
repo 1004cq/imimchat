@@ -1466,7 +1466,7 @@ export default function ChatDetailPage() {
           let finalExtra = typeof m.extra === 'string' ? JSON.parse(m.extra) : m.extra;
           let decryptionFailed = false;
 
-          // P0: 历史消息解密
+          // P0: 历史消息解密，非加密明文消息打上不支持占位
           if (m.msgType === 'encrypted' && m.content && !m.isRevoked) {
             try {
               const envelope = JSON.parse(m.content);
@@ -1480,6 +1480,9 @@ export default function ChatDetailPage() {
               decryptedContent = '🔒 无法解密历史消息';
               decryptionFailed = true;
             }
+          } else if (m.msgType !== 'encrypted' && !m.isRevoked) {
+            decryptedContent = '⚠️ [不支持的旧明文消息]';
+            decryptionFailed = true;
           }
 
           return {
