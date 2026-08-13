@@ -1,5 +1,0 @@
-flask==3.0.3
-requests==2.32.3
-gunicorn==22.0.0
-alibabacloud_dypnsapi20170525==1.2.1
-alibabacloud_tea_openapi>=0.3.12,<1.0.0
