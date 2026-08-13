@@ -1,179 +1,101 @@
-# imimchat Private Instant Messaging System
+# CQIM Full-stack Instant Messaging System
 
-[**中文版**](./README.md) | **English Version**
+**English Version** | [中文版](./README.md)
 
-> A private, end-to-end encrypted instant messaging system based on [WuKongIM](https://github.com/WuKongIM/WuKongIM) and [TangSengDaoDao](https://github.com/TangSengDaoDao/TangSengDaoDaoServer), with completed brand customization, mobile adaptation, and security hardening.
+> **CQIM** is a high-performance, ultra-secure full-stack IM system. The core development has shifted to **[cqim-app](./cqim-app/)**, featuring mandatory End-to-End Encryption (Signal/MLS), Moments (Social Feed), Sticker Store, and 10k+ concurrent group chat optimizations.
 
-**Access URL:** https://wed.imim.chat  
-**Server IP:** 42.194.167.201 (Tencent Cloud)  
+**Access URL:** https://wed.imim.chat (Subject to actual deployment)  
 **Admin Dashboard:** https://wed.imim.chat/admin  
+**Core Directory:** `./cqim-app`  
 **Deployment:** Docker Compose + Nginx Reverse Proxy
 
 ---
 
-## Documentation Navigation
+## Project Components
 
-| Document | 中文 | English |
-|----------|------|---------|
-| System Architecture | [architecture.md](./docs/architecture.md) | [architecture_en.md](./docs/architecture_en.md) |
-| Optimization Roadmap | [optimization.md](./docs/optimization.md) | [optimization_en.md](./docs/optimization_en.md) |
-| Project Handover | [handover.md](./docs/handover.md) | [handover_en.md](./docs/handover_en.md) |
+This repository is centered around **CQIM**, while retaining legacy WuKongIM components as optional references.
+
+| Component | Status | Tech Stack | Description |
+|-----------|--------|------------|-------------|
+| **CQIM** | **Core / Main** | React + Node.js + Go + MongoDB + Redis | Full-stack IM with mandatory E2EE, Moments, etc. |
+| **WuKongIM** | Legacy / Optional | WuKongIM + TangSengDaoDao | Earlier private IM engine solution. |
+
+---
+
+## Tech Stack (CQIM)
+
+- **Frontend**: TypeScript / React 19 / Vite / Zustand / Framer Motion / RxDB (IndexedDB)
+- **Backend**: Node.js / Express / Prisma
+- **Gateway**: Go Gateway (High-performance WebSocket fan-out for groups)
+- **Database**: MongoDB (Primary), Redis (Cache/Presence/Pub-Sub), MySQL (Audit/Optional)
+- **Security**: Signal Protocol (Private E2EE), MLS (Group E2EE), AES-GCM (Media Encryption)
+- **Deployment**: Docker Compose + Nginx
+
+---
+
+## Core Features
+
+- **Base Messaging**: Private/Group chat, Voice, Image/Video/File transfer, Message Recall.
+- **Mandatory E2EE**: All private chats use Signal Protocol; group chats use MLS. Zero-knowledge storage.
+- **Social Feed**: Full Moments system with images, videos, likes, and comments.
+- **Extensions**: Sticker Store (Telegram sticker import), Multi-channel Push (Web Push/FCM/APNs), Admin Dashboard.
+- **Performance**: Web Worker crypto, IndexedDB local persistence, Redis cache consistency.
 
 ---
 
 ## Directory Structure
 
-```
+```text
 imimchat/
-├── docker/                     # Docker deployment configurations
-│   ├── docker-compose.yaml     # Current production configuration (customized)
-│   ├── docker-compose.yaml.original  # Original official configuration (backup)
-│   └── .env.example            # Environment variables template (passwords excluded)
-├── nginx/                      # Nginx reverse proxy configurations
-│   └── wed.imim.chat.conf      # Main HTTPS configuration
-├── frontend/                   # Frontend custom files (injected into Web container)
-│   ├── index.html              # Entry HTML (reference, includes script loading order)
-│   ├── manifest.json           # PWA configuration
-│   └── static/
-│       ├── js/
-│       │   └── imim_adaptive.js    # Mobile adaptation script v3 (core customization)
-│       └── css/
-│           └── mobile.css          # Mobile CSS supplementary styles
-├── scripts/                    # Operation and maintenance scripts
-│   ├── deploy-frontend.sh      # Deploy frontend custom files
-│   ├── backup-db.sh            # Database backup script
-│   └── manage.sh               # Service management (start/stop/logs/update)
-├── docs/                       # Project documentation
-│   ├── architecture_en.md      # System architecture explanation
-│   ├── optimization_en.md      # Optimization plan and roadmap
-│   └── handover_en.md          # Project handover document
-├── .gitignore
-├── README.md                   # Chinese README
-└── README_en.md                # English README
+├── cqim-app/                   # ★ Core: CQIM Full-stack Application
+│   ├── client/                 # Frontend source (React + Vite)
+│   ├── server/                 # Backend source (Node.js + Express)
+│   ├── go-gateway/             # Go Real-time Gateway
+│   ├── prisma/                 # DB Schema & Migrations
+│   └── docker-compose.yml      # Production orchestration
+├── docs/                       # Detailed documentation
+├── register-service/           # Registration middleware (Optional)
+├── nginx/                      # Nginx reverse proxy samples
+└── scripts/                    # Maintenance & Backup scripts
 ```
 
 ---
 
-## Quick Start
+## Development & Deployment
 
-### Prerequisites
+### Quick Start (CQIM)
 
-| Component | Version |
-|-----------|---------|
-| OS | Ubuntu 22.04 LTS |
-| Docker | 29.x+ |
-| Docker Compose | v2+ |
-| Nginx | 1.18+ |
-| Memory | 4GB+ Recommended |
-| Disk | 40GB+ Recommended |
+1. **Enter Workspace**:
+   ```bash
+   cd cqim-app
+   ```
 
-### Fresh Deployment
+2. **Configure Environment**:
+   ```bash
+   cp .env.example .env
+   # Edit .env for DB credentials, strong passwords, and CORS whitelist.
+   ```
 
-```bash
-# 1. Clone this repository
-git clone https://github.com/1004cq/imimchat.git
-cd imimchat
+3. **One-click Start**:
+   ```bash
+   docker-compose up -d --build
+   ```
 
-# 2. Configure environment variables
-cp docker/.env.example docker/.env
-nano docker/.env  # Modify all passwords and IP addresses
-
-# 3. Start all services
-cd docker && docker compose up -d
-
-# 4. Configure Nginx
-sudo cp nginx/wed.imim.chat.conf /etc/nginx/sites-enabled/your-domain.conf
-# Modify domain and SSL certificate paths
-sudo nginx -t && sudo systemctl reload nginx
-
-# 5. Inject frontend custom files
-bash scripts/deploy-frontend.sh
-```
-
-### Daily Operations
-
-```bash
-# Check service status
-bash scripts/manage.sh status
-
-# View API logs
-bash scripts/manage.sh logs tangsengdaodaoserver
-
-# Backup database
-bash scripts/backup-db.sh
-
-# Update frontend custom files
-bash scripts/deploy-frontend.sh
-```
+For detailed instructions, see: **[docs/DEPLOY.md](./cqim-app/docs/DEPLOY.md)**
 
 ---
 
-## Service Architecture
+## Documentation
 
-```
-User (HTTPS)
-    │
-    ▼
-Nginx (443/80) ─── SSL Termination ─── wed.imim.chat
-    │
-    ├── /          → Web Frontend (Docker:82)  [tangsengdaodaoweb]
-    ├── /v1/       → Business API (Docker:8090) [tangsengdaodaoserver]
-    ├── /ws        → WebSocket (Docker:5200) [wukongim]
-    └── /admin     → Admin Dashboard (Docker:83)  [tangsengdaodaomanager]
-         │
-         ├── tangsengdaodaoserver:8090 ─── MySQL:3306
-         │                             └── Redis:6379
-         │                             └── Minio:9000
-         └── wukongim:5001/5200
-```
+| Document | Description |
+|----------|-------------|
+| [BUGFIX_VERIFY.md](./docs/BUGFIX_VERIFY.md) | Recent bug fixes and consistency verification. |
+| [DEPLOY.md](./cqim-app/docs/DEPLOY.md) | Detailed CQIM production deployment guide. |
+| [architecture.md](./docs/architecture.md) | System architecture (Updated for CQIM). |
+| [optimization.md](./docs/optimization.md) | Performance optimization roadmap. |
 
 ---
 
-## Core Customizations
+## License
 
-### 1. Brand Customization
-
-- **App Name:** imimchat
-- **Theme Color:** `#1677ff` (Blue)
-- **Logo:** Replaced with imm brand icon
-- **PWA Theme Color:** `#1a2e8a`
-
-### 2. Mobile Adaptation (`imim_adaptive.js` v3)
-
-This is the most critical custom file in the project, solving the following issues:
-
-| Issue | Solution |
-|-------|----------|
-| Login username format error (`0086xxx` vs `86xxx`) | XHR/fetch interceptor auto-correction |
-| Mobile layout misalignment (sidebar overlap) | CSS media queries + DOM restructuring |
-| Missing bottom navigation bar | Dynamically injected WeChat-style TabBar |
-| No sliding animation on chat page | CSS transform animations |
-| Oversized collapse button | CSS hiding + replacement |
-
-### 3. Nginx Customization
-
-- HTTP → HTTPS automatic redirection
-- WebSocket persistent connection support (`/ws` path)
-- Admin dashboard path prefix `/admin`
-- File upload size limit 200MB
-
----
-
-## Account Information
-
-> **Note:** For real passwords, please check the `docker/.env` file (not committed to Git).
-
-| System | Account | Description |
-|--------|---------|-------------|
-| Admin Dashboard | superAdmin | Backend administrator |
-| Test Account | 13900000099 | Normal user testing |
-| MySQL | root | Database management |
-| Minio | minio | File service management |
-
----
-
-## Related Resources
-
-- [WuKongIM Official Documentation](https://githubim.com)
-- [TangSengDaoDao Official Documentation](https://tangsengdaodao.com)
-- [Docker Compose Documentation](https://docs.docker.com/compose/)
+This project is licensed under the MIT License.
