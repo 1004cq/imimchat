@@ -109,6 +109,32 @@ export function aliasToCosKey(alias: string): string {
 }
 
 /**
+ * 新上传使用 ASCII 路径（imimchat/avatars/...），历史对象在中文路径（imimchat/头像/...）。
+ * 代理收到 ASCII 别名时两者都要尝试，避免误映射导致 NoSuchKey。
+ */
+export function resolveCosKeyCandidates(cosKey: string): string[] {
+  if (!cosKey) return [];
+  const out: string[] = [];
+  for (const key of [cosKey, aliasToCosKey(cosKey), cosKeyToAlias(cosKey)]) {
+    if (key && !out.includes(key)) out.push(key);
+  }
+  return out;
+}
+
+async function cosObjectExists(
+  client: any,
+  bucket: string,
+  region: string,
+  key: string,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    client.headObject({ Bucket: bucket, Region: region, Key: key }, (err: any) => {
+      resolve(!err);
+    });
+  });
+}
+
+/**
  * 把 COS 直链转换为站内代理 URL（无过期、可被 Nginx/CDN 缓存）
  * 例：https://bucket.cos.ap-hongkong.myqcloud.com/imimchat/朋友圈/uid/视频/x.mp4
  *  →  /api/cos/proxy/imimchat/moments/uid/videos/x.mp4
@@ -166,8 +192,6 @@ function pruneCache() {
  */
 export async function getSignedUrl(cosKey: string, processQuery = '', longLived = false): Promise<string | null> {
   if (!cosKey) return null;
-  // 允许调用者传 ASCII 别名，内部还原为真实 Key 后再签名
-  cosKey = aliasToCosKey(cosKey);
   const cfg = await getCosConfig();
   const secretId = cfg?.secretId || process.env.COS_SECRET_ID;
   const secretKey = cfg?.secretKey || process.env.COS_SECRET_KEY;
@@ -178,14 +202,31 @@ export async function getSignedUrl(cosKey: string, processQuery = '', longLived 
   const expires = longLived ? SIGNED_URL_LONG_VALID_SECONDS : SIGNED_URL_VALID_SECONDS;
   const ttl = longLived ? SIGNED_URL_LONG_CACHE_TTL_MS : SIGNED_URL_CACHE_TTL_MS;
 
-  const cacheKey = `${longLived ? 'L:' : ''}${bucket}/${region}/${cosKey}?${processQuery}`;
-  const hit = signedUrlCache.get(cacheKey);
-  if (hit && Date.now() < hit.expireAt) return hit.url;
+  // 先按请求 key 查缓存（含尚未解析真实路径的别名）
+  const requestCacheKey = `${longLived ? 'L:' : ''}req:${bucket}/${region}/${cosKey}?${processQuery}`;
+  const requestHit = signedUrlCache.get(requestCacheKey);
+  if (requestHit && Date.now() < requestHit.expireAt) return requestHit.url;
 
   const client = await getCosClient(secretId, secretKey);
+  const candidates = resolveCosKeyCandidates(cosKey);
+  let resolvedKey = candidates[0];
+  for (const candidate of candidates) {
+    if (await cosObjectExists(client, bucket, region, candidate)) {
+      resolvedKey = candidate;
+      break;
+    }
+  }
+
+  const cacheKey = `${longLived ? 'L:' : ''}${bucket}/${region}/${resolvedKey}?${processQuery}`;
+  const hit = signedUrlCache.get(cacheKey);
+  if (hit && Date.now() < hit.expireAt) {
+    signedUrlCache.set(requestCacheKey, hit);
+    return hit.url;
+  }
+
   const baseUrl: string = await new Promise((resolve, reject) => {
     client.getObjectUrl(
-      { Bucket: bucket, Region: region, Key: cosKey, Sign: true, Expires: expires },
+      { Bucket: bucket, Region: region, Key: resolvedKey, Sign: true, Expires: expires },
       (err: any, data: any) => err ? reject(err) : resolve(data.Url),
     );
   });
@@ -195,7 +236,9 @@ export async function getSignedUrl(cosKey: string, processQuery = '', longLived 
     finalUrl = baseUrl + (baseUrl.includes('?') ? '&' : '?') + processQuery;
   }
 
-  signedUrlCache.set(cacheKey, { url: finalUrl, expireAt: Date.now() + ttl });
+  const entry = { url: finalUrl, expireAt: Date.now() + ttl };
+  signedUrlCache.set(cacheKey, entry);
+  signedUrlCache.set(requestCacheKey, entry);
   pruneCache();
   return finalUrl;
 }

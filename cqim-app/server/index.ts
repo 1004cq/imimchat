@@ -2652,8 +2652,12 @@ app.use("/api/home", homeRouter);
         const v = (upstream.headers as any).get(h);
         if (v) res.setHeader(h, v);
       }
-      // 允许 Nginx / CDN 缓存 7 天，并允许跨域。
-      res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+      // 仅成功响应长期缓存；404/5xx 禁止缓存，避免坏头像被 CDN 钉死
+      if (upstream.status >= 200 && upstream.status < 300) {
+        res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+      } else {
+        res.setHeader('Cache-Control', 'no-store');
+      }
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Access-Control-Allow-Headers', 'Range');
       res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
