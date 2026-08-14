@@ -1640,7 +1640,7 @@ export default function ChatDetailPage() {
         typing={typingIndicator}
         typingName={otherUser?.name}
         typingUserId={otherMember || 'typing-user'}
-        typingAvatar={otherUser?.avatar}
+        typingAvatar={otherMember === 'BOT' || chat?.members?.includes('BOT') ? '/imim-ai-avatar.jpg?v=2' : otherUser?.avatar}
       />
 
       <Composer

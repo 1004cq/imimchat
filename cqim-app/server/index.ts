@@ -880,6 +880,7 @@ async function handleMessage(client: SignalClient, raw: string) {
         if (effectiveMsgType !== 'mls_encrypted' && effectiveMsgType !== 'system') {
           sendTo(client.userId, {
             type: 'group_message' as any,
+            groupId,
             payload: { ack: true, groupId, seq: -1, timestamp: Date.now(), localId: localId || '', error: '群聊强制要求 MLS 端到端加密，禁止发送明文业务消息' },
           });
           return;
@@ -903,6 +904,7 @@ async function handleMessage(client: SignalClient, raw: string) {
           // 返回 ACK 给发送者（包含 localId 用于前端匹配乐观消息）
           sendTo(client.userId, {
             type: 'group_message' as any,
+            groupId,
             payload: { ack: true, groupId, seq: result.seq, timestamp: result.timestamp, localId: localId || '' },
           });
         }).catch(err => {
@@ -910,6 +912,7 @@ async function handleMessage(client: SignalClient, raw: string) {
           // 发送失败通知给发送者
           sendTo(client.userId, {
             type: 'group_message' as any,
+            groupId,
             payload: { ack: true, groupId, seq: -1, timestamp: Date.now(), localId: localId || '', error: err.message },
           });
         });
@@ -931,6 +934,7 @@ async function handleMessage(client: SignalClient, raw: string) {
         }).then(result => {
           sendTo(client.userId, {
             type: 'group_message' as any,
+            groupId,
             payload: { pull: true, groupId, ...result },
           });
         }).catch(err => {

@@ -466,9 +466,13 @@ export function useGroupSync(options: UseGroupSyncOptions) {
         const data = JSON.parse(event.data);
 
         // 单条群消息推送
-        if (data.type === 'group_message' && data.groupId === groupId) {
-          // ACK 响应（包含 localId 用于精确匹配）
-          if (data.payload?.ack) {
+        // 注意：ACK/pull 的 groupId 在 payload 内，推送消息可能在顶层
+        if (data.type === 'group_message') {
+          const msgGroupId = data.groupId || data.payload?.groupId;
+          if (msgGroupId !== groupId) {
+            // 非本群，忽略
+          } else if (data.payload?.ack) {
+            // ACK 响应（包含 localId 用于精确匹配）
             const { seq, localId, error } = data.payload;
             if (error) {
               // 发送失败
@@ -477,6 +481,7 @@ export function useGroupSync(options: UseGroupSyncOptions) {
                   ? { ...m, status: 'failed' as const }
                   : m
               ));
+              toast.error(error || '群消息发送失败');
             } else {
               // 发送成功：通过 localId 精确匹配乐观消息
               setMessages(prev => prev.map(m =>
@@ -485,11 +490,8 @@ export function useGroupSync(options: UseGroupSyncOptions) {
                   : m
               ));
             }
-            return;
-          }
-
-          // 拉取响应
-          if (data.payload?.pull) {
+          } else if (data.payload?.pull) {
+            // 拉取响应
             const pullMsgs = await decryptGroupBatch(groupId, userId, data.payload.messages || []);
             if (pullMsgs.length > 0) {
               handleBatchMessages(pullMsgs);
@@ -498,17 +500,16 @@ export function useGroupSync(options: UseGroupSyncOptions) {
             }
             setHasMore(data.payload.hasMore);
             setLatestSeq(data.payload.latestSeq);
-            return;
+          } else {
+            // 普通推送消息：统一交给 Worker 串行解密。
+            const [msg] = await decryptGroupBatch(groupId, userId, [data]);
+            if (msg) {
+              batcherRef.current?.add(msg);
+              localSeqRef.current = Math.max(localSeqRef.current, msg.seq);
+              persistLastSeq(localSeqRef.current);
+              onNewMessageRef.current?.(msg);
+            }
           }
-
-          // 普通推送消息：统一交给 Worker 串行解密。
-          const [msg] = await decryptGroupBatch(groupId, userId, [data]);
-          if (!msg) return;
-
-          batcherRef.current?.add(msg);
-          localSeqRef.current = Math.max(localSeqRef.current, msg.seq);
-          persistLastSeq(localSeqRef.current);
-          onNewMessageRef.current?.(msg);
         }
 
         // ===== 群聊撤回通知 =====
@@ -524,17 +525,20 @@ export function useGroupSync(options: UseGroupSyncOptions) {
           return;
         }
         // 批量群消息推送：Worker 内按 seq 顺序解密，禁止明文透传。
-        if (data.type === 'group_message_batch' && data.groupId === groupId) {
-          const batchMsgs = await decryptGroupBatch(groupId, userId, data.messages || []);
-          handleBatchMessages(batchMsgs);
-          if (batchMsgs.length > 0) {
-            localSeqRef.current = Math.max(
-              localSeqRef.current,
-              Math.max(...batchMsgs.map(m => m.seq))
-            );
-            persistLastSeq(localSeqRef.current);
-            // 触发最后一条消息回调
-            onNewMessageRef.current?.(batchMsgs[batchMsgs.length - 1]);
+        if (data.type === 'group_message_batch') {
+          const batchGroupId = data.groupId || data.payload?.groupId;
+          if (batchGroupId === groupId) {
+            const batchMsgs = await decryptGroupBatch(groupId, userId, data.messages || data.payload?.messages || []);
+            handleBatchMessages(batchMsgs);
+            if (batchMsgs.length > 0) {
+              localSeqRef.current = Math.max(
+                localSeqRef.current,
+                Math.max(...batchMsgs.map(m => m.seq))
+              );
+              persistLastSeq(localSeqRef.current);
+              // 触发最后一条消息回调
+              onNewMessageRef.current?.(batchMsgs[batchMsgs.length - 1]);
+            }
           }
         }
       } catch {
