@@ -1,24 +1,52 @@
 /**
  * 我的二维码弹窗
  * 生成包含用户 ID 的二维码，支持长按/点击保存
+ * 展示 ID：username > wechatId > phone；二维码编码仍用稳定内部 uid
  */
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Download, Share2, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
+import { formatAccountLabel, resolveDisplayAccountId } from '@/lib/displayAccount';
+import { CURRENT_USER } from '@/lib/store';
 
 interface QRCodeModalProps {
+  /** 内部稳定 uid，用于二维码编码（加好友） */
   userId: string;
   nickname: string;
   avatar?: string;
+  username?: string;
+  wechatId?: string;
+  phone?: string;
   onClose: () => void;
 }
 
-export const QRCodeModal: React.FC<QRCodeModalProps> = ({ userId, nickname, avatar, onClose }) => {
+export const QRCodeModal: React.FC<QRCodeModalProps> = ({
+  userId,
+  nickname,
+  avatar,
+  username,
+  wechatId,
+  phone,
+  onClose,
+}) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [qrError, setQrError] = useState('');
 
+  const displayAccount = useMemo(
+    () =>
+      resolveDisplayAccountId({
+        username: username ?? CURRENT_USER.uniqueId,
+        wechatId: wechatId ?? CURRENT_USER.uniqueId,
+        phone: phone ?? CURRENT_USER.phone,
+        userId: userId || CURRENT_USER.id,
+      }),
+    [username, wechatId, phone, userId],
+  );
+  const accountLabel = formatAccountLabel(displayAccount);
+
+  // 扫码加好友仍用稳定内部 uid；保持 imim://user/{uid} 兼容
   const qrContent = `imim://user/${userId}`;
 
   useEffect(() => {
@@ -109,7 +137,7 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({ userId, nickname, avat
           <div className="mx-5 mb-5 rounded-2xl bg-gradient-to-br from-slate-50 to-gray-100 p-6 flex flex-col items-center gap-4 shadow-inner">
             {/* 用户信息 */}
             <div className="flex flex-col items-center gap-2">
-              <div className="w-14 h-14 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center text-white text-xl font-bold shadow-md">
+              <div className="w-14 h-14 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center text-white text-xl font-bold shadow-md overflow-hidden">
                 {avatar ? (
                   <img src={avatar} alt={nickname} className="w-full h-full rounded-full object-cover" />
                 ) : (
@@ -118,7 +146,9 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({ userId, nickname, avat
               </div>
               <div className="text-center">
                 <p className="text-sm font-semibold text-gray-900">{nickname}</p>
-                <p className="text-xs text-gray-400 mt-0.5">imim ID: {userId.slice(0, 12)}...</p>
+                {accountLabel && (
+                  <p className="text-xs text-gray-400 mt-0.5">{accountLabel}</p>
+                )}
               </div>
             </div>
 

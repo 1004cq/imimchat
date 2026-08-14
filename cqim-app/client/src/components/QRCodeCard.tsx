@@ -28,7 +28,9 @@ import {
   Lock, ChevronRight, Loader2, UserPlus
 } from 'lucide-react';
 import { CURRENT_USER } from '@/lib/store';
+import { formatAccountLabel, resolveDisplayAccountId } from '@/lib/displayAccount';
 import { DoveAvatar } from '@/components/DoveAvatar';
+import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { toast } from 'sonner';
 import { useE2EE } from '@/hooks/useE2EE';
 
@@ -354,7 +356,15 @@ const ScanSuccessModal: React.FC<{
             <DoveAvatar name={payload.name} id={payload.uid} size="lg" />
             <div>
               <h3 className="text-base font-medium text-dove-ink">{payload.name}</h3>
-              <p className="text-[10px] text-muted-foreground font-mono">{payload.phone}</p>
+              {(() => {
+                const label = formatAccountLabel(
+                  resolveDisplayAccountId({
+                    phone: payload.phone,
+                    userId: payload.uid,
+                  }),
+                );
+                return label ? <p className="text-[10px] text-muted-foreground">{label}</p> : null;
+              })()}
             </div>
             <div className="ml-auto">
               <div className="flex items-center gap-1 px-2 py-1 bg-dove-green/10 rounded-full">
@@ -707,6 +717,14 @@ export const QRCardModal: React.FC<{
   onScanSuccess?: (payload: QRPayload) => void;
 }> = ({ onClose, onScanSuccess }) => {
   const e2ee = useE2EE();
+  const profile = useCurrentUser();
+  const displayAccount = resolveDisplayAccountId({
+    username: profile.uniqueId || CURRENT_USER.uniqueId,
+    wechatId: profile.uniqueId || CURRENT_USER.uniqueId,
+    phone: CURRENT_USER.phone,
+    userId: profile.id || CURRENT_USER.id,
+  });
+  const accountLabel = formatAccountLabel(displayAccount);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [payload, setPayload] = useState<QRPayload | null>(null);
   const [showScanner, setShowScanner] = useState(false);
@@ -748,7 +766,12 @@ export const QRCardModal: React.FC<{
             v: 1,
             uid: userId,
             name: CURRENT_USER.name,
-            phone: CURRENT_USER.phone || '',
+            phone: resolveDisplayAccountId({
+              username: CURRENT_USER.uniqueId,
+              wechatId: CURRENT_USER.uniqueId,
+              phone: CURRENT_USER.phone,
+              userId,
+            }) || CURRENT_USER.phone || '',
             ik: status?.identityKey?.slice(0, 64) || '',
             regId: status?.registrationId || 0,
             fp: fp || '',
@@ -889,23 +912,23 @@ export const QRCardModal: React.FC<{
           animate={{ scale: 1, opacity: 1, y: 0 }}
           exit={{ scale: 0.85, opacity: 0, y: 20 }}
           transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-          className="w-full max-w-[340px] bg-white rounded-2xl overflow-hidden shadow-2xl"
+          className="w-full max-w-[340px] bg-white rounded-2xl shadow-2xl"
           onClick={e => e.stopPropagation()}
         >
-          {/* 顶部渐变 */}
-          <div className="relative h-20 bg-gradient-to-br from-dove-green to-dove-bamboo">
-            <div className="absolute inset-0 overflow-hidden">
+          {/* 顶部渐变：仅顶栏自身 overflow，避免裁切下探头像 */}
+          <div className="relative h-20 bg-gradient-to-br from-dove-green to-dove-bamboo rounded-t-2xl overflow-hidden">
+            <div className="absolute inset-0 overflow-hidden pointer-events-none">
               <div className="absolute -right-4 -top-4 w-24 h-24 rounded-full bg-white/10" />
               <div className="absolute -left-2 -bottom-2 w-16 h-16 rounded-full bg-white/5" />
             </div>
             <button
               onClick={onClose}
-              className="absolute top-3 right-3 w-7 h-7 rounded-full bg-white/20 flex items-center justify-center"
+              className="absolute top-3 right-3 w-7 h-7 rounded-full bg-white/20 flex items-center justify-center z-10"
             >
               <X size={14} className="text-white" />
             </button>
             {/* Tab 切换 */}
-            <div className="absolute bottom-0 left-0 right-0 flex">
+            <div className="absolute bottom-0 left-0 right-0 flex z-[1]">
               {(['myqr', 'scan'] as const).map(t => (
                 <button
                   key={t}
@@ -924,15 +947,24 @@ export const QRCardModal: React.FC<{
 
           {/* 我的二维码 Tab */}
           {tab === 'myqr' && (
-            <div className="px-6 pt-4 pb-5">
-              {/* 用户信息 */}
-              <div className="flex items-center gap-3 mb-4 -mt-8">
-                <div className="ring-4 ring-white rounded-xl shadow-sm">
-                  <DoveAvatar name={CURRENT_USER.name} id={CURRENT_USER.id} avatar={CURRENT_USER.avatar} size="xl" />
+            <div className="px-6 pt-3 pb-5 overflow-visible">
+              {/* 用户信息：头像上探但 z-index 高于顶栏，完整圆形可见 */}
+              <div className="relative z-20 flex items-center gap-3 mb-4 -mt-8">
+                <div className="ring-4 ring-white rounded-2xl shadow-sm bg-white shrink-0">
+                  <DoveAvatar
+                    name={profile.name || CURRENT_USER.name}
+                    id={profile.id || CURRENT_USER.id}
+                    avatar={profile.avatar || CURRENT_USER.avatar}
+                    size="xl"
+                  />
                 </div>
-                <div className="pt-6">
-                  <h3 className="text-base font-medium text-dove-ink">{CURRENT_USER.name}</h3>
-                  <p className="text-[10px] text-muted-foreground">imim: {CURRENT_USER.phone}</p>
+                <div className="pt-8 min-w-0">
+                  <h3 className="text-base font-medium text-dove-ink truncate">
+                    {profile.name || CURRENT_USER.name}
+                  </h3>
+                  {accountLabel && (
+                    <p className="text-[10px] text-muted-foreground truncate">{accountLabel}</p>
+                  )}
                 </div>
               </div>
 
