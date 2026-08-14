@@ -27,8 +27,9 @@ import {
   CheckCircle2, AlertTriangle, RefreshCw, QrCode, Scan,
   Lock, ChevronRight, Loader2, UserPlus
 } from 'lucide-react';
-import { CURRENT_USER } from '@/lib/store';
+import { CURRENT_USER, syncCurrentUserProfile } from '@/lib/store';
 import { formatAccountLabel, resolveDisplayAccountId } from '@/lib/displayAccount';
+import { drawQrWithCenterLogo } from '@/lib/qrWithLogo';
 import { DoveAvatar } from '@/components/DoveAvatar';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { toast } from 'sonner';
@@ -718,13 +719,6 @@ export const QRCardModal: React.FC<{
 }> = ({ onClose, onScanSuccess }) => {
   const e2ee = useE2EE();
   const profile = useCurrentUser();
-  const displayAccount = resolveDisplayAccountId({
-    username: profile.uniqueId || CURRENT_USER.uniqueId,
-    wechatId: profile.uniqueId || CURRENT_USER.uniqueId,
-    phone: CURRENT_USER.phone,
-    userId: profile.id || CURRENT_USER.id,
-  });
-  const accountLabel = formatAccountLabel(displayAccount);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [payload, setPayload] = useState<QRPayload | null>(null);
   const [showScanner, setShowScanner] = useState(false);
@@ -737,8 +731,46 @@ export const QRCardModal: React.FC<{
   const [refreshKey, setRefreshKey] = useState(0);
   const [verifying, setVerifying] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [accountUsername, setAccountUsername] = useState(profile.uniqueId || CURRENT_USER.uniqueId);
+  const [accountPhone, setAccountPhone] = useState(CURRENT_USER.phone || '');
 
-  // 生成个人名片二维码
+  // 打开时拉取 /api/profile，避免展示 cuid
+  useEffect(() => {
+    let cancelled = false;
+    const token = localStorage.getItem('auth_token') || localStorage.getItem('user_token');
+    fetch('/api/profile', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => {
+        if (cancelled || !data) return;
+        const p = data.profile || data;
+        const u = data.user || {};
+        const nextUsername = u.username || p.wechatId || p.username || '';
+        const nextPhone = p.phone || u.phone || '';
+        if (nextUsername) setAccountUsername(nextUsername);
+        if (nextPhone) setAccountPhone(nextPhone);
+        syncCurrentUserProfile({
+          nickname: p.name || p.nickname || u.nickname,
+          username: nextUsername || undefined,
+          uniqueId: nextUsername || undefined,
+          avatar: p.avatar || u.avatar,
+          phone: nextPhone || undefined,
+        });
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [refreshKey]);
+
+  const displayAccount = resolveDisplayAccountId({
+    username: accountUsername || profile.uniqueId || CURRENT_USER.uniqueId,
+    wechatId: accountUsername || profile.uniqueId || CURRENT_USER.uniqueId,
+    phone: accountPhone || CURRENT_USER.phone,
+    userId: profile.id || CURRENT_USER.id,
+  });
+  const accountLabel = formatAccountLabel(displayAccount);
+
+  // 生成个人名片二维码（中心叠加 imm logo）
   useEffect(() => {
     let cancelled = false;
     let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
@@ -747,7 +779,6 @@ export const QRCardModal: React.FC<{
       setLoading(true);
       setQrError('');
       try {
-        const QRCode = await loadQRCode();
         const canvas = canvasRef.current;
         if (cancelled || !canvas) return;
 
@@ -758,6 +789,13 @@ export const QRCardModal: React.FC<{
           return;
         }
 
+        const readable = resolveDisplayAccountId({
+          username: accountUsername || CURRENT_USER.uniqueId,
+          wechatId: accountUsername || CURRENT_USER.uniqueId,
+          phone: accountPhone || CURRENT_USER.phone,
+          userId,
+        });
+
         let dataStr: string;
         if (withE2EE && e2ee.isReady) {
           const status = e2ee.status;
@@ -766,12 +804,7 @@ export const QRCardModal: React.FC<{
             v: 1,
             uid: userId,
             name: CURRENT_USER.name,
-            phone: resolveDisplayAccountId({
-              username: CURRENT_USER.uniqueId,
-              wechatId: CURRENT_USER.uniqueId,
-              phone: CURRENT_USER.phone,
-              userId,
-            }) || CURRENT_USER.phone || '',
+            phone: readable || accountPhone || CURRENT_USER.phone || '',
             ik: status?.identityKey?.slice(0, 64) || '',
             regId: status?.registrationId || 0,
             fp: fp || '',
@@ -787,11 +820,10 @@ export const QRCardModal: React.FC<{
           dataStr = `imim://user/${userId}`;
         }
 
-        await QRCode.toCanvas(canvas, dataStr, {
-          width: 200,
-          margin: 2,
-          color: { dark: '#1a2e1a', light: '#ffffff' },
-          errorCorrectionLevel: 'M',
+        await drawQrWithCenterLogo(canvas, dataStr, {
+          size: 200,
+          dark: '#1a2e1a',
+          light: '#ffffff',
         });
       } catch (e) {
         console.error('QR生成失败', e);
@@ -815,7 +847,7 @@ export const QRCardModal: React.FC<{
       cancelled = true;
       if (fallbackTimer) clearTimeout(fallbackTimer);
     };
-  }, [e2ee.isReady, e2ee.isInitializing, e2ee.status, refreshKey]);
+  }, [e2ee.isReady, e2ee.isInitializing, e2ee.status, refreshKey, accountUsername, accountPhone]);
 
   // 扫码成功处理（先调服务端校验，再展示确认弹窗）
   const handleScan = useCallback(async (p: QRPayload) => {
@@ -912,23 +944,25 @@ export const QRCardModal: React.FC<{
           animate={{ scale: 1, opacity: 1, y: 0 }}
           exit={{ scale: 0.85, opacity: 0, y: 20 }}
           transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-          className="w-full max-w-[340px] bg-white rounded-2xl shadow-2xl"
+          className="w-full max-w-[340px] bg-white rounded-2xl shadow-2xl overflow-hidden"
           onClick={e => e.stopPropagation()}
         >
-          {/* 顶部渐变：仅顶栏自身 overflow，避免裁切下探头像 */}
-          <div className="relative h-20 bg-gradient-to-br from-dove-green to-dove-bamboo rounded-t-2xl overflow-hidden">
-            <div className="absolute inset-0 overflow-hidden pointer-events-none">
+          {/* 顶栏仅放 Tab，头像完全在白底区域内，杜绝半截裁切 */}
+          <div className="relative bg-gradient-to-br from-dove-green to-dove-bamboo">
+            <div className="absolute inset-0 pointer-events-none overflow-hidden">
               <div className="absolute -right-4 -top-4 w-24 h-24 rounded-full bg-white/10" />
               <div className="absolute -left-2 -bottom-2 w-16 h-16 rounded-full bg-white/5" />
             </div>
-            <button
-              onClick={onClose}
-              className="absolute top-3 right-3 w-7 h-7 rounded-full bg-white/20 flex items-center justify-center z-10"
-            >
-              <X size={14} className="text-white" />
-            </button>
-            {/* Tab 切换 */}
-            <div className="absolute bottom-0 left-0 right-0 flex z-[1]">
+            <div className="relative flex items-center justify-between px-4 pt-3 pb-2">
+              <span className="text-xs font-medium text-white/90">名片二维码</span>
+              <button
+                onClick={onClose}
+                className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center"
+              >
+                <X size={14} className="text-white" />
+              </button>
+            </div>
+            <div className="relative flex px-2">
               {(['myqr', 'scan'] as const).map(t => (
                 <button
                   key={t}
@@ -947,10 +981,10 @@ export const QRCardModal: React.FC<{
 
           {/* 我的二维码 Tab */}
           {tab === 'myqr' && (
-            <div className="px-6 pt-3 pb-5 overflow-visible">
-              {/* 用户信息：头像上探但 z-index 高于顶栏，完整圆形可见 */}
-              <div className="relative z-20 flex items-center gap-3 mb-4 -mt-8">
-                <div className="ring-4 ring-white rounded-2xl shadow-sm bg-white shrink-0">
+            <div className="px-6 pt-5 pb-5 bg-white">
+              {/* 头像完整显示在白底上，不再 -mt 上探 */}
+              <div className="flex items-center gap-3 mb-4">
+                <div className="ring-4 ring-white rounded-2xl shadow-sm bg-white shrink-0 overflow-visible">
                   <DoveAvatar
                     name={profile.name || CURRENT_USER.name}
                     id={profile.id || CURRENT_USER.id}
@@ -958,17 +992,19 @@ export const QRCardModal: React.FC<{
                     size="xl"
                   />
                 </div>
-                <div className="pt-8 min-w-0">
+                <div className="min-w-0">
                   <h3 className="text-base font-medium text-dove-ink truncate">
                     {profile.name || CURRENT_USER.name}
                   </h3>
-                  {accountLabel && (
+                  {accountLabel ? (
                     <p className="text-[10px] text-muted-foreground truncate">{accountLabel}</p>
+                  ) : (
+                    <p className="text-[10px] text-muted-foreground truncate">请在设置中完善账号 ID</p>
                   )}
                 </div>
               </div>
 
-              {/* 二维码 */}
+              {/* 二维码（中心 logo 已绘制进 canvas） */}
               <div className="flex flex-col items-center">
                 <div className="relative w-52 h-52 bg-white rounded-xl shadow-inner border border-border/30 flex items-center justify-center p-2">
                   {loading && (
@@ -989,10 +1025,6 @@ export const QRCardModal: React.FC<{
                     </div>
                   )}
                   <canvas ref={canvasRef} width={200} height={200} className="rounded-lg" />
-                  {/* 中心 logo */}
-                  <div className="absolute w-10 h-10 bg-white rounded-lg flex items-center justify-center shadow-sm border border-border/20">
-                    <span className="text-[10px] font-bold text-dove-green">im</span>
-                  </div>
                 </div>
 
                 {/* 有效期 */}

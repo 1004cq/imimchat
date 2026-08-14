@@ -2,12 +2,14 @@
  * 我的二维码弹窗
  * 生成包含用户 ID 的二维码，支持长按/点击保存
  * 展示 ID：username > wechatId > phone；二维码编码仍用稳定内部 uid
+ * 中心叠加 imm 品牌 logo
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Download, Share2, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatAccountLabel, resolveDisplayAccountId } from '@/lib/displayAccount';
+import { drawQrWithCenterLogo } from '@/lib/qrWithLogo';
 import { CURRENT_USER } from '@/lib/store';
 
 interface QRCodeModalProps {
@@ -33,20 +35,47 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [qrError, setQrError] = useState('');
+  const [profileUsername, setProfileUsername] = useState(username || '');
+  const [profileWechatId, setProfileWechatId] = useState(wechatId || '');
+  const [profilePhone, setProfilePhone] = useState(phone || '');
+  const [profileNickname, setProfileNickname] = useState(nickname);
+  const [profileAvatar, setProfileAvatar] = useState(avatar || '');
+
+  // 打开时拉真实 profile，避免 localStorage 里 username=cuid
+  useEffect(() => {
+    let cancelled = false;
+    const token = localStorage.getItem('auth_token') || localStorage.getItem('user_token');
+    fetch('/api/profile', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => {
+        if (cancelled || !data) return;
+        const p = data.profile || data;
+        const u = data.user || {};
+        setProfileUsername(u.username || p.wechatId || p.username || username || '');
+        setProfileWechatId(p.wechatId || u.username || wechatId || '');
+        setProfilePhone(p.phone || u.phone || phone || CURRENT_USER.phone || '');
+        setProfileNickname(p.name || p.nickname || u.nickname || nickname);
+        setProfileAvatar(p.avatar || u.avatar || avatar || '');
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [username, wechatId, phone, nickname, avatar]);
 
   const displayAccount = useMemo(
     () =>
       resolveDisplayAccountId({
-        username: username ?? CURRENT_USER.uniqueId,
-        wechatId: wechatId ?? CURRENT_USER.uniqueId,
-        phone: phone ?? CURRENT_USER.phone,
+        username: profileUsername || username || CURRENT_USER.uniqueId,
+        wechatId: profileWechatId || wechatId || CURRENT_USER.uniqueId,
+        phone: profilePhone || phone || CURRENT_USER.phone,
         userId: userId || CURRENT_USER.id,
       }),
-    [username, wechatId, phone, userId],
+    [profileUsername, profileWechatId, profilePhone, username, wechatId, phone, userId],
   );
   const accountLabel = formatAccountLabel(displayAccount);
 
-  // 扫码加好友仍用稳定内部 uid；保持 imim://user/{uid} 兼容
+  // 扫码加好友仍用稳定内部 uid
   const qrContent = `imim://user/${userId}`;
 
   useEffect(() => {
@@ -55,12 +84,10 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({
       try {
         const canvas = canvasRef.current;
         if (!canvas || cancelled) return;
-        const QRCode = (await import('qrcode')).default;
-        await QRCode.toCanvas(canvas, qrContent, {
-          width: 220,
-          margin: 2,
-          color: { dark: '#1a1a1a', light: '#ffffff' },
-          errorCorrectionLevel: 'H',
+        await drawQrWithCenterLogo(canvas, qrContent, {
+          size: 220,
+          dark: '#1a1a1a',
+          light: '#ffffff',
         });
         if (!cancelled) {
           setQrDataUrl(canvas.toDataURL('image/png'));
@@ -79,7 +106,7 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({
     if (!qrDataUrl) return;
     const a = document.createElement('a');
     a.href = qrDataUrl;
-    a.download = `${nickname}-qrcode.png`;
+    a.download = `${profileNickname}-qrcode.png`;
     a.click();
     toast('二维码已保存');
   };
@@ -89,8 +116,8 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({
     if (navigator.share) {
       try {
         const blob = await (await fetch(qrDataUrl)).blob();
-        const file = new File([blob], `${nickname}-qrcode.png`, { type: 'image/png' });
-        await navigator.share({ files: [file], title: `${nickname} 的二维码` });
+        const file = new File([blob], `${profileNickname}-qrcode.png`, { type: 'image/png' });
+        await navigator.share({ files: [file], title: `${profileNickname} 的二维码` });
       } catch {
         handleSave();
       }
@@ -117,12 +144,10 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({
           className="relative w-full max-w-sm bg-white rounded-t-3xl pb-safe overflow-hidden"
           onClick={e => e.stopPropagation()}
         >
-          {/* 顶部把手 */}
           <div className="flex justify-center pt-3 pb-1">
             <div className="w-10 h-1 bg-gray-200 rounded-full" />
           </div>
 
-          {/* 标题栏 */}
           <div className="flex items-center justify-between px-5 py-3">
             <h3 className="text-base font-semibold text-gray-900">我的二维码</h3>
             <button
@@ -133,27 +158,26 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({
             </button>
           </div>
 
-          {/* 二维码卡片 */}
           <div className="mx-5 mb-5 rounded-2xl bg-gradient-to-br from-slate-50 to-gray-100 p-6 flex flex-col items-center gap-4 shadow-inner">
-            {/* 用户信息 */}
             <div className="flex flex-col items-center gap-2">
-              <div className="w-14 h-14 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center text-white text-xl font-bold shadow-md overflow-hidden">
-                {avatar ? (
-                  <img src={avatar} alt={nickname} className="w-full h-full rounded-full object-cover" />
+              <div className="w-14 h-14 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center text-white text-xl font-bold shadow-md overflow-hidden shrink-0">
+                {profileAvatar ? (
+                  <img src={profileAvatar} alt={profileNickname} className="w-full h-full rounded-full object-cover" />
                 ) : (
-                  nickname.charAt(0)
+                  (profileNickname || '?').charAt(0)
                 )}
               </div>
               <div className="text-center">
-                <p className="text-sm font-semibold text-gray-900">{nickname}</p>
-                {accountLabel && (
+                <p className="text-sm font-semibold text-gray-900">{profileNickname}</p>
+                {accountLabel ? (
                   <p className="text-xs text-gray-400 mt-0.5">{accountLabel}</p>
+                ) : (
+                  <p className="text-xs text-gray-400 mt-0.5">请在设置中完善账号 ID</p>
                 )}
               </div>
             </div>
 
-            {/* 二维码 */}
-            <div className="bg-white rounded-2xl p-3 shadow-sm min-h-[220px] flex items-center justify-center">
+            <div className="relative bg-white rounded-2xl p-3 shadow-sm min-h-[220px] flex items-center justify-center">
               {qrError ? (
                 <div className="flex flex-col items-center gap-2 text-center px-4">
                   <AlertTriangle size={20} className="text-amber-500" />
@@ -167,7 +191,6 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({
             <p className="text-xs text-gray-400 text-center">扫描二维码，添加我为好友</p>
           </div>
 
-          {/* 操作按钮 */}
           <div className="flex gap-3 px-5 pb-6">
             <button
               onClick={handleSave}
