@@ -180,7 +180,7 @@ export default function ChatDetailPage() {
   const groupSync = useGroupSync({
     groupId: chat?.groupId || '',
     userId: state.currentUser?.id || localStorage.getItem('user_id') || 'me',
-    ws: signalWs?.current || null,
+    wsRef: signalWs,
     enabled: isGroupChat,
     onNewMessage: useCallback((msg) => {
       if (!chatId || !chat) return;

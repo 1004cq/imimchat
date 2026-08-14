@@ -942,7 +942,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const host = window.location.host;
     const wsUrl = `${protocol}//${host}/signal?userId=${encodeURIComponent(currentUserId)}`;
 
+    let closedByEffect = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
     const connect = () => {
+      // 避免并发重复连接
+      if (botWsRef.current && (botWsRef.current.readyState === WebSocket.OPEN || botWsRef.current.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
       const ws = new WebSocket(wsUrl);
       botWsRef.current = ws;
 
@@ -1283,7 +1290,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           clearInterval(heartbeatTimer);
           heartbeatTimer = null;
         }
-        setTimeout(() => {
+        // 仅当仍是当前 socket 时清理，避免旧连接回调清掉新连接
+        if (botWsRef.current === ws) {
+          botWsRef.current = null;
+        }
+        if (closedByEffect) return;
+        reconnectTimer = setTimeout(() => {
           if (stateRef.current.isLoggedIn) connect();
         }, 5000);
       };
@@ -1298,8 +1310,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
     connect();
     return () => {
-      botWsRef.current?.close();
+      closedByEffect = true;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      const cur = botWsRef.current;
       botWsRef.current = null;
+      try { cur?.close(); } catch {}
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.isLoggedIn, notifyIncomingMessage]);
