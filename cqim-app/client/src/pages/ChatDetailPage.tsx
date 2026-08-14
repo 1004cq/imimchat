@@ -38,7 +38,7 @@ import { useGroupSync, type GroupMessage } from '@/hooks/useGroupSync';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { preFetchVideoStream } from '@/lib/mediaManager';
 import type { StickerItem } from '@/components/StickerPanel';
-import VirtualMessageList, { type VirtualMessageItem } from '@/components/VirtualMessageList';
+import VirtualMessageList, { type VirtualMessageItem, type VirtualMessageListHandle } from '@/components/VirtualMessageList';
 import ChatHeader from '@/components/chat/ChatHeader';
 import MessageListContainer from '@/components/chat/MessageListContainer';
 import Composer from '@/components/chat/Composer';
@@ -139,7 +139,7 @@ export default function ChatDetailPage() {
   const [voicePressActive, setVoicePressActive] = useState(false);
   const [sessionEstablished, setSessionEstablished] = useState(false);
   const [encryptionLog, setEncryptionLog] = useState<string[]>([]);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messageListRef = useRef<VirtualMessageListHandle>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
 
@@ -489,10 +489,6 @@ export default function ChatDetailPage() {
   }, []);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages.length]);
-
-  useEffect(() => {
     const textarea = inputRef.current;
     if (!textarea) return;
     textarea.style.height = '0px';
@@ -650,6 +646,8 @@ export default function ChatDetailPage() {
     setReplyingTo(null);
     setShowExtra(false);
     setShowEmoji(false);
+    // 主动发送：回到底部并清除阅读锚点
+    messageListRef.current?.scrollToBottom('smooth');
 
     // ===== 群聊消息发送：通过 useGroupSync =====
     if (isGroupChat && chat?.groupId) {
@@ -848,6 +846,7 @@ export default function ChatDetailPage() {
 
   const handleSendEmoji = useCallback(async (emoji: string) => {
     if (!chatId) return;
+    messageListRef.current?.scrollToBottom('smooth');
     // 群聊表情发送
     if (isGroupChat && chat?.groupId) {
       groupSync.sendMessage(emoji, 'text');
@@ -1569,7 +1568,10 @@ export default function ChatDetailPage() {
         groupMemberCount={groupMembers.length}
         ephemeralTimer={ephemeralTimer}
         e2ee={{ isReady: e2ee.isReady, isInitializing: e2ee.isInitializing, sessionEstablished }}
-        onBack={closeChat}
+        onBack={() => {
+          messageListRef.current?.persistAnchor();
+          closeChat();
+        }}
         onTitleClick={() => {
           if (isGroupChat && chat.groupId) setShowGroupInfoSheet(true);
           else if (otherUser) showProfile(otherUser.id);
@@ -1632,6 +1634,8 @@ export default function ChatDetailPage() {
       )}
 
       <MessageListContainer
+        listRef={messageListRef}
+        chatId={chatId}
         messages={messages as unknown as VirtualMessageItem[]}
         currentUserId={currentUserId}
         loading={loadingMessages}
