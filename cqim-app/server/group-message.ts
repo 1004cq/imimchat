@@ -19,6 +19,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { avatarToProxy } from './cos-signer.js';
+import { publicUrl } from './public-url.js';
 
 // ESM 环境下兼容 __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -1247,7 +1248,7 @@ groupRouter.post('/invite/create', async (req, res) => {
         id: link.id,
         hash: link.hash,
         url: `/im/+${link.hash}`,
-        fullUrl: `https://wed.imim.chat/im/+${link.hash}`,
+        fullUrl: publicUrl(`/im/+${link.hash}`),
         name: link.name,
         expireAt: link.expireAt?.toISOString() || null,
         maxUses: link.maxUses,
@@ -1278,7 +1279,7 @@ groupRouter.get('/invite/list', async (req, res) => {
           id: l.id,
           hash: l.hash,
           url: `/im/+${l.hash}`,
-          fullUrl: `https://wed.imim.chat/im/+${l.hash}`,
+          fullUrl: publicUrl(`/im/+${l.hash}`),
           name: l.name,
           creatorId: l.creatorId,
           expireAt: l.expireAt?.toISOString() || null,
@@ -1442,8 +1443,8 @@ groupRouter.post('/username/set', async (req, res) => {
       },
     });
 
-    const publicUrl = username ? `https://wed.imim.chat/im/${username}` : null;
-    res.json({ ok: true, username: username || null, publicUrl });
+    const groupPublicUrl = username ? publicUrl(`/im/${username}`) : null;
+    res.json({ ok: true, username: username || null, publicUrl: groupPublicUrl });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1569,8 +1570,8 @@ groupRouter.put('/update/username', async (req, res) => {
         isPublic: !!username,
       },
     });
-    const publicUrl = username ? `https://wed.imim.chat/im/${username}` : null;
-    res.json({ ok: true, username: username || null, publicUrl });
+    const groupPublicUrl = username ? publicUrl(`/im/${username}`) : null;
+    res.json({ ok: true, username: username || null, publicUrl: groupPublicUrl });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -2042,7 +2043,7 @@ groupRouter.post('/qrcode', async (req, res) => {
         inviteLink: {
           hash: normalized.hash,
           url: `/im/+${normalized.hash}`,
-          fullUrl: `https://wed.imim.chat/im/+${normalized.hash}`,
+          fullUrl: publicUrl(`/im/+${normalized.hash}`),
           expireAt: normalized.expireAt?.toISOString() || null,
         },
       });
@@ -2067,7 +2068,7 @@ groupRouter.post('/qrcode', async (req, res) => {
       inviteLink: {
         hash: link.hash,
         url: `/im/+${link.hash}`,
-        fullUrl: `https://wed.imim.chat/im/+${link.hash}`,
+        fullUrl: publicUrl(`/im/+${link.hash}`),
         expireAt: link.expireAt?.toISOString() || null,
       },
     });

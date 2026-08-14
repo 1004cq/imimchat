@@ -11,6 +11,7 @@ import { motion } from 'framer-motion';
 import { ChevronLeft, Loader2, Download, Share2, MessageCircle, Copy } from 'lucide-react';
 import QRCode from 'qrcode';
 import { toast } from 'sonner';
+import { publicUrl as siteUrl } from '@/lib/publicUrl';
 
 interface MemberAvatar {
   userId: string;
@@ -97,7 +98,7 @@ export const GroupQRCodePage: React.FC<GroupQRCodePageProps> = ({
   const [footerText, setFooterText] = useState('');
   const [qrTargetUrl, setQrTargetUrl] = useState<string>('');
 
-  const publicUrl = groupUsername ? `https://wed.imim.chat/im/${groupUsername}` : '';
+  const publicUrl = groupUsername ? siteUrl(`/im/${groupUsername}`) : '';
 
   const drawCenterLogo = useCallback(async (canvas: HTMLCanvasElement) => {
     const ctx = canvas.getContext('2d');
@@ -173,7 +174,7 @@ export const GroupQRCodePage: React.FC<GroupQRCodePageProps> = ({
           });
           const data = await res.json();
           if (data.ok && data.inviteLink) {
-            targetUrl = data.inviteLink.fullUrl || `https://wed.imim.chat${data.inviteLink.url}`;
+            targetUrl = data.inviteLink.fullUrl || siteUrl(data.inviteLink.url);
             expireAt = data.inviteLink.expireAt ? new Date(data.inviteLink.expireAt) : null;
             maxUses = Number(data.inviteLink.maxUses || 0);
             usedCount = Number(data.inviteLink.usedCount || 0);

@@ -16,3 +16,6 @@ uploads
 *.db-journal
 coverage
 .cache
+certbot
+certs/*.pem
+certs/*.key

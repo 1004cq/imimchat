@@ -13,6 +13,7 @@ import { UserPlus, Users, Check, Loader2, AlertCircle, ArrowLeft, LogIn, Copy, S
 import { DoveAvatar } from '@/components/DoveAvatar';
 import { toast } from 'sonner';
 import { authApi } from '@/lib/authFetch';
+import { publicUrl } from '@/lib/publicUrl';
 
 // ============ 类型定义 ============
 
@@ -251,7 +252,7 @@ export default function InviteLinkPage() {
 
   // 复制链接
   const handleCopyLink = () => {
-    const link = `https://wed.imim.chat/im/${slug}`;
+    const link = publicUrl(`/im/${slug}`);
     navigator.clipboard.writeText(link).then(() => {
       toast.success('链接已复制');
     }).catch(() => {

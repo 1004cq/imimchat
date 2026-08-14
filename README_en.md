@@ -4,8 +4,8 @@
 
 > **CQIM** is a high-performance, ultra-secure full-stack IM system. The core development has shifted to **[cqim-app](./cqim-app/)**, featuring mandatory End-to-End Encryption (Signal/MLS), Moments (Social Feed), Sticker Store, and 10k+ concurrent group chat optimizations.
 
-**Access URL:** https://wed.imim.chat (Subject to actual deployment)  
-**Admin Dashboard:** https://wed.imim.chat/admin  
+**Access URL:** https://cq.je  
+**Admin Dashboard:** https://cq.je/admin  
 **Core Directory:** `./cqim-app`  
 **Deployment:** Docker Compose + Nginx Reverse Proxy
 

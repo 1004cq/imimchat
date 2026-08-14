@@ -11,6 +11,8 @@ services:
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
       - ./certs:/etc/nginx/certs:ro
+      - ./certbot/www:/var/www/certbot:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
     depends_on:
       - cqim
       - go-gateway
@@ -97,6 +99,7 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       MYSQL_URL: ${MYSQL_URL:-mysql://cqim:cqim@mysql:3306/cqim_audit}
       MYSQL_AUDIT_ENABLED: ${MYSQL_AUDIT_ENABLED:-true}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://cq.je}
     deploy:
       resources:
         limits:
@@ -125,6 +128,7 @@ services:
       - REDIS_ADDR=redis:6379
       - REDIS_PASSWORD=
       - REDIS_DB=0
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://cq.je,https://www.cq.je,http://cq.je,http://www.cq.je}
     depends_on:
       redis:
         condition: service_healthy

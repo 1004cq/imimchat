@@ -67,6 +67,7 @@ import groupRouter, {
   ackGroupMessages,
 } from "./group-message";
 import { avatarToProxy } from "./cos-signer";
+import { publicUrl } from "./public-url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -768,7 +769,7 @@ async function handleMessage(client: SignalClient, raw: string) {
           });
           const callerName = msg.payload?.callerName || callerUser?.nickname || callerUser?.username || '有人';
           const callerAvatarPath = avatarToProxy(callerUser?.avatar);
-          const callerAvatarUrl = callerAvatarPath ? `https://wed.imim.chat${callerAvatarPath}` : '';
+          const callerAvatarUrl = callerAvatarPath ? publicUrl(callerAvatarPath) : '';
           const callType = msg.payload?.callType || 'audio';
           const callRoomId = msg.payload?.roomId || '';
           const callTitle = callType === 'video' ? `${callerName} 发起了视频通话` : `${callerName} 发起了语音通话`;
@@ -1350,7 +1351,7 @@ async function handleMessage(client: SignalClient, raw: string) {
               const senderName = senderUser?.nickname || senderUser?.username || '有人';
               // 获取发送者头像的完整 URL（用于推送通知显示）
               const senderAvatarPath = avatarToProxy(senderUser?.avatar);
-              const senderAvatarUrl = senderAvatarPath ? `https://wed.imim.chat${senderAvatarPath}` : '';
+              const senderAvatarUrl = senderAvatarPath ? publicUrl(senderAvatarPath) : '';
               const previewText = '🔒 [加密消息]';
               // 查询接收方的推送 Token 类型
               const peerUser = await prisma.user.findUnique({
@@ -4088,7 +4089,7 @@ app.use("/api/home", homeRouter);
         }
       }
 
-      const pageUrl = `https://wed.imim.chat/im/${encodeURIComponent(slug)}`;
+      const pageUrl = publicUrl(`/im/${encodeURIComponent(slug)}`);
       let html = fs.readFileSync(indexPath, 'utf-8');
       const ogTags = [
         `<meta property="og:type" content="${ogType}" />`,
