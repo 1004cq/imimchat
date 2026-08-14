@@ -3127,21 +3127,26 @@ app.use("/api/home", homeRouter);
     }
   });
 
-  // ★ 心跳检测：30s 无 pong 回应则断开死连接，释放资源
+  // ★ 心跳检测：以 lastSeen 为准（兼容 CDN 剥离 ping/pong 的情况）
+  // 客户端每 ~15s 发应用层 heartbeat；90s 无任何活动才断开
   const HEARTBEAT_INTERVAL = 30000;
+  const IDLE_TIMEOUT_MS = 90000;
   const heartbeatTimer = setInterval(() => {
+    const now = Date.now();
     for (const [userId, client] of clients) {
-      if (!(client as any)._alive) {
-        // 上次心跳未回应，断开连接
-        client.ws.terminate();
-        clients.delete(userId);
-        unregisterConnection(userId);
-        setUserOffline(userId).catch(() => {});
+      const lastSeen = Number((client as any)._lastSeen || 0);
+      if (lastSeen > 0 && now - lastSeen > IDLE_TIMEOUT_MS) {
+        console.warn(`[Signal] 空闲超时断开: ${userId} idle=${now - lastSeen}ms`);
+        try { client.ws.terminate(); } catch {}
+        if (clients.get(userId)?.ws === client.ws) {
+          clients.delete(userId);
+          unregisterConnection(userId, client.ws);
+          setUserOffline(userId).catch(() => {});
+        }
         continue;
       }
-      (client as any)._alive = false;
-      client.ws.ping();
-      // 心跳正常，刷新 Redis 在线状态 TTL
+      // 尽力发协议层 ping；即使 CDN 不回传 pong，应用层 heartbeat 也会刷新 lastSeen
+      try { client.ws.ping(); } catch {}
       refreshUserOnline(userId).catch(() => {});
     }
   }, HEARTBEAT_INTERVAL);
@@ -3202,6 +3207,12 @@ app.use("/api/home", homeRouter);
 
     const client: SignalClient = { ws, userId };
     (client as any)._alive = true;
+    (client as any)._lastSeen = Date.now();
+    // 若同用户已有旧连接，先关掉，避免双连接互相踢
+    const prev = clients.get(userId);
+    if (prev && prev.ws !== ws) {
+      try { prev.ws.close(4000, 'replaced'); } catch {}
+    }
     clients.set(userId, client);
     // 注册到万人群消息系统的连接池
     registerConnection(userId, ws);
@@ -3236,10 +3247,14 @@ app.use("/api/home", homeRouter);
     }
 
     // ★ pong 回调：标记连接存活
-    ws.on('pong', () => { (client as any)._alive = true; });
+    ws.on('pong', () => {
+      (client as any)._alive = true;
+      (client as any)._lastSeen = Date.now();
+    });
 
     ws.on("message", (data) => {
       (client as any)._alive = true; // 收到消息也视为存活
+      (client as any)._lastSeen = Date.now();
       handleMessage(client, data.toString());
     });
 
@@ -3260,9 +3275,14 @@ app.use("/api/home", homeRouter);
           }
         }
       }
+      // 仅清理当前这条连接，避免旧连接 close 把新连接踢下线
+      if (clients.get(userId)?.ws !== ws) {
+        console.log(`[Signal] 忽略旧连接断开: ${userId} (总在线: ${clients.size})`);
+        return;
+      }
       clients.delete(userId);
       // 从万人群消息系统注销
-      unregisterConnection(userId);
+      unregisterConnection(userId, ws);
       // 清除 Redis 在线状态，记录设备下线和最后在线时间
       setUserOffline(userId).catch(() => {});
       const _deviceId = (client as any)._deviceId;

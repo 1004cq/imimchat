@@ -822,6 +822,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const notifyIncomingMessageRef = useRef(notifyIncomingMessage);
+  notifyIncomingMessageRef.current = notifyIncomingMessage;
+
   useEffect(() => {
     const warmup = () => {
       void warmupNotificationAudio();
@@ -944,28 +947,62 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     let closedByEffect = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+    let reconnectAttempt = 0;
+
+    const clearHeartbeat = () => {
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+    };
+    const clearReconnect = () => {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    };
+    const scheduleReconnect = (delayMs?: number) => {
+      if (closedByEffect) return;
+      clearReconnect();
+      const delay = delayMs ?? Math.min(500 * Math.pow(1.6, reconnectAttempt), 8000);
+      reconnectAttempt += 1;
+      console.log(`[AppContext] 持久信令连接断开，${Math.round(delay)}ms 后重连...`);
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        if (!closedByEffect && stateRef.current.isLoggedIn) connect();
+      }, delay);
+    };
 
     const connect = () => {
+      if (closedByEffect || !stateRef.current.isLoggedIn) return;
       // 避免并发重复连接
-      if (botWsRef.current && (botWsRef.current.readyState === WebSocket.OPEN || botWsRef.current.readyState === WebSocket.CONNECTING)) {
+      const existing = botWsRef.current;
+      if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) {
         return;
+      }
+      if (existing) {
+        try { existing.close(); } catch {}
+        botWsRef.current = null;
       }
       const ws = new WebSocket(wsUrl);
       botWsRef.current = ws;
 
-      // 应用层心跳定时器，每 25s 发送一次 heartbeat，保持 Redis TTL 刷新
-      let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-
       ws.onopen = () => {
         console.log('[AppContext] 持久信令连接已建立');
+        reconnectAttempt = 0;
+        clearHeartbeat();
         // 通知群聊同步模块：这是一个新的连接，可按各群 lastSeq 增量补消息
         window.dispatchEvent(new CustomEvent('cqim:signal-open', { detail: { ws } }));
-        // 开启心跳：每 25s 发送一次（服务端 30s 超时，留 5s 容错）
+        // 15s 应用层心跳：对抗 CDN 空闲断开，并刷新服务端 lastSeen
         heartbeatTimer = setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) {
+          if (ws.readyState !== WebSocket.OPEN) return;
+          try {
             ws.send(JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }));
+          } catch {
+            try { ws.close(); } catch {}
           }
-        }, 25000);
+        }, 15000);
       };
 
       ws.onmessage = (event) => {
@@ -989,7 +1026,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               ...(hasVoice ? { voiceUrl, duration: duration || 0 } : {}),
             };
             dispatch({ type: 'RECEIVE_MESSAGE', chatId, message: newMsg });
-            notifyIncomingMessage(chatId, newMsg);
+            notifyIncomingMessageRef.current(chatId, newMsg);
             window.dispatchEvent(new CustomEvent('bot_message_received', { detail: { chatId } }));
             console.log(`[AppContext] 收到 BOT 消息: chatId=${chatId} ${hasVoice ? '[语音] ' + voiceUrl : ''} ${content ? 'content=' + content.slice(0, 40) : ''}`);
             return;
@@ -1065,7 +1102,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                   ...(hmac ? { hmac, integrityStatus: 'unverified' as const } : {}),
                 };
                 dispatch({ type: 'RECEIVE_MESSAGE', chatId, message: newMsg });
-                notifyIncomingMessage(chatId, newMsg);
+                notifyIncomingMessageRef.current(chatId, newMsg);
               })();
             }
 
@@ -1284,43 +1321,54 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
        ws.onclose = () => {
         trackEvent('ws_reconnect', { code: 'signal_socket_closed' });
-        console.log('[AppContext] 持久信令连接断开，5 秒后重连...');
-        // 清除心跳定时器
-        if (heartbeatTimer) {
-          clearInterval(heartbeatTimer);
-          heartbeatTimer = null;
-        }
+        clearHeartbeat();
         // 仅当仍是当前 socket 时清理，避免旧连接回调清掉新连接
         if (botWsRef.current === ws) {
           botWsRef.current = null;
         }
         if (closedByEffect) return;
-        reconnectTimer = setTimeout(() => {
-          if (stateRef.current.isLoggedIn) connect();
-        }, 5000);
+        scheduleReconnect();
       };
       ws.onerror = (err) => {
         console.error('[AppContext] 持久信令连接错误:', err);
-        // 错误时也清除心跳
-        if (heartbeatTimer) {
-          clearInterval(heartbeatTimer);
-          heartbeatTimer = null;
-        }
+        clearHeartbeat();
       };
     };
+
+    const ensureConnected = () => {
+      if (closedByEffect || !stateRef.current.isLoggedIn) return;
+      const cur = botWsRef.current;
+      if (cur && (cur.readyState === WebSocket.OPEN || cur.readyState === WebSocket.CONNECTING)) return;
+      connect();
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') ensureConnected();
+    };
+    const onOnline = () => ensureConnected();
+    const onPageshow = () => ensureConnected();
+    const onEnsure = () => ensureConnected();
+
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('pageshow', onPageshow);
+    window.addEventListener('cqim:signal-ensure', onEnsure);
+
     connect();
     return () => {
       closedByEffect = true;
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
+      clearReconnect();
+      clearHeartbeat();
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('pageshow', onPageshow);
+      window.removeEventListener('cqim:signal-ensure', onEnsure);
       const cur = botWsRef.current;
       botWsRef.current = null;
       try { cur?.close(); } catch {}
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.isLoggedIn, notifyIncomingMessage]);
+  }, [state.isLoggedIn]);
 
   // 同步到 Zustand store
   // 在渲染期间直接同步更新，确保 AppContent 重渲染时读取到最新值

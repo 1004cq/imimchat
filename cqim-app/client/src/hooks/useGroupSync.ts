@@ -594,7 +594,22 @@ export function useGroupSync(options: UseGroupSyncOptions) {
   // ============ 发送消息 ============
 
   const sendMessage = useCallback(async (content: string, msgType = 'text', extra?: any) => {
-    const ws = wsRef.current;
+    const waitForOpenSocket = async (timeoutMs = 8000): Promise<WebSocket | null> => {
+      window.dispatchEvent(new Event('cqim:signal-ensure'));
+      const started = Date.now();
+      while (Date.now() - started < timeoutMs) {
+        const cur = wsRef.current;
+        if (cur && cur.readyState === WebSocket.OPEN) return cur;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      const last = wsRef.current;
+      return last && last.readyState === WebSocket.OPEN ? last : null;
+    };
+
+    let ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      ws = await waitForOpenSocket(8000);
+    }
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       toast.error('实时连接未就绪，消息未发送');
       return;
