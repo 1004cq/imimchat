@@ -881,6 +881,7 @@ async function handleMessage(client: SignalClient, raw: string) {
         if (effectiveMsgType !== 'mls_encrypted' && effectiveMsgType !== 'system') {
           sendTo(client.userId, {
             type: 'group_message' as any,
+            groupId,
             payload: { ack: true, groupId, seq: -1, timestamp: Date.now(), localId: localId || '', error: '群聊强制要求 MLS 端到端加密，禁止发送明文业务消息' },
           });
           return;
@@ -904,6 +905,7 @@ async function handleMessage(client: SignalClient, raw: string) {
           // 返回 ACK 给发送者（包含 localId 用于前端匹配乐观消息）
           sendTo(client.userId, {
             type: 'group_message' as any,
+            groupId,
             payload: { ack: true, groupId, seq: result.seq, timestamp: result.timestamp, localId: localId || '' },
           });
         }).catch(err => {
@@ -911,6 +913,7 @@ async function handleMessage(client: SignalClient, raw: string) {
           // 发送失败通知给发送者
           sendTo(client.userId, {
             type: 'group_message' as any,
+            groupId,
             payload: { ack: true, groupId, seq: -1, timestamp: Date.now(), localId: localId || '', error: err.message },
           });
         });
@@ -932,6 +935,7 @@ async function handleMessage(client: SignalClient, raw: string) {
         }).then(result => {
           sendTo(client.userId, {
             type: 'group_message' as any,
+            groupId,
             payload: { pull: true, groupId, ...result },
           });
         }).catch(err => {
@@ -2649,8 +2653,12 @@ app.use("/api/home", homeRouter);
         const v = (upstream.headers as any).get(h);
         if (v) res.setHeader(h, v);
       }
-      // 允许 Nginx / CDN 缓存 7 天，并允许跨域。
-      res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+      // 仅成功响应长期缓存；404/5xx 禁止缓存，避免坏头像被 CDN 钉死
+      if (upstream.status >= 200 && upstream.status < 300) {
+        res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+      } else {
+        res.setHeader('Cache-Control', 'no-store');
+      }
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Access-Control-Allow-Headers', 'Range');
       res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
@@ -3128,21 +3136,26 @@ app.use("/api/home", homeRouter);
     }
   });
 
-  // ★ 心跳检测：30s 无 pong 回应则断开死连接，释放资源
+  // ★ 心跳检测：以 lastSeen 为准（兼容 CDN 剥离 ping/pong 的情况）
+  // 客户端每 ~15s 发应用层 heartbeat；90s 无任何活动才断开
   const HEARTBEAT_INTERVAL = 30000;
+  const IDLE_TIMEOUT_MS = 90000;
   const heartbeatTimer = setInterval(() => {
+    const now = Date.now();
     for (const [userId, client] of clients) {
-      if (!(client as any)._alive) {
-        // 上次心跳未回应，断开连接
-        client.ws.terminate();
-        clients.delete(userId);
-        unregisterConnection(userId);
-        setUserOffline(userId).catch(() => {});
+      const lastSeen = Number((client as any)._lastSeen || 0);
+      if (lastSeen > 0 && now - lastSeen > IDLE_TIMEOUT_MS) {
+        console.warn(`[Signal] 空闲超时断开: ${userId} idle=${now - lastSeen}ms`);
+        try { client.ws.terminate(); } catch {}
+        if (clients.get(userId)?.ws === client.ws) {
+          clients.delete(userId);
+          unregisterConnection(userId, client.ws);
+          setUserOffline(userId).catch(() => {});
+        }
         continue;
       }
-      (client as any)._alive = false;
-      client.ws.ping();
-      // 心跳正常，刷新 Redis 在线状态 TTL
+      // 尽力发协议层 ping；即使 CDN 不回传 pong，应用层 heartbeat 也会刷新 lastSeen
+      try { client.ws.ping(); } catch {}
       refreshUserOnline(userId).catch(() => {});
     }
   }, HEARTBEAT_INTERVAL);
@@ -3203,6 +3216,12 @@ app.use("/api/home", homeRouter);
 
     const client: SignalClient = { ws, userId };
     (client as any)._alive = true;
+    (client as any)._lastSeen = Date.now();
+    // 若同用户已有旧连接，先关掉，避免双连接互相踢
+    const prev = clients.get(userId);
+    if (prev && prev.ws !== ws) {
+      try { prev.ws.close(4000, 'replaced'); } catch {}
+    }
     clients.set(userId, client);
     // 注册到万人群消息系统的连接池
     registerConnection(userId, ws);
@@ -3237,10 +3256,14 @@ app.use("/api/home", homeRouter);
     }
 
     // ★ pong 回调：标记连接存活
-    ws.on('pong', () => { (client as any)._alive = true; });
+    ws.on('pong', () => {
+      (client as any)._alive = true;
+      (client as any)._lastSeen = Date.now();
+    });
 
     ws.on("message", (data) => {
       (client as any)._alive = true; // 收到消息也视为存活
+      (client as any)._lastSeen = Date.now();
       handleMessage(client, data.toString());
     });
 
@@ -3261,9 +3284,14 @@ app.use("/api/home", homeRouter);
           }
         }
       }
+      // 仅清理当前这条连接，避免旧连接 close 把新连接踢下线
+      if (clients.get(userId)?.ws !== ws) {
+        console.log(`[Signal] 忽略旧连接断开: ${userId} (总在线: ${clients.size})`);
+        return;
+      }
       clients.delete(userId);
       // 从万人群消息系统注销
-      unregisterConnection(userId);
+      unregisterConnection(userId, ws);
       // 清除 Redis 在线状态，记录设备下线和最后在线时间
       setUserOffline(userId).catch(() => {});
       const _deviceId = (client as any)._deviceId;

@@ -10,7 +10,8 @@
  * 6. localId 匹配：发送消息时携带 localId，ACK 回传后精确匹配乐观消息
  */
 
-import { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { toast } from 'sonner';
 import { CURRENT_USER } from '@/lib/store';
 import { e2eeProxy } from '@/lib/e2ee/WorkerProxy';
 import {
@@ -53,8 +54,8 @@ interface UseGroupSyncOptions {
   groupId: string;
   /** 当前用户 ID */
   userId: string;
-  /** WebSocket 实例 */
-  ws: WebSocket | null;
+  /** WebSocket ref（始终读 .current，避免重连后拿到旧连接） */
+  wsRef: React.RefObject<WebSocket | null>;
   /** 是否启用（进入聊天页面时启用） */
   enabled?: boolean;
   /** 每页拉取条数 */
@@ -231,7 +232,7 @@ export function useGroupSync(options: UseGroupSyncOptions) {
   const {
     groupId,
     userId,
-    ws,
+    wsRef,
     enabled = true,
     pageSize = 50,
     maxMessagesInMemory = 2000,
@@ -254,6 +255,23 @@ export function useGroupSync(options: UseGroupSyncOptions) {
 
   // 保持 messagesRef 同步
   messagesRef.current = messages;
+
+  // 跟踪当前真实 WebSocket 实例：重连后 ref.current 会变，但 ref 对象本身不变，
+  // 必须用 liveWs 触发 effect 重新绑定 message/open 监听，否则收不到群消息 ACK。
+  const [liveWs, setLiveWs] = useState<WebSocket | null>(null);
+  useEffect(() => {
+    if (!enabled) {
+      setLiveWs(null);
+      return;
+    }
+    const sync = () => {
+      const cur = wsRef.current;
+      setLiveWs((prev) => (prev === cur ? prev : cur));
+    };
+    sync();
+    const timer = setInterval(sync, 500);
+    return () => clearInterval(timer);
+  }, [enabled, wsRef]);
 
   // ============ 消息合并处理 ============
 
@@ -440,6 +458,7 @@ export function useGroupSync(options: UseGroupSyncOptions) {
   // ============ WebSocket 实时消息处理 ============
 
   useEffect(() => {
+    const ws = liveWs;
     if (!ws || !enabled) return;
 
     const handleWsMessage = async (event: MessageEvent) => {
@@ -447,9 +466,13 @@ export function useGroupSync(options: UseGroupSyncOptions) {
         const data = JSON.parse(event.data);
 
         // 单条群消息推送
-        if (data.type === 'group_message' && data.groupId === groupId) {
-          // ACK 响应（包含 localId 用于精确匹配）
-          if (data.payload?.ack) {
+        // 注意：ACK/pull 的 groupId 在 payload 内，推送消息可能在顶层
+        if (data.type === 'group_message') {
+          const msgGroupId = data.groupId || data.payload?.groupId;
+          if (msgGroupId !== groupId) {
+            // 非本群，忽略
+          } else if (data.payload?.ack) {
+            // ACK 响应（包含 localId 用于精确匹配）
             const { seq, localId, error } = data.payload;
             if (error) {
               // 发送失败
@@ -458,6 +481,7 @@ export function useGroupSync(options: UseGroupSyncOptions) {
                   ? { ...m, status: 'failed' as const }
                   : m
               ));
+              toast.error(error || '群消息发送失败');
             } else {
               // 发送成功：通过 localId 精确匹配乐观消息
               setMessages(prev => prev.map(m =>
@@ -466,11 +490,8 @@ export function useGroupSync(options: UseGroupSyncOptions) {
                   : m
               ));
             }
-            return;
-          }
-
-          // 拉取响应
-          if (data.payload?.pull) {
+          } else if (data.payload?.pull) {
+            // 拉取响应
             const pullMsgs = await decryptGroupBatch(groupId, userId, data.payload.messages || []);
             if (pullMsgs.length > 0) {
               handleBatchMessages(pullMsgs);
@@ -479,17 +500,16 @@ export function useGroupSync(options: UseGroupSyncOptions) {
             }
             setHasMore(data.payload.hasMore);
             setLatestSeq(data.payload.latestSeq);
-            return;
+          } else {
+            // 普通推送消息：统一交给 Worker 串行解密。
+            const [msg] = await decryptGroupBatch(groupId, userId, [data]);
+            if (msg) {
+              batcherRef.current?.add(msg);
+              localSeqRef.current = Math.max(localSeqRef.current, msg.seq);
+              persistLastSeq(localSeqRef.current);
+              onNewMessageRef.current?.(msg);
+            }
           }
-
-          // 普通推送消息：统一交给 Worker 串行解密。
-          const [msg] = await decryptGroupBatch(groupId, userId, [data]);
-          if (!msg) return;
-
-          batcherRef.current?.add(msg);
-          localSeqRef.current = Math.max(localSeqRef.current, msg.seq);
-          persistLastSeq(localSeqRef.current);
-          onNewMessageRef.current?.(msg);
         }
 
         // ===== 群聊撤回通知 =====
@@ -505,17 +525,20 @@ export function useGroupSync(options: UseGroupSyncOptions) {
           return;
         }
         // 批量群消息推送：Worker 内按 seq 顺序解密，禁止明文透传。
-        if (data.type === 'group_message_batch' && data.groupId === groupId) {
-          const batchMsgs = await decryptGroupBatch(groupId, userId, data.messages || []);
-          handleBatchMessages(batchMsgs);
-          if (batchMsgs.length > 0) {
-            localSeqRef.current = Math.max(
-              localSeqRef.current,
-              Math.max(...batchMsgs.map(m => m.seq))
-            );
-            persistLastSeq(localSeqRef.current);
-            // 触发最后一条消息回调
-            onNewMessageRef.current?.(batchMsgs[batchMsgs.length - 1]);
+        if (data.type === 'group_message_batch') {
+          const batchGroupId = data.groupId || data.payload?.groupId;
+          if (batchGroupId === groupId) {
+            const batchMsgs = await decryptGroupBatch(groupId, userId, data.messages || data.payload?.messages || []);
+            handleBatchMessages(batchMsgs);
+            if (batchMsgs.length > 0) {
+              localSeqRef.current = Math.max(
+                localSeqRef.current,
+                Math.max(...batchMsgs.map(m => m.seq))
+              );
+              persistLastSeq(localSeqRef.current);
+              // 触发最后一条消息回调
+              onNewMessageRef.current?.(batchMsgs[batchMsgs.length - 1]);
+            }
           }
         }
       } catch {
@@ -542,19 +565,27 @@ export function useGroupSync(options: UseGroupSyncOptions) {
     return () => {
       ws.removeEventListener('message', handleWsMessage);
     };
-  }, [ws, enabled, groupId, handleBatchMessages, persistLastSeq]);
+  }, [liveWs, enabled, groupId, userId, handleBatchMessages, persistLastSeq]);
 
   // ============ 加入/离开群在线列表 ============
 
   useEffect(() => {
-    if (!ws || !enabled || ws.readyState !== WebSocket.OPEN) return;
+    const ws = liveWs;
+    if (!ws || !enabled) return;
 
-    ws.send(JSON.stringify({
-      type: 'group_join',
-      payload: { groupId },
-    }));
+    const join = () => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: 'group_join',
+          payload: { groupId },
+        }));
+      }
+    };
+    join();
+    ws.addEventListener('open', join);
 
     return () => {
+      ws.removeEventListener('open', join);
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
           type: 'group_leave',
@@ -562,12 +593,31 @@ export function useGroupSync(options: UseGroupSyncOptions) {
         }));
       }
     };
-  }, [ws, enabled, groupId]);
+  }, [liveWs, enabled, groupId]);
 
   // ============ 发送消息 ============
 
   const sendMessage = useCallback(async (content: string, msgType = 'text', extra?: any) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const waitForOpenSocket = async (timeoutMs = 8000): Promise<WebSocket | null> => {
+      window.dispatchEvent(new Event('cqim:signal-ensure'));
+      const started = Date.now();
+      while (Date.now() - started < timeoutMs) {
+        const cur = wsRef.current;
+        if (cur && cur.readyState === WebSocket.OPEN) return cur;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      const last = wsRef.current;
+      return last && last.readyState === WebSocket.OPEN ? last : null;
+    };
+
+    let ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      ws = await waitForOpenSocket(8000);
+    }
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      toast.error('实时连接未就绪，消息未发送');
+      return;
+    }
 
     // 生成唯一 localId 用于 ACK 匹配
     const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -662,11 +712,12 @@ export function useGroupSync(options: UseGroupSyncOptions) {
 
     // 触发新消息回调
     onNewMessageRef.current?.(optimisticMsg);
-  }, [ws, groupId, userId]);
+  }, [wsRef, groupId, userId]);
 
   // ============ 撤回群消息 ============
 
   const recallMessage = useCallback((messageId: string, seq: number) => {
+    const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     // 本地乐观更新
     setMessages(prev => prev.map(m =>
@@ -677,7 +728,7 @@ export function useGroupSync(options: UseGroupSyncOptions) {
       type: 'group_recall',
       payload: { groupId, messageId, seq },
     }));
-  }, [ws, groupId]);
+  }, [wsRef, groupId]);
 
   // ============ 确认已读 ============
 
@@ -688,19 +739,21 @@ export function useGroupSync(options: UseGroupSyncOptions) {
     lastAckSeqRef.current = ackSeq;
 
     // 通过 WebSocket 发送 ACK
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
+    const wsAck = wsRef.current;
+    if (wsAck && wsAck.readyState === WebSocket.OPEN) {
+      wsAck.send(JSON.stringify({
         type: 'group_ack',
         payload: { groupId, lastAckSeq: ackSeq },
       }));
     }
 
     setUnreadCount(0);
-  }, [ws, groupId]);
+  }, [wsRef, groupId]);
 
   // ============ 离线补偿（重连后按 lastSeq 自动补拉） ============
 
   useEffect(() => {
+    const ws = liveWs;
     if (!enabled || !groupId) return;
 
     const pullAfterReconnect = (candidate?: WebSocket | null) => {
@@ -730,7 +783,7 @@ export function useGroupSync(options: UseGroupSyncOptions) {
       ws?.removeEventListener('open', handleOpen);
       window.removeEventListener('cqim:signal-open', handleGlobalOpen);
     };
-  }, [ws, enabled, groupId]);
+  }, [liveWs, enabled, groupId]);
 
   return {
     /** 当前群消息列表（已排序） */

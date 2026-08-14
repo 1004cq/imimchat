@@ -232,7 +232,9 @@ export function registerConnection(userId: string, ws: WebSocket) {
   onlineConnections.set(userId, ws);
 }
 
-export function unregisterConnection(userId: string) {
+/** 仅当仍是当前连接时注销，避免旧 socket 的 close 清掉新连接 */
+export function unregisterConnection(userId: string, ws?: WebSocket) {
+  if (ws && onlineConnections.get(userId) !== ws) return;
   onlineConnections.delete(userId);
   // 从所有群在线列表中移除
   for (const [, members] of groupOnlineMembers) {

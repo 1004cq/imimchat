@@ -65,7 +65,11 @@ export const DoveAvatar: React.FC<DoveAvatarProps> = ({
   onClick,
   isGroup = false,
 }) => {
-  const [imgSrc, setImgSrc] = useState(() => appendCacheBuster(avatar || ''));
+  const [imgSrc, setImgSrc] = useState(() => {
+    if (id === 'BOT' || name === 'imim AI') return '/imim-ai-avatar.jpg?v=2';
+    if (id === 'official' || name === 'imim 官方') return '/imim-official-avatar.jpg?v=2';
+    return appendCacheBuster(avatar || '');
+  });
   const [imgFailed, setImgFailed] = useState(false);
   const retryCountRef = useRef(0);
   const mountedRef = useRef(true);
@@ -78,19 +82,28 @@ export const DoveAvatar: React.FC<DoveAvatarProps> = ({
   useEffect(() => {
     retryCountRef.current = 0;
     setImgFailed(false);
+    // BOT / 官方账号始终使用本地静态头像，避免会话列表脏 URL 或坏缓存导致裂图
+    if (id === 'BOT' || name === 'imim AI') {
+      setImgSrc('/imim-ai-avatar.jpg?v=2');
+      return;
+    }
+    if (id === 'official' || name === 'imim 官方') {
+      setImgSrc('/imim-official-avatar.jpg?v=2');
+      return;
+    }
     setImgSrc(appendCacheBuster(avatar || ''));
-  }, [avatar]);
+  }, [avatar, id, name]);
 
   const handleError = useCallback(() => {
     if (!mountedRef.current) return;
 
-    // 官方/AI 头像 fallback 到本地图片
-    if ((id === 'BOT' || name === 'imim AI') && imgSrc !== '/imim-ai-avatar.jpg') {
-      setImgSrc('/imim-ai-avatar.jpg');
+    // 官方/AI 头像 fallback 到本地图片（带版本参数，避免 CDN/Safari 缓存坏响应）
+    if ((id === 'BOT' || name === 'imim AI') && !imgSrc.includes('/imim-ai-avatar.jpg')) {
+      setImgSrc('/imim-ai-avatar.jpg?v=2');
       return;
     }
-    if ((id === 'official' || name === 'imim 官方') && imgSrc !== '/imim-official-avatar.jpg') {
-      setImgSrc('/imim-official-avatar.jpg');
+    if ((id === 'official' || name === 'imim 官方') && !imgSrc.includes('/imim-official-avatar.jpg')) {
+      setImgSrc('/imim-official-avatar.jpg?v=2');
       return;
     }
 

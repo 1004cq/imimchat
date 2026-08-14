@@ -180,7 +180,7 @@ export default function ChatDetailPage() {
   const groupSync = useGroupSync({
     groupId: chat?.groupId || '',
     userId: state.currentUser?.id || localStorage.getItem('user_id') || 'me',
-    ws: signalWs?.current || null,
+    wsRef: signalWs,
     enabled: isGroupChat,
     onNewMessage: useCallback((msg) => {
       if (!chatId || !chat) return;
@@ -1640,7 +1640,7 @@ export default function ChatDetailPage() {
         typing={typingIndicator}
         typingName={otherUser?.name}
         typingUserId={otherMember || 'typing-user'}
-        typingAvatar={otherUser?.avatar}
+        typingAvatar={otherMember === 'BOT' || chat?.members?.includes('BOT') ? '/imim-ai-avatar.jpg?v=2' : otherUser?.avatar}
       />
 
       <Composer
