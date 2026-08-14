@@ -1,7 +1,10 @@
 import React from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { DoveAvatar } from '@/components/DoveAvatar';
-import VirtualMessageList, { type VirtualMessageItem } from '@/components/VirtualMessageList';
+import VirtualMessageList, {
+  type VirtualMessageItem,
+  type VirtualMessageListHandle,
+} from '@/components/VirtualMessageList';
 
 export interface MessageListContainerProps {
   messages: VirtualMessageItem[];
@@ -14,6 +17,8 @@ export interface MessageListContainerProps {
   typingUserId?: string;
   typingAvatar?: string;
   className?: string;
+  chatId?: string | null;
+  listRef?: React.Ref<VirtualMessageListHandle>;
 }
 
 export const MessageListContainer = React.memo(function MessageListContainer({
@@ -27,10 +32,14 @@ export const MessageListContainer = React.memo(function MessageListContainer({
   typingUserId,
   typingAvatar,
   className = '',
+  chatId = null,
+  listRef,
 }: MessageListContainerProps) {
   return (
     <div className={`flex-1 min-h-0 flex flex-col ${className}`} style={{ background: 'var(--imim-chat-bg, transparent)' }}>
       <VirtualMessageList
+        ref={listRef}
+        chatId={chatId}
         messages={messages}
         currentUserId={currentUserId}
         loading={loading}

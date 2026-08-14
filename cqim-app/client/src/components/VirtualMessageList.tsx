@@ -3,10 +3,25 @@
  *
  * 只渲染视口附近的消息，消息高度通过 ResizeObserver 动态测量；
  * 不依赖第三方虚拟列表库，群聊与私聊都可以复用。
+ * 按 chatId + messageId 持久化/恢复阅读位置（避免动态高度下 scrollTop 错位）。
  */
-import React, { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, {
+  forwardRef,
+  memo,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { springBadge } from '@/lib/animations';
+import {
+  clearChatScrollAnchor,
+  loadChatScrollAnchor,
+  saveChatScrollAnchor,
+} from '@/lib/chatScrollAnchor';
 
 export interface VirtualMessageItem {
   id?: string;
@@ -18,6 +33,12 @@ export interface VirtualMessageItem {
   timestamp: number;
   status?: 'sending' | 'sent' | 'delivered' | 'failed' | string;
   isRevoked?: boolean;
+}
+
+export interface VirtualMessageListHandle {
+  scrollToBottom: (behavior?: ScrollBehavior) => void;
+  getVisibleAnchorMessageId: () => string | null;
+  persistAnchor: () => void;
 }
 
 interface VirtualMessageListProps {
@@ -36,6 +57,8 @@ interface VirtualMessageListProps {
   className?: string;
   height?: number | string;
   estimatedRowHeight?: number;
+  /** 会话 ID：用于按会话隔离阅读锚点 */
+  chatId?: string | null;
 }
 
 const DEFAULT_ROW_HEIGHT = 76;
@@ -118,7 +141,7 @@ const MessageSkeleton = memo(() => (
 ));
 MessageSkeleton.displayName = 'MessageSkeleton';
 
-export const VirtualMessageList = memo(({
+export const VirtualMessageList = memo(forwardRef<VirtualMessageListHandle, VirtualMessageListProps>(function VirtualMessageList({
   messages,
   currentUserId,
   loading = false,
@@ -129,7 +152,8 @@ export const VirtualMessageList = memo(({
   className = '',
   height,
   estimatedRowHeight = DEFAULT_ROW_HEIGHT,
-}: VirtualMessageListProps) => {
+  chatId = null,
+}, ref) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const rowHeightsRef = useRef(new Map<string, number>());
@@ -139,6 +163,13 @@ export const VirtualMessageList = memo(({
   const isAtBottomRef = useRef(true);
   const prevLengthRef = useRef(messages.length);
   const rafRef = useRef<number | null>(null);
+  const saveAnchorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingAnchorRef = useRef<string | null | undefined>(undefined);
+  const restoreAttemptsRef = useRef(0);
+  const activeChatIdRef = useRef<string | null>(chatId || null);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const [layoutVersion, setLayoutVersion] = useState(0);
@@ -176,6 +207,124 @@ export const VirtualMessageList = memo(({
   const totalHeight = messages.reduce((sum, msg, index) => sum + getHeight(msg, index), 0);
   const { start, end } = getRange();
 
+  const getVisibleAnchorMessageId = useCallback((): string | null => {
+    const list = messagesRef.current;
+    if (!list.length) return null;
+    const container = scrollContainerRef.current;
+    if (!container) return list[list.length - 1]?.id || null;
+    const top = container.scrollTop + 12;
+    let offset = 0;
+    for (let i = 0; i < list.length; i += 1) {
+      const h = rowHeightsRef.current.get(`${list[i].id || list[i].seq || 'message'}-${i}`) || estimatedRowHeight;
+      if (offset + h > top) return list[i].id || null;
+      offset += h;
+    }
+    return list[list.length - 1]?.id || null;
+  }, [estimatedRowHeight]);
+
+  const persistAnchor = useCallback(() => {
+    const id = activeChatIdRef.current;
+    if (!id) return;
+    const container = scrollContainerRef.current;
+    if (container) {
+      const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+      if (nearBottom) {
+        clearChatScrollAnchor(id);
+        return;
+      }
+    }
+    const msgId = getVisibleAnchorMessageId();
+    if (msgId) saveChatScrollAnchor(id, msgId);
+  }, [getVisibleAnchorMessageId]);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    const container = scrollContainerRef.current;
+    if (container) {
+      if (behavior === 'auto') {
+        container.scrollTop = container.scrollHeight;
+        setScrollTop(container.scrollTop);
+      } else {
+        bottomRef.current?.scrollIntoView({ behavior });
+      }
+    } else {
+      bottomRef.current?.scrollIntoView({ behavior });
+    }
+    isAtBottomRef.current = true;
+    setShowNewMsgTip(false);
+    setNewMsgCount(0);
+    const id = activeChatIdRef.current;
+    if (id) clearChatScrollAnchor(id);
+  }, []);
+
+  const scrollToMessageId = useCallback((messageId: string) => {
+    const container = scrollContainerRef.current;
+    const list = messagesRef.current;
+    if (!container || !list.length) return false;
+    const index = list.findIndex(m => m.id === messageId);
+    if (index < 0) return false;
+    let offset = 0;
+    for (let i = 0; i < index; i += 1) {
+      offset += rowHeightsRef.current.get(`${list[i].id || list[i].seq || 'message'}-${i}`) || estimatedRowHeight;
+    }
+    container.scrollTop = offset;
+    setScrollTop(offset);
+    isAtBottomRef.current = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+    return true;
+  }, [estimatedRowHeight]);
+
+  useImperativeHandle(ref, () => ({
+    scrollToBottom,
+    getVisibleAnchorMessageId,
+    persistAnchor,
+  }), [scrollToBottom, getVisibleAnchorMessageId, persistAnchor]);
+
+  // 切换会话：重置恢复状态，并加载该会话锚点
+  useLayoutEffect(() => {
+    activeChatIdRef.current = chatId || null;
+    restoreAttemptsRef.current = 0;
+    if (chatId) {
+      pendingAnchorRef.current = loadChatScrollAnchor(chatId);
+    } else {
+      pendingAnchorRef.current = undefined;
+    }
+    rowHeightsRef.current.clear();
+    isAtBottomRef.current = true;
+    prevLengthRef.current = 0;
+  }, [chatId]);
+
+  // 消息就绪后恢复锚点；无锚点或消息不在列表则滚到底
+  useLayoutEffect(() => {
+    if (!chatId || messages.length === 0) return;
+    if (pendingAnchorRef.current === undefined) return;
+
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const anchor = pendingAnchorRef.current;
+    if (!anchor) {
+      container.scrollTop = container.scrollHeight;
+      setScrollTop(container.scrollTop);
+      isAtBottomRef.current = true;
+      pendingAnchorRef.current = undefined;
+      return;
+    }
+
+    const ok = scrollToMessageId(anchor);
+    restoreAttemptsRef.current += 1;
+    // 高度测量稳定后再结束，或消息不在列表 / 尝试过多则到底部
+    if (!ok) {
+      container.scrollTop = container.scrollHeight;
+      setScrollTop(container.scrollTop);
+      isAtBottomRef.current = true;
+      pendingAnchorRef.current = undefined;
+      clearChatScrollAnchor(chatId);
+      return;
+    }
+    if (restoreAttemptsRef.current >= 4 || layoutVersion >= 3) {
+      pendingAnchorRef.current = undefined;
+    }
+  }, [chatId, messages.length, layoutVersion, scrollToMessageId]);
+
   const handleScroll = useCallback(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
@@ -200,7 +349,14 @@ export const VirtualMessageList = memo(({
       onLoadMore();
       window.setTimeout(() => { isLoadingMoreRef.current = false; }, 600);
     }
-  }, [hasMore, loadMoreAt, onLoadMore]);
+    // 恢复完成后才持久化锚点，避免覆盖
+    if (pendingAnchorRef.current === undefined && activeChatIdRef.current) {
+      if (saveAnchorTimerRef.current) clearTimeout(saveAnchorTimerRef.current);
+      saveAnchorTimerRef.current = setTimeout(() => {
+        persistAnchor();
+      }, 200);
+    }
+  }, [hasMore, loadMoreAt, onLoadMore, persistAnchor]);
 
   useLayoutEffect(() => {
     const container = scrollContainerRef.current;
@@ -227,7 +383,7 @@ export const VirtualMessageList = memo(({
 
   useEffect(() => {
     const added = messages.length - prevLengthRef.current;
-    if (added > 0) {
+    if (added > 0 && pendingAnchorRef.current === undefined) {
       if (isAtBottomRef.current) {
         requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ behavior: added <= 3 ? 'smooth' : 'auto' }));
       } else {
@@ -240,15 +396,11 @@ export const VirtualMessageList = memo(({
 
   useEffect(() => () => {
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    if (saveAnchorTimerRef.current) clearTimeout(saveAnchorTimerRef.current);
+    persistAnchor();
     rowObserversRef.current.forEach(observer => observer.disconnect());
     rowObserversRef.current.clear();
-  }, []);
-
-  const scrollToBottom = useCallback(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-    setShowNewMsgTip(false);
-    setNewMsgCount(0);
-  }, []);
+  }, [persistAnchor]);
 
   const measureRow = useCallback((key: string, node: HTMLDivElement | null) => {
     const previousObserver = rowObserversRef.current.get(key);
@@ -257,9 +409,9 @@ export const VirtualMessageList = memo(({
     if (!node || typeof ResizeObserver === 'undefined') return;
 
     const observer = new ResizeObserver(entries => {
-      const height = entries[0]?.contentRect.height;
-      if (height && Math.abs((rowHeightsRef.current.get(key) || 0) - height) > 1) {
-        rowHeightsRef.current.set(key, height);
+      const measured = entries[0]?.contentRect.height;
+      if (measured && Math.abs((rowHeightsRef.current.get(key) || 0) - measured) > 1) {
+        rowHeightsRef.current.set(key, measured);
         setLayoutVersion(version => version + 1);
       }
     });
@@ -306,7 +458,7 @@ export const VirtualMessageList = memo(({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.8 }}
             transition={springBadge}
-            onClick={scrollToBottom}
+            onClick={() => scrollToBottom('smooth')}
             className="absolute bottom-4 right-4 flex items-center gap-1.5 px-3 py-1.5 bg-dove-green text-white text-xs font-medium rounded-full shadow-lg z-10"
           >
             ↓ {newMsgCount} 条新消息
@@ -315,7 +467,7 @@ export const VirtualMessageList = memo(({
       </AnimatePresence>
     </div>
   );
-});
+}));
 
 VirtualMessageList.displayName = 'VirtualMessageList';
 export default VirtualMessageList;
