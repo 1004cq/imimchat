@@ -131,6 +131,7 @@ export default function ChatDetailPage() {
   const [chatMissing, setChatMissing] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [inputText, setInputText] = useState('');
+  const [isSending, setIsSending] = useState(false);
   const [showExtra, setShowExtra] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
   const [showEncryption, setShowEncryption] = useState(false);
@@ -728,114 +729,109 @@ export default function ChatDetailPage() {
   }, [chatId, setEphemeralTimer, sendMessage]);
 
   const handleSend = useCallback(async () => {
-    if (!inputText.trim() || !chatId) return;
+    if (!inputText.trim() || !chatId || isSending) return;
     const text = inputText.trim();
     const currentMentions = [...pendingMentions];
     const activeReply = replyingTo;
-    setInputText('');
-    setPendingMentions([]);
-    setMentionQuery(null);
-    setReplyingTo(null);
-    setShowExtra(false);
-    setShowEmoji(false);
-    // 主动发送：回到底部并清除阅读锚点
-    messageListRef.current?.scrollToBottom('smooth');
 
-    // ===== 群聊消息发送：通过 useGroupSync =====
-    if (isGroupChat && chat?.groupId) {
-      const currentMentionsCopy = [...pendingMentions];
-      groupSync.sendMessage(
-        text,
-        'text',
-        {
-          ...(currentMentionsCopy.length > 0 ? { mentions: currentMentionsCopy } : {}),
-          ...(activeReply ? { replyToId: activeReply.id } : {}),
-        }
-      );
-      return;
-    }
+    const clearComposer = () => {
+      setInputText('');
+      setPendingMentions([]);
+      setMentionQuery(null);
+      setReplyingTo(null);
+      setShowExtra(false);
+      setShowEmoji(false);
+    };
 
-    // ===== BOT 聊天：调用 AI 接口 =====
-    if (chat?.members?.includes('BOT')) {
-      // 先发送用户消息
-      const userMsg: Message = {
-        id: `msg-${Date.now()}`,
-        chatId,
-        senderId: currentUserId,
-        senderProfile: { name: currentUser?.name || '我', avatar: currentUser?.avatar || '' }, // 强制注入当前用户 Profile
-        content: text,
-        type: 'text',
-        timestamp: Date.now(),
-        isEncrypted: false,
-        reactions: {},
-        status: 'sent',
-        replyTo: activeReply?.id,
-      };
-      sendMessage(chatId, userMsg);
+    const authToken = () => localStorage.getItem('user_token') || localStorage.getItem('auth_token');
 
-      // 显示打字指示器
-      setTypingIndicator(true);
+    setIsSending(true);
+    try {
+      messageListRef.current?.scrollToBottom('smooth');
 
-      try {
-        // 通过 push-to-onebot 将消息上报给 AstrBot 处理
-        // AstrBot 处理后会通过 send_private_msg 回调，后端再通过 WebSocket 推送 bot_message
-        const resp = await fetch('/api/push-to-onebot', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chatId,
-            senderId: CURRENT_USER.id,
-            content: text,
-            nickname: CURRENT_USER.name,
-            isGroup: false,
-          }),
-        });
+      // ===== 群聊消息发送：通过 useGroupSync =====
+      if (isGroupChat && chat?.groupId) {
+        await groupSync.sendMessage(
+          text,
+          'text',
+          {
+            ...(currentMentions.length > 0 ? { mentions: currentMentions } : {}),
+            ...(activeReply ? { replyToId: activeReply.id } : {}),
+          }
+        );
+        clearComposer();
+        return;
+      }
 
-        if (!resp.ok) {
-          // push-to-onebot 失败（AstrBot 未连接），显示错误提示
+      // ===== BOT 聊天：调用 AI 接口 =====
+      if (chat?.members?.includes('BOT')) {
+        const userMsg: Message = {
+          id: `msg-${Date.now()}`,
+          chatId,
+          senderId: currentUserId,
+          senderProfile: { name: currentUser?.name || '我', avatar: currentUser?.avatar || '' },
+          content: text,
+          type: 'text',
+          timestamp: Date.now(),
+          isEncrypted: false,
+          reactions: {},
+          status: 'sent',
+          replyTo: activeReply?.id,
+        };
+        sendMessage(chatId, userMsg);
+        clearComposer();
+
+        setTypingIndicator(true);
+        try {
+          const resp = await fetch('/api/push-to-onebot', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chatId,
+              senderId: CURRENT_USER.id,
+              content: text,
+              nickname: CURRENT_USER.name,
+              isGroup: false,
+            }),
+          });
+
+          if (!resp.ok) {
+            setTypingIndicator(false);
+            sendMessage(chatId, {
+              id: `bot-err-${Date.now()}`,
+              chatId,
+              senderId: 'BOT',
+              content: '抱歉，AI 服务暂时不可用，请稍后再试。',
+              type: 'text',
+              timestamp: Date.now() + 100,
+              isEncrypted: false,
+              reactions: {},
+              status: 'delivered',
+            });
+          }
+        } catch {
           setTypingIndicator(false);
-          const errReply: Message = {
+          sendMessage(chatId, {
             id: `bot-err-${Date.now()}`,
             chatId,
             senderId: 'BOT',
-            content: '抱歉，AI 服务暂时不可用，请稍后再试。',
+            content: '网络连接失败，请检查网络后重试。',
             type: 'text',
             timestamp: Date.now() + 100,
             isEncrypted: false,
             reactions: {},
             status: 'delivered',
-          };
-          sendMessage(chatId, errReply);
+          });
         }
-        // 成功时不做任何事，等待后端通过 WebSocket 推送 bot_message
-        // AppContext 会自动接收并展示 AstrBot 的回复，同时关闭打字指示器
-      } catch {
-        setTypingIndicator(false);
-        const errReply: Message = {
-          id: `bot-err-${Date.now()}`,
-          chatId,
-          senderId: 'BOT',
-          content: '网络连接失败，请检查网络后重试。',
-          type: 'text',
-          timestamp: Date.now() + 100,
-          isEncrypted: false,
-          reactions: {},
-          status: 'delivered',
-        };
-        sendMessage(chatId, errReply);
+        return;
       }
-      return;
-    }
 
-    // 确定消息的阅后即焚定时器（优先使用会话级消失模式）
-    const effectiveBurnTimer = chat?.ephemeralTimer ?? burnTimer;
+      const effectiveBurnTimer = chat?.ephemeralTimer ?? burnTimer;
 
-    // P0 安全铁律：私聊强制 E2EE
-    if (chat?.type === 'private' && otherMember && chatId !== 'c0' && chatId !== 'cBOT') {
-      try {
+      // P0 安全铁律：私聊强制 E2EE
+      if (chat?.type === 'private' && otherMember && chatId !== 'c0' && chatId !== 'cBOT') {
         addLog(`[E2EE] 正在加密消息...`);
-        
-        // 1. 建立会话（如果不存在）
+
         const sessionInfo = await e2ee.getSessionInfo(otherMember);
         if (!sessionInfo?.established) {
           const bundle = await e2ee.fetchRemoteBundle(otherMember);
@@ -843,7 +839,6 @@ export default function ChatDetailPage() {
           setSessionEstablished(true);
         }
 
-        // 2. 准备加密载荷（包含真实消息类型和内容）
         const payload = JSON.stringify({
           content: text,
           msgType: 'text',
@@ -852,14 +847,11 @@ export default function ChatDetailPage() {
           }
         });
 
-        // 3. 执行加密得到信封
-        const envelope = await e2ee.encrypt(otherMember, payload);
+        const envelope = await e2ee.encryptOrThrow(otherMember, payload);
         const envelopeStr = JSON.stringify(envelope);
-
         const encTempId = createClientMsgId();
         const msgTimestamp = Date.now();
 
-        // 4. 消息防篡改：对密文计算 HMAC
         let msgHmac: string | undefined;
         if (integrityKey) {
           try {
@@ -872,7 +864,7 @@ export default function ChatDetailPage() {
           chatId,
           senderId: currentUserId,
           senderProfile: { name: currentUser?.name || '我', avatar: currentUser?.avatar || '' },
-          content: text, // UI 本地显示明文
+          content: text,
           type: 'text',
           timestamp: msgTimestamp,
           isEncrypted: true,
@@ -884,25 +876,25 @@ export default function ChatDetailPage() {
           replyTo: activeReply?.id,
         };
         sendMessage(chatId, msg);
+        clearComposer();
 
-        // 5. 发送加密信封给服务器
         const ws = signalWs?.current;
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({
             type: 'private_send',
-            payload: { 
-              chatId, 
-              content: envelopeStr, 
-              msgType: 'encrypted', 
+            payload: {
+              chatId,
+              content: envelopeStr,
+              msgType: 'encrypted',
               tempId: encTempId,
               clientMsgId: encTempId,
-              ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), 
-              ...(msgHmac ? { hmac: msgHmac } : {}), 
-              ...(activeReply ? { replyToId: activeReply.id } : {}) 
+              ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}),
+              ...(msgHmac ? { hmac: msgHmac } : {}),
+              ...(activeReply ? { replyToId: activeReply.id } : {}),
             },
           }));
         } else {
-          const token = localStorage.getItem('user_token');
+          const token = authToken();
           if (token) {
             fetch(`/api/chat/${chatId}/messages`, {
               method: 'POST',
@@ -922,33 +914,37 @@ export default function ChatDetailPage() {
               .catch(err => {
                 updateMessageStatus(chatId, encTempId, 'failed');
                 trackEvent('message_send_failed', { chatId, msgType: 'encrypted', error: err, direction: 'outbound' });
+                toast.error('消息发送失败，请检查网络后重试');
               });
           } else {
             updateMessageStatus(chatId, encTempId, 'failed');
+            toast.error('登录状态已失效，请重新登录');
           }
         }
         return;
-      } catch (err: any) {
-        console.error('[E2EE] 发送失败:', err);
-        const msg = String(err?.message || err || '');
-        const userMsg = msg.includes('对方安全凭证') || msg.includes('peer_bundle_outdated') || msg.includes('428')
-          ? '对方需要重新登录一次才能恢复加密聊天（戈涛账号凭证过旧）'
-          : msg.includes('missing_signing_public_key') || msg.includes('客户端版本过旧')
-            ? '请清除浏览器缓存后重新打开 wed.imim.chat 并登录'
-            : msg.includes('无法获取用户') && msg.includes('Bundle')
-              ? '无法获取对方加密凭证，请让对方重新登录后再试'
-              : `无法建立加密连接: ${msg.replace(/^安全凭证验证失败:\s*/, '')}`;
-        trackE2EEFailure(err?.message?.includes('Bundle') || err?.message?.includes('安全凭证') ? 'bundle' : 'encrypt', { chatId, msgType: 'encrypted', error: err, direction: 'outbound' });
-        trackEvent('message_send_failed', { chatId, msgType: 'encrypted', error: err, direction: 'outbound' });
-        toast.error(userMsg);
-        addLog(`❌ E2EE 错误: ${msg}`);
-        return;
       }
-    }
 
-    // 非私聊保留原有逻辑（降级/Mock）
-    const detectedUrlFallback = extractUrl(text);
-  }, [inputText, chatId, sendMessage, chat, e2ee, otherMember, sessionEstablished, addLog, burnTimer, forwardRestricted, signalWs, currentUserId, dispatch, integrityKey, pendingMentions, replyingTo, isGroupChat, groupSync]);
+      toast.error('无法发送：会话信息不完整，请返回后重新进入聊天');
+    } catch (err: any) {
+      console.error('[E2EE] 发送失败:', err);
+      const msg = String(err?.message || err || '');
+      const userMsg = msg.includes('对方安全凭证') || msg.includes('peer_bundle_outdated') || msg.includes('428')
+        ? '对方需要重新登录一次才能恢复加密聊天'
+        : msg.includes('missing_signing_public_key') || msg.includes('客户端版本过旧')
+          ? '请清除浏览器缓存后重新打开 wed.imim.chat 并登录'
+          : msg.includes('无法获取用户') && msg.includes('Bundle')
+            ? '无法获取对方加密凭证，请让对方重新登录后再试'
+            : msg.includes('E2EE 未初始化') || msg.includes('加密失败')
+              ? '加密模块未就绪，请刷新页面后重试'
+              : `无法发送消息: ${msg.replace(/^安全凭证验证失败:\s*/, '')}`;
+      trackE2EEFailure(err?.message?.includes('Bundle') || err?.message?.includes('安全凭证') ? 'bundle' : 'encrypt', { chatId, msgType: 'encrypted', error: err, direction: 'outbound' });
+      trackEvent('message_send_failed', { chatId, msgType: 'encrypted', error: err, direction: 'outbound' });
+      toast.error(userMsg);
+      addLog(`❌ E2EE 错误: ${msg}`);
+    } finally {
+      setIsSending(false);
+    }
+  }, [inputText, chatId, isSending, sendMessage, chat, e2ee, otherMember, sessionEstablished, addLog, burnTimer, forwardRestricted, signalWs, currentUserId, dispatch, integrityKey, pendingMentions, replyingTo, isGroupChat, groupSync, currentUser]);
 
   const handleSendEmoji = useCallback(async (emoji: string) => {
     if (!chatId) return;
@@ -1831,6 +1827,7 @@ export default function ChatDetailPage() {
         onChooseImage={() => { if (!mediaUploading) imageInputRef.current?.click(); }}
         onChooseVideo={() => { if (!mediaUploading) videoInputRef.current?.click(); }}
         onClearPrivacy={() => { setBurnTimer(undefined); setForwardRestricted(false); }}
+        isSending={isSending}
       />
 
       {/* E2EE 加密信息弹窗 */}

@@ -52,6 +52,7 @@ export interface ComposerProps {
   onChooseImage: () => void;
   onChooseVideo: () => void;
   onClearPrivacy: () => void;
+  isSending?: boolean;
 }
 
 export const Composer = React.memo(function Composer({
@@ -87,6 +88,7 @@ export const Composer = React.memo(function Composer({
   onChooseImage,
   onChooseVideo,
   onClearPrivacy,
+  isSending = false,
 }: ComposerProps) {
   const [showEmoji, setShowEmoji] = useState(false);
   const [showStickerPanel, setShowStickerPanel] = useState(false);
@@ -125,7 +127,13 @@ export const Composer = React.memo(function Composer({
           <div className="tg-chat-composer flex-1"><textarea ref={inputRef} rows={1} value={inputText} onChange={onInputChange} onKeyDown={onKeyDown} placeholder={placeholder} className="flex-1 min-w-0 resize-none overflow-y-auto bg-transparent py-2 text-[16px] leading-5 text-dove-ink outline-none placeholder:text-black/35 dark:text-slate-100 dark:placeholder:text-white/35" style={{ minHeight: 40, maxHeight: 120 }} /><button type="button" className={`flex-shrink-0 p-1.5 hover:bg-black/5 rounded-lg transition-colors ${showEmoji ? 'text-dove-green' : 'text-black/35'}`} onClick={() => { setShowEmoji(value => !value); setShowStickerPanel(false); setShowExtra(false); }} aria-label="表情"><Smile size={20} /></button></div>
           <button type="button" className={`tg-chat-icon-btn flex-shrink-0 active:scale-95 ${showStickerPanel ? 'scale-95 text-dove-green dark:text-sky-300' : ''}`} onClick={() => { setShowStickerPanel(value => !value); setShowEmoji(false); setShowExtra(false); setShowBurnSelector(false); }} title="贴纸" aria-label="贴纸"><Sticker size={19} /></button>
           <div className="relative"><button type="button" onClick={() => { setShowBurnSelector(value => !value); setShowExtra(false); setShowEmoji(false); }} className={`tg-chat-icon-btn flex-shrink-0 active:scale-95 ${effectiveBurnTimer ? 'text-dove-seal dark:text-amber-300' : ''}`} title="阅后即焚" aria-label="阅后即焚"><Timer size={18} /></button>{showBurnSelector && !ephemeralTimer && <div className="absolute bottom-full right-0 mb-2 z-50 w-48 rounded-2xl border border-border bg-background p-2 shadow-xl"><button type="button" className="w-full text-left px-3 py-2 rounded-xl text-xs hover:bg-muted" onClick={() => { onSetBurnTimer(undefined); setShowBurnSelector(false); }}>关闭</button>{[5, 10, 30, 60].map(seconds => <button key={seconds} type="button" className={`w-full text-left px-3 py-2 rounded-xl text-xs hover:bg-muted ${effectiveBurnTimer === seconds ? 'text-dove-seal font-medium' : ''}`} onClick={() => { onSetBurnTimer(seconds as BurnAfterReadTimer); setShowBurnSelector(false); }}>{seconds} 秒后销毁</button>)}</div>}</div>
-          {inputText.trim() ? <motion.button type="button" onClick={onSend} className="tg-chat-send-btn flex-shrink-0" whileTap={{ scale: 0.86 }} aria-label="发送"><Send size={17} /></motion.button> : <button type="button" className={`tg-chat-icon-btn flex-shrink-0 ${voice.isRecording ? 'bg-red-500 text-white scale-110' : voice.isProcessing ? 'bg-dove-green/20 text-dove-green' : ''}`} title="按住录音" onContextMenu={(event) => event.preventDefault()} onPointerDown={(event) => { event.preventDefault(); onVoicePressStart(); }} onPointerUp={(event) => { event.preventDefault(); onVoicePressEnd(); }} onPointerCancel={(event) => { event.preventDefault(); onVoicePressEnd(); }} onPointerLeave={() => { if (voice.isRecording) onVoicePressEnd(); }} aria-label="录音">{voice.isProcessing ? <Loader2 size={18} className="text-dove-green animate-spin" /> : <Mic size={20} />}</button>}
+          {inputText.trim() ? (
+            <motion.button type="button" onClick={onSend} disabled={isSending} className={`tg-chat-send-btn flex-shrink-0 ${isSending ? 'opacity-60' : ''}`} whileTap={{ scale: isSending ? 1 : 0.86 }} aria-label="发送">
+              {isSending ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}
+            </motion.button>
+          ) : (
+            <button type="button" className={`tg-chat-icon-btn flex-shrink-0 ${voice.isRecording ? 'bg-red-500 text-white scale-110' : voice.isProcessing ? 'bg-dove-green/20 text-dove-green' : ''}`} title="按住录音" onContextMenu={(event) => event.preventDefault()} onPointerDown={(event) => { event.preventDefault(); onVoicePressStart(); }} onPointerUp={(event) => { event.preventDefault(); onVoicePressEnd(); }} onPointerCancel={(event) => { event.preventDefault(); onVoicePressEnd(); }} onPointerLeave={() => { if (voice.isRecording) onVoicePressEnd(); }} aria-label="录音">{voice.isProcessing ? <Loader2 size={18} className="text-dove-green animate-spin" /> : <Mic size={20} />}</button>
+          )}
         </div>
 
         <AnimatePresence>

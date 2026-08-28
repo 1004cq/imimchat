@@ -20,8 +20,8 @@ interface UseE2EEReturn {
   isInitializing: boolean;
   /** E2EE 状态信息 */
   status: E2EEStatus | null;
-  /** 加密消息 */
-  encrypt: (peerId: string, plaintext: string) => Promise<SignalEnvelope | null>;
+  /** 加密消息（失败时抛出，供发送流程使用） */
+  encryptOrThrow: (peerId: string, plaintext: string) => Promise<SignalEnvelope>;
   /** 解密消息 */
   decrypt: (peerId: string, envelope: SignalEnvelope) => Promise<string | null>;
   /** 获取会话信息 */
@@ -94,20 +94,31 @@ export function useE2EE(): UseE2EEReturn {
     return () => { cancelled = true; };
   }, []);
 
-  const encrypt = useCallback(async (peerId: string, plaintext: string): Promise<SignalEnvelope | null> => {
+  const encryptOrThrow = useCallback(async (peerId: string, plaintext: string): Promise<SignalEnvelope> => {
     const manager = managerRef.current;
-    if (!manager?.isInitialized) return null;
+    if (!manager?.isInitialized) {
+      throw new Error('E2EE 未初始化，请刷新页面后重试');
+    }
     try {
-      // 默认将 Signal X3DH/Double Ratchet 放入 Worker；只有 Worker 不可用时才降级。
-      return e2eeProxy.isReady
+      const envelope = e2eeProxy.isReady
         ? await e2eeProxy.signalEncrypt(peerId, plaintext)
         : await manager.encrypt(peerId, plaintext);
+      if (!envelope) throw new Error('加密失败，请刷新页面后重试');
+      return envelope;
     } catch (err) {
       console.error('[useE2EE] 加密失败:', err);
       trackE2EEFailure('encrypt', { error: err, chatId: peerId, direction: 'outbound' });
-      return null;
+      throw err instanceof Error ? err : new Error(String(err));
     }
   }, []);
+
+  const encrypt = useCallback(async (peerId: string, plaintext: string): Promise<SignalEnvelope | null> => {
+    try {
+      return await encryptOrThrow(peerId, plaintext);
+    } catch {
+      return null;
+    }
+  }, [encryptOrThrow]);
 
   const decrypt = useCallback(async (peerId: string, envelope: SignalEnvelope): Promise<string | null> => {
     const manager = managerRef.current;
@@ -187,6 +198,7 @@ export function useE2EE(): UseE2EEReturn {
     isInitializing,
     status,
     encrypt,
+    encryptOrThrow,
     decrypt,
     getSessionInfo,
     fetchRemoteBundle,
