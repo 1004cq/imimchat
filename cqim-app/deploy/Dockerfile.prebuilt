@@ -1,0 +1,34 @@
+# 预构建镜像：dist 在开发机构建，服务器只装依赖并生成 Prisma Client
+FROM node:22-bookworm-slim AS base
+WORKDIR /app
+ENV PNPM_HOME="/pnpm"
+ENV PATH="$PNPM_HOME:$PATH"
+RUN apt-get update && apt-get install -y openssl ca-certificates python3 make g++ && \
+    rm -rf /var/lib/apt/lists/* && \
+    corepack enable
+
+FROM base AS runner
+ENV NODE_ENV=production
+WORKDIR /app
+
+RUN groupadd -r nodejs && useradd -r -g nodejs nodeuser && \
+    mkdir -p /app/data && chown -R nodeuser:nodejs /app
+
+COPY package.json pnpm-lock.yaml ./
+COPY patches ./patches
+COPY prisma ./prisma
+
+RUN pnpm config set registry https://registry.npmmirror.com && \
+    echo "enable-pre-post-scripts=true" >> .npmrc && \
+    pnpm install --frozen-lockfile && \
+    pnpm exec prisma generate && \
+    pnpm rebuild better-sqlite3
+
+COPY dist ./dist
+COPY deploy/docker-entrypoint.sh ./docker-entrypoint.sh
+RUN chmod +x ./docker-entrypoint.sh
+
+USER nodeuser
+EXPOSE 3000
+ENTRYPOINT ["./docker-entrypoint.sh"]
+CMD ["node", "dist/index.js"]
