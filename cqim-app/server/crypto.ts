@@ -18,6 +18,28 @@ import prisma from './db.js';
 
 const router = Router();
 
+/** 多节点 NFS + SQLite 下读写可能短暂失败，重试几次 */
+async function withDbRetry<T>(fn: () => Promise<T>, attempts = 4): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (i < attempts - 1) {
+        await new Promise((r) => setTimeout(r, 40 * (i + 1)));
+      }
+    }
+  }
+  throw lastErr;
+}
+
+router.use((_req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.setHeader('Pragma', 'no-cache');
+  next();
+});
+
 // ============================================================
 // 1. AES-256-GCM 加解密工具（服务端存储加密）
 // ============================================================
@@ -273,53 +295,58 @@ router.post('/register-bundle', async (req: Request, res: Response) => {
   }
 
   try {
-    // 存储身份公钥和签名预密钥
-    await prisma.systemConfig.upsert({
-      where: { key: `e2ee:bundle:${userId}` },
-      update: {
-        value: JSON.stringify({
-          registrationId,
-          identityKey,
-          ...(signingPublicKey ? { signingPublicKey } : {}),
-          signedPreKey,
-          updatedAt: new Date().toISOString(),
-        }),
-      },
-      create: {
-        key: `e2ee:bundle:${userId}`,
-        value: JSON.stringify({
-          registrationId,
-          identityKey,
-          ...(signingPublicKey ? { signingPublicKey } : {}),
-          signedPreKey,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        }),
-      },
-    });
+    await withDbRetry(() =>
+      prisma.systemConfig.upsert({
+        where: { key: `e2ee:bundle:${userId}` },
+        update: {
+          value: JSON.stringify({
+            registrationId,
+            identityKey,
+            ...(signingPublicKey ? { signingPublicKey } : {}),
+            signedPreKey,
+            updatedAt: new Date().toISOString(),
+          }),
+        },
+        create: {
+          key: `e2ee:bundle:${userId}`,
+          value: JSON.stringify({
+            registrationId,
+            identityKey,
+            ...(signingPublicKey ? { signingPublicKey } : {}),
+            signedPreKey,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          }),
+        },
+      }),
+    );
 
-    // 存储 One-Time PreKeys（追加模式，不覆盖已有的）
+    // 存储 One-Time PreKeys（追加模式，不覆盖已有的；NFS 写失败不阻断 Bundle 注册）
     if (Array.isArray(preKeys) && preKeys.length > 0) {
-      // 获取已有的 preKeys
-      const existingConfig = await prisma.systemConfig.findUnique({
-        where: { key: `e2ee:prekeys:${userId}` },
-      });
-      let existingKeys: Array<{ keyId: number; publicKey: string }> = [];
-      if (existingConfig?.value) {
-        try { existingKeys = JSON.parse(existingConfig.value); } catch {}
+      try {
+        const existingConfig = await withDbRetry(() =>
+          prisma.systemConfig.findUnique({ where: { key: `e2ee:prekeys:${userId}` } }),
+        );
+        let existingKeys: Array<{ keyId: number; publicKey: string }> = [];
+        if (existingConfig?.value) {
+          try { existingKeys = JSON.parse(existingConfig.value); } catch {}
+        }
+
+        const keyMap = new Map<number, string>();
+        existingKeys.forEach(k => keyMap.set(k.keyId, k.publicKey));
+        preKeys.forEach((k: { keyId: number; publicKey: string }) => keyMap.set(k.keyId, k.publicKey));
+        const mergedKeys = Array.from(keyMap.entries()).map(([keyId, publicKey]) => ({ keyId, publicKey }));
+
+        await withDbRetry(() =>
+          prisma.systemConfig.upsert({
+            where: { key: `e2ee:prekeys:${userId}` },
+            update: { value: JSON.stringify(mergedKeys) },
+            create: { key: `e2ee:prekeys:${userId}`, value: JSON.stringify(mergedKeys) },
+          }),
+        );
+      } catch (preKeyErr: any) {
+        console.warn(`[Crypto] PreKeys 写入失败（Bundle 仍注册成功）: ${preKeyErr?.message || preKeyErr}`);
       }
-
-      // 合并新旧 preKeys（去重）
-      const keyMap = new Map<number, string>();
-      existingKeys.forEach(k => keyMap.set(k.keyId, k.publicKey));
-      preKeys.forEach((k: { keyId: number; publicKey: string }) => keyMap.set(k.keyId, k.publicKey));
-      const mergedKeys = Array.from(keyMap.entries()).map(([keyId, publicKey]) => ({ keyId, publicKey }));
-
-      await prisma.systemConfig.upsert({
-        where: { key: `e2ee:prekeys:${userId}` },
-        update: { value: JSON.stringify(mergedKeys) },
-        create: { key: `e2ee:prekeys:${userId}`, value: JSON.stringify(mergedKeys) },
-      });
     }
 
     console.log(`[Crypto] 用户 ${userId} 注册 PreKey Bundle 成功, preKeys: ${preKeys?.length || 0}`);
@@ -343,10 +370,9 @@ router.get('/get-bundle', async (req: Request, res: Response) => {
   }
 
   try {
-    // 获取身份公钥和签名预密钥
-    const bundleConfig = await prisma.systemConfig.findUnique({
-      where: { key: `e2ee:bundle:${userId}` },
-    });
+    const bundleConfig = await withDbRetry(() =>
+      prisma.systemConfig.findUnique({ where: { key: `e2ee:bundle:${userId}` } }),
+    );
 
     if (!bundleConfig?.value) {
       return res.status(404).json({ error: '用户未注册 E2EE Bundle' });
@@ -361,22 +387,25 @@ router.get('/get-bundle', async (req: Request, res: Response) => {
       });
     }
 
-    // 获取并消费一个 One-Time PreKey
     let oneTimePreKey: { keyId: number; publicKey: string } | undefined;
-    const preKeysConfig = await prisma.systemConfig.findUnique({
-      where: { key: `e2ee:prekeys:${userId}` },
-    });
+    const preKeysConfig = await withDbRetry(() =>
+      prisma.systemConfig.findUnique({ where: { key: `e2ee:prekeys:${userId}` } }),
+    ).catch(() => null);
 
     if (preKeysConfig?.value) {
       const preKeys: Array<{ keyId: number; publicKey: string }> = JSON.parse(preKeysConfig.value);
       if (preKeys.length > 0) {
-        // 取出第一个并从列表中移除（消费）
-        oneTimePreKey = preKeys.shift();
-        await prisma.systemConfig.update({
-          where: { key: `e2ee:prekeys:${userId}` },
-          data: { value: JSON.stringify(preKeys) },
-        });
-        console.log(`[Crypto] 消费用户 ${userId} 的 PreKey #${oneTimePreKey!.keyId}, 剩余: ${preKeys.length}`);
+        oneTimePreKey = preKeys[0];
+        try {
+          const remaining = preKeys.slice(1);
+          await prisma.systemConfig.update({
+            where: { key: `e2ee:prekeys:${userId}` },
+            data: { value: JSON.stringify(remaining) },
+          });
+          console.log(`[Crypto] 消费用户 ${userId} 的 PreKey #${oneTimePreKey.keyId}, 剩余: ${remaining.length}`);
+        } catch (consumeErr: any) {
+          console.warn(`[Crypto] PreKey 消费失败（仍返回 Bundle）: ${consumeErr?.message || consumeErr}`);
+        }
       }
     }
 
@@ -388,8 +417,9 @@ router.get('/get-bundle', async (req: Request, res: Response) => {
       preKey: oneTimePreKey || null,
     });
   } catch (err: any) {
-    console.error('[Crypto] 获取 Bundle 失败:', err.message);
-    res.status(500).json({ error: '获取 Bundle 失败' });
+    const detail = err?.message || String(err);
+    console.error('[Crypto] 获取 Bundle 失败:', detail);
+    res.status(500).json({ error: '获取 Bundle 失败', message: detail });
   }
 });
 

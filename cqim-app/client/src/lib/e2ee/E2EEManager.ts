@@ -357,43 +357,56 @@ export class E2EEManager {
    * 强制要求从服务器获取，禁止使用 Mock Bundle
    */
   async fetchRemoteBundle(peerId: string): Promise<PreKeyBundle> {
-    const resp = await fetch(`/api/crypto/get-bundle?userId=${encodeURIComponent(peerId)}`);
-    if (!resp.ok) {
-      let errorText = await resp.text();
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt < 4; attempt++) {
       try {
-        const errJson = JSON.parse(errorText);
-        if (resp.status === 428 || errJson.error === 'peer_bundle_outdated') {
-          throw new Error(errJson.message || '对方安全凭证需要更新，请让对方重新登录后再试');
+        const resp = await fetch(`/api/crypto/get-bundle?userId=${encodeURIComponent(peerId)}`, {
+          cache: 'no-store',
+        });
+        if (!resp.ok) {
+          let errorText = await resp.text();
+          try {
+            const errJson = JSON.parse(errorText);
+            if (resp.status === 428 || errJson.error === 'peer_bundle_outdated') {
+              throw new Error(errJson.message || '对方安全凭证需要更新，请让对方重新登录后再试');
+            }
+            errorText = errJson.message || errJson.error || errorText;
+          } catch (parseErr) {
+            if (parseErr instanceof Error && parseErr.message.includes('对方安全凭证')) throw parseErr;
+          }
+          throw new Error(`无法获取用户 ${peerId} 的安全凭证 (Bundle): ${errorText}`);
         }
-        errorText = errJson.message || errJson.error || errorText;
-      } catch (parseErr) {
-        if (parseErr instanceof Error && parseErr.message.includes('对方安全凭证')) throw parseErr;
+
+        const data = await resp.json();
+        const bundle: PreKeyBundle = {
+          registrationId: data.registrationId,
+          identityKey: data.identityKey,
+          signingPublicKey: data.signingPublicKey || undefined,
+          signedPreKeyId: data.signedPreKey.keyId,
+          signedPreKey: data.signedPreKey.publicKey,
+          signedPreKeySignature: data.signedPreKey.signature,
+          oneTimePreKeyId: data.preKey?.keyId,
+          oneTimePreKey: data.preKey?.publicKey,
+        };
+
+        await this.store.saveIdentity({
+          userId: peerId,
+          identityKey: data.identityKey,
+          trusted: true,
+          addedAt: Date.now(),
+        });
+
+        console.log(`[E2EE] 从服务器成功获取到 ${peerId} 的真实 Bundle`);
+        return bundle;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        const retryable = /Bundle|5\d\d|502|503|504|fetch|network/i.test(lastError.message);
+        if (!retryable || attempt >= 3) break;
+        await new Promise((r) => setTimeout(r, 200 * (attempt + 1)));
+        console.warn(`[E2EE] 获取 Bundle 重试 ${attempt + 2}/4:`, lastError.message);
       }
-      throw new Error(`无法获取用户 ${peerId} 的安全凭证 (Bundle): ${errorText}`);
     }
-
-    const data = await resp.json();
-    const bundle: PreKeyBundle = {
-      registrationId: data.registrationId,
-      identityKey: data.identityKey,
-      signingPublicKey: data.signingPublicKey || undefined,
-      signedPreKeyId: data.signedPreKey.keyId,
-      signedPreKey: data.signedPreKey.publicKey,
-      signedPreKeySignature: data.signedPreKey.signature,
-      oneTimePreKeyId: data.preKey?.keyId,
-      oneTimePreKey: data.preKey?.publicKey,
-    };
-
-    // 保存对端 Identity Key（TOFU）
-    await this.store.saveIdentity({
-      userId: peerId,
-      identityKey: data.identityKey,
-      trusted: true,
-      addedAt: Date.now(),
-    });
-
-    console.log(`[E2EE] 从服务器成功获取到 ${peerId} 的真实 Bundle`);
-    return bundle;
+    throw lastError || new Error(`无法获取用户 ${peerId} 的安全凭证 (Bundle)`);
   }
 
   /**

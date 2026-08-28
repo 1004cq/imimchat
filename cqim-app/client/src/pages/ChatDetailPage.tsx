@@ -505,16 +505,28 @@ export default function ChatDetailPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId, isGroupChat]);
 
-  // 检查会话状态
+  // 检查会话状态，并在进入私聊时预建立 E2EE 会话
   useEffect(() => {
-    if (e2ee.isReady && otherMember) {
-      e2ee.getSessionInfo(otherMember).then(info => {
+    if (!e2ee.isReady || !otherMember || chat?.type !== 'private') return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const info = await e2ee.getSessionInfo(otherMember);
         if (info?.established) {
-          setSessionEstablished(true);
+          if (!cancelled) setSessionEstablished(true);
+          return;
         }
-      });
-    }
-  }, [e2ee.isReady, otherMember]);
+        const bundle = await e2ee.fetchRemoteBundle(otherMember);
+        await e2ee.establishSession(otherMember, bundle);
+        if (!cancelled) setSessionEstablished(true);
+      } catch (err) {
+        console.warn('[E2EE] 预建立会话失败:', err);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [e2ee.isReady, otherMember, chat?.type, e2ee]);
 
   // 同步消失消息模式定时器
   useEffect(() => {

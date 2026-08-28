@@ -5,7 +5,7 @@ set -euo pipefail
 DOMAIN=wed.imim.chat
 NGINX_SITE=/etc/nginx/sites-available/${DOMAIN}
 NGINX_ENABLED=/etc/nginx/sites-enabled/${DOMAIN}
-CQIM_UPSTREAM="${CQIM_UPSTREAM:-127.0.0.1:999}"
+CQIM_UPSTREAM="${CQIM_UPSTREAM:-127.0.0.1:3011}"
 
 echo "==> 安装依赖"
 apt-get update -qq
