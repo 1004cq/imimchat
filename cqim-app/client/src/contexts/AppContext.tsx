@@ -27,6 +27,7 @@ import {
   clearDecryptedMessageCache,
 } from '@/lib/localdb';
 import { e2eeProxy } from '@/lib/e2ee/WorkerProxy';
+import { setLastPrivateSeq } from '@/lib/privateSync';
 
 export interface AuthUser {
   id: string;
@@ -1035,7 +1036,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // ===== 私聊消息推送 =====
           if (msg.type === 'private_message') {
             const payload = msg.payload || {};
-            const { id, chatId, senderId, msgType, content, replyToId, isRevoked, extra, createdAt, tempId, ack, burnAfterRead, hmac } = payload;
+            const { id, chatId, senderId, msgType, content, replyToId, isRevoked, extra, createdAt, tempId, ack, burnAfterRead, hmac, seq } = payload;
             const currentUserId = stateRef.current.currentUser?.id || localStorage.getItem('user_id') || 'me';
 
             if (ack && tempId) {
@@ -1044,9 +1045,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 console.warn(`[AppContext] 私聊发送失败: tempId=${tempId} error=${payload.error}`);
               } else if (id) {
                 dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId, realId: id });
-                console.log(`[AppContext] 私聊消息确认: tempId=${tempId} -> realId=${id}`);
+                if (seq) setLastPrivateSeq(chatId, seq);
+                console.log(`[AppContext] 私聊消息确认: tempId=${tempId} -> realId=${id} seq=${seq ?? '-'}`);
               }
             } else if (senderId !== currentUserId) {
+              if (seq) setLastPrivateSeq(chatId, seq);
               // 收到对方消息
               (async () => {
                 let decryptedContent = isRevoked ? '消息已撤回' : (content || '');
@@ -1085,6 +1088,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                   id,
                   chatId,
                   cursor: id,
+                  ...(seq ? { seq } : {}),
                   senderId,
                   content: decryptedContent,
                   type: finalMsgType as any,

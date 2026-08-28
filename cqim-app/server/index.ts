@@ -45,6 +45,7 @@ import cryptoRouter from "./crypto";
 import mlsRouter from "./mls-group";
 import burnRouter, { startBurnCleanupCron } from "./burn-message";
 import privateChatRouter from "./private-chat";
+import { deliverPrivateMessage, sendPrivateMessageCore } from "./private-message-core.js";
 import homeRouter from "./home";
 import friendRouter from "./friend";
 import qrRouter from "./qr";
@@ -1267,141 +1268,83 @@ async function handleMessage(client: SignalClient, raw: string) {
 
     // ===== 私聊消息信令处理 =====
     case "private_send": {
-      // payload: { chatId, content, msgType, replyToId, extra, tempId, burnAfterRead, hmac }
-      const { chatId: pChatId, content: pContent, msgType: pMsgType, replyToId: pReplyToId, extra: rawPExtra, tempId, burnAfterRead: pBurnAfterRead, hmac: pHmac } = msg.payload || {};
+      const {
+        chatId: pChatId,
+        content: pContent,
+        msgType: pMsgType,
+        replyToId: pReplyToId,
+        extra: rawPExtra,
+        tempId,
+        clientMsgId: rawClientMsgId,
+        burnAfterRead: pBurnAfterRead,
+        hmac: pHmac,
+      } = msg.payload || {};
+      const clientMsgId = rawClientMsgId || tempId || null;
 
-      // 强制 P0：私聊必须加密，禁止明文发送
       if (pMsgType !== 'encrypted') {
         sendTo(client.userId, {
           type: 'private_message' as any,
-          payload: { ack: true, error: '私聊强制要求端到端加密，请发送加密消息', tempId },
+          payload: { ack: true, error: '私聊强制要求端到端加密，请发送加密消息', tempId: clientMsgId },
         });
         break;
       }
 
-      // 安全处理 extra：如果客户端传入了字符串，尝试解析为对象
       let pExtra = rawPExtra;
       if (typeof rawPExtra === 'string') {
         try { pExtra = JSON.parse(rawPExtra); } catch { pExtra = undefined; }
       }
-      if (pChatId && pContent) {
-        // 存储消息到数据库
-        (async () => {
-          const failAck = (error: string) => {
-            if (tempId) {
-              sendTo(client.userId, {
-                type: 'private_message' as any,
-                payload: { ack: true, error, tempId },
-              });
-            }
-          };
 
-          try {
-            const chat = await prisma.chat.findUnique({ where: { id: pChatId } });
-            if (!chat) {
-              failAck('会话不存在');
-              return;
-            }
-            if (chat.participantA !== client.userId && chat.participantB !== client.userId) {
-              failAck('无权发送消息');
-              return;
-            }
+      if (!pChatId || !pContent) break;
 
-            const validBurnTimers = [5, 10, 30, 60, 300, 3600, 86400, 604800];
-            const burnSeconds = (typeof pBurnAfterRead === 'number' && validBurnTimers.includes(pBurnAfterRead))
-              ? pBurnAfterRead
-              : null;
-
-            const message = await prisma.privateMessage.create({
-              data: {
-                chatId: pChatId,
-                senderId: client.userId,
-                msgType: 'encrypted',
-                content: pContent || '', // 存储加密信封 JSON
-                replyToId: pReplyToId || null,
-                extra: pExtra ? JSON.stringify(pExtra) : null,
-                status: 'sent',
-                burnAfterRead: burnSeconds,
-                hmac: (typeof pHmac === 'string' && /^[a-f0-9]{64}$/i.test(pHmac)) ? pHmac : null,
-              },
-            });
-
-            // 更新会话最后消息
-            const preview = '🔒 [加密消息]';
-
-            await prisma.chat.update({
-              where: { id: pChatId },
-              data: { lastMessage: preview, lastMessageAt: message.createdAt },
-            });
-
-            const msgPayload: any = {
-              id: message.id,
-              chatId: message.chatId,
-              senderId: message.senderId,
-              msgType: message.msgType,
-              content: message.content,
-              replyToId: message.replyToId,
-              isRevoked: false,
-              status: 'sent',
-              extra: pExtra || undefined,
-              createdAt: message.createdAt.getTime(),
-              tempId,
-            };
-            // 阅后即焚消息带上 burnAfterRead 字段
-            if (burnSeconds) {
-              msgPayload.burnAfterRead = burnSeconds;
-            }
-            // 消息防篡改：带上 HMAC 签名
-            if (message.hmac) {
-              msgPayload.hmac = message.hmac;
-            }
-
-            // 发送确认给发送者
+      (async () => {
+        const failAck = (error: string) => {
+          if (clientMsgId) {
             sendTo(client.userId, {
               type: 'private_message' as any,
-              payload: { ack: true, ...msgPayload },
+              payload: { ack: true, error, tempId: clientMsgId, clientMsgId },
             });
-
-            // 推送给对方
-            const peerId = chat.participantA === client.userId ? chat.participantB : chat.participantA;
-            let delivered = trySendTo(peerId, {
-              type: 'private_message' as any,
-              payload: msgPayload,
-            });
-
-            if (!delivered) {
-              await publishImPush(peerId, {
-                type: 'private_message',
-                payload: msgPayload,
-              });
-            }
-
-            const { incrUnreadCount, invalidateConversationList, isUserOnline, redis } = await import('./redis.js');
-            await incrUnreadCount(peerId, pChatId, 1);
-            await invalidateConversationList(client.userId);
-            await invalidateConversationList(peerId);
-
-            console.log(`[PrivateChat] 消息已发送: from=${client.userId} to=${peerId} chatId=${pChatId} wsDelivered=${delivered}`);
-
-            if (!delivered) {
-              const peerOnlineElsewhere = await isUserOnline(peerId).catch(() => false)
-                || Boolean(await redis.get(`user:online:${peerId}`).catch(() => null));
-              if (!peerOnlineElsewhere) {
-                await notifyPrivateMessagePush({
-                  toUserId: peerId,
-                  senderId: client.userId,
-                  chatId: pChatId,
-                  messageId: message.id,
-                  previewText: '🔒 [加密消息]',
-                });
-              }
-            }
-          } catch (err) {
-            console.error('[PrivateChat] 发送失败:', err);
-            failAck('发送失败，请重试');
           }
-        })();
-      }
+        };
+
+        try {
+          const validBurnTimers = [5, 10, 30, 60, 300, 3600, 86400, 604800];
+          const burnSeconds = (typeof pBurnAfterRead === 'number' && validBurnTimers.includes(pBurnAfterRead))
+            ? pBurnAfterRead
+            : null;
+
+          const { message, peerId, duplicate } = await sendPrivateMessageCore({
+            chatId: pChatId,
+            senderId: client.userId,
+            msgType: 'encrypted',
+            content: pContent || '',
+            replyToId: pReplyToId,
+            extra: pExtra,
+            burnAfterRead: burnSeconds,
+            hmac: pHmac,
+            clientMsgId,
+            tempId: clientMsgId,
+          });
+
+          sendTo(client.userId, {
+            type: 'private_message' as any,
+            payload: { ack: true, ...message, tempId: clientMsgId, clientMsgId },
+          });
+
+          if (!duplicate) {
+            const delivered = await deliverPrivateMessage(
+              { trySendTo, sendTo },
+              client.userId,
+              peerId,
+              pChatId,
+              message,
+            );
+            console.log(`[PrivateChat] WS 消息已发送: from=${client.userId} to=${peerId} chatId=${pChatId} seq=${message.seq} wsDelivered=${delivered}`);
+          }
+        } catch (err: any) {
+          console.error('[PrivateChat] 发送失败:', err);
+          failAck(err?.message || '发送失败，请重试');
+        }
+      })();
       break;
     }
 

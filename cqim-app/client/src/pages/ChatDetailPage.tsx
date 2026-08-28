@@ -45,6 +45,7 @@ import Composer from '@/components/chat/Composer';
 import { ChatSkeleton, MemoizedChatBubble, shouldShowTimeGroup } from '@/components/chat/ChatBubble';
 import MessageListErrorBoundary from '@/components/chat/MessageListErrorBoundary';
 import { sanitizeMessages } from '@/lib/messageListUtils';
+import { createClientMsgId, fetchPrivateGap, setLastPrivateSeq, trackPrivateSeqFromMessages } from '@/lib/privateSync';
 import LottieSticker from '@/components/LottieSticker';
 import { GroupSettingsModal } from '@/components/GroupSettingsModal';
 import { GroupInfoSheet } from '@/components/GroupInfoSheet';
@@ -412,6 +413,7 @@ export default function ChatDetailPage() {
             id: m.id,
             chatId: m.chatId,
             cursor: m.id,
+            seq: typeof m.seq === 'number' ? m.seq : undefined,
             senderId: m.senderId,
             content: decryptedContent,
             type: finalMsgType as any,
@@ -435,6 +437,7 @@ export default function ChatDetailPage() {
 
         if (!cancelled) {
           setMessages(chatId, mergeMessages(cached, msgs));
+          trackPrivateSeqFromMessages(chatId, msgs);
           setHasMoreMessages(data.hasMore || false);
           trackEvent('private_history_sync', { chatId, count: msgs.length, direction: 'inbound' });
         }
@@ -452,6 +455,55 @@ export default function ChatDetailPage() {
   useEffect(() => {
     setChatMissing(false);
   }, [chatId]);
+
+  // 重连后按 seq 补洞（不假设 WS 必达）
+  useEffect(() => {
+    if (!chatId || isGroupChat || chatId === 'c0' || chatId === 'cBOT') return;
+    const token = localStorage.getItem('user_token');
+    if (!token) return;
+
+    const onSignalOpen = async () => {
+      try {
+        const gap = await fetchPrivateGap(chatId, token);
+        if (gap.notFound) {
+          setChatMissing(true);
+          toast.error('会话不存在或已被删除');
+          return;
+        }
+        if (!gap.ok || gap.messages.length === 0) return;
+        const currentUserId = state.currentUser?.id || localStorage.getItem('user_id') || 'me';
+        const incoming = gap.messages
+          .filter((m: any) => m?.id)
+          .map((m: any) => ({
+            id: m.id,
+            chatId,
+            cursor: m.id,
+            seq: m.seq,
+            senderId: m.senderId,
+            content: m.isRevoked ? '消息已撤回' : (m.content || ''),
+            type: (m.msgType || 'text') as Message['type'],
+            timestamp: m.createdAt || Date.now(),
+            isEncrypted: m.msgType === 'encrypted',
+            reactions: {},
+            status: m.status || 'delivered',
+            isRecalled: m.isRevoked || false,
+            replyTo: m.replyToId || undefined,
+            direction: m.senderId === currentUserId ? 'outbound' as const : 'inbound' as const,
+          }));
+        const merged = [...(state.messages[chatId] || []), ...incoming]
+          .filter((msg, idx, arr) => arr.findIndex(x => x.id === msg.id) === idx)
+          .sort((a, b) => (a.seq || a.timestamp) - (b.seq || b.timestamp));
+        setMessages(chatId, sanitizeMessages(merged));
+        trackPrivateSeqFromMessages(chatId, incoming);
+      } catch (err) {
+        console.warn('[ChatDetail] 重连补拉失败:', err);
+      }
+    };
+
+    window.addEventListener('cqim:signal-open', onSignalOpen);
+    return () => window.removeEventListener('cqim:signal-open', onSignalOpen);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatId, isGroupChat]);
 
   // 检查会话状态
   useEffect(() => {
@@ -792,7 +844,7 @@ export default function ChatDetailPage() {
         const envelope = await e2ee.encrypt(otherMember, payload);
         const envelopeStr = JSON.stringify(envelope);
 
-        const encTempId = `enc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const encTempId = createClientMsgId();
         const msgTimestamp = Date.now();
 
         // 4. 消息防篡改：对密文计算 HMAC
@@ -830,7 +882,8 @@ export default function ChatDetailPage() {
               chatId, 
               content: envelopeStr, 
               msgType: 'encrypted', 
-              tempId: encTempId, 
+              tempId: encTempId,
+              clientMsgId: encTempId,
               ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), 
               ...(msgHmac ? { hmac: msgHmac } : {}), 
               ...(activeReply ? { replyToId: activeReply.id } : {}) 
@@ -842,13 +895,18 @@ export default function ChatDetailPage() {
             fetch(`/api/chat/${chatId}/messages`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-              body: JSON.stringify({ content: envelopeStr, msgType: 'encrypted', ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), ...(msgHmac ? { hmac: msgHmac } : {}), ...(activeReply ? { replyToId: activeReply.id } : {}) }),
+              body: JSON.stringify({ content: envelopeStr, msgType: 'encrypted', clientMsgId: encTempId, tempId: encTempId, ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), ...(msgHmac ? { hmac: msgHmac } : {}), ...(activeReply ? { replyToId: activeReply.id } : {}) }),
             })
               .then(async r => {
                 if (!r.ok) throw new Error(`send_${r.status}`);
                 return r.json();
               })
-              .then(data => { if (data?.message) dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId: encTempId, realId: data.message.id }); })
+              .then(data => {
+                if (data?.message) {
+                  dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId: encTempId, realId: data.message.id });
+                  if (data.message.seq) setLastPrivateSeq(chatId, data.message.seq);
+                }
+              })
               .catch(err => {
                 updateMessageStatus(chatId, encTempId, 'failed');
                 trackEvent('message_send_failed', { chatId, msgType: 'encrypted', error: err, direction: 'outbound' });
@@ -887,7 +945,7 @@ export default function ChatDetailPage() {
         const payload = JSON.stringify({ content: emoji, msgType: 'text' });
         const envelope = await e2ee.encrypt(otherMember, payload);
         const envelopeStr = JSON.stringify(envelope);
-        const tempId = `enc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const tempId = createClientMsgId();
         
         const msg: Message = {
           id: tempId,
@@ -906,7 +964,7 @@ export default function ChatDetailPage() {
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({
             type: 'private_send',
-            payload: { chatId, content: envelopeStr, msgType: 'encrypted', tempId, burnAfterRead: msg.burnAfterRead },
+            payload: { chatId, content: envelopeStr, msgType: 'encrypted', tempId, clientMsgId: tempId, burnAfterRead: msg.burnAfterRead },
           }));
         }
         return;
@@ -948,7 +1006,7 @@ export default function ChatDetailPage() {
       }
 
       if (sticker.mediaType === 'gif' || sticker.format === 'gif') {
-        const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const tempId = createClientMsgId();
         const gifTimestamp = Date.now();
         const effectiveBurnTimer = chat?.ephemeralTimer ?? burnTimer;
         let gifHmac: string | undefined;
@@ -990,7 +1048,7 @@ export default function ChatDetailPage() {
             };
             sendMessage(chatId, msg);
             const ws = signalWs?.current;
-            const payload = { chatId, content: envelopeStr, msgType: 'encrypted', tempId, ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), ...(gifHmac ? { hmac: gifHmac } : {}) };
+            const payload = { chatId, content: envelopeStr, msgType: 'encrypted', tempId, clientMsgId: tempId, ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), ...(gifHmac ? { hmac: gifHmac } : {}) };
             if (ws && ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ type: 'private_send', payload }));
             } else {
@@ -1003,7 +1061,10 @@ export default function ChatDetailPage() {
               });
               if (!response.ok) throw new Error(`发送失败 ${response.status}`);
               const data = await response.json();
-              if (data?.message) dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId, realId: data.message.id });
+              if (data?.message) {
+                dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId, realId: data.message.id });
+                if (data.message.seq) setLastPrivateSeq(chatId, data.message.seq);
+              }
             }
           } catch (error) {
             toast.error(error instanceof Error ? error.message : 'GIF 发送失败，安全会话异常');
@@ -1063,7 +1124,7 @@ export default function ChatDetailPage() {
           });
           const envelope = await e2ee.encrypt(otherMember, payload);
           const envelopeStr = JSON.stringify(envelope);
-          const tempId = `enc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          const tempId = createClientMsgId();
 
           const msg: Message = {
             id: tempId,
@@ -1085,7 +1146,7 @@ export default function ChatDetailPage() {
           if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({
               type: 'private_send',
-              payload: { chatId, content: envelopeStr, msgType: 'encrypted', tempId, burnAfterRead: msg.burnAfterRead },
+              payload: { chatId, content: envelopeStr, msgType: 'encrypted', tempId, clientMsgId: tempId, burnAfterRead: msg.burnAfterRead },
             }));
           }
           return;
@@ -1190,7 +1251,7 @@ export default function ChatDetailPage() {
 
         const envelope = await e2ee.encrypt(otherMember, payload);
         const envelopeStr = JSON.stringify(envelope);
-        const encTempId = `enc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const encTempId = createClientMsgId();
         const msgTimestamp = Date.now();
 
         const msg: Message = {
@@ -1217,7 +1278,8 @@ export default function ChatDetailPage() {
               chatId, 
               content: envelopeStr, 
               msgType: 'encrypted', 
-              tempId: encTempId, 
+              tempId: encTempId,
+              clientMsgId: encTempId,
               burnAfterRead: effectiveBurnTimer 
             },
           }));
@@ -1388,7 +1450,7 @@ export default function ChatDetailPage() {
     }
 
     const effectiveBurnTimer = chat?.ephemeralTimer ?? burnTimer;
-    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const tempId = createClientMsgId();
     const extra = {
       duration: payload.duration,
       burnAfterRead: effectiveBurnTimer,
@@ -1449,6 +1511,8 @@ export default function ChatDetailPage() {
         body: JSON.stringify({
           content: JSON.stringify(envelope),
           msgType: 'encrypted',
+          clientMsgId: tempId,
+          tempId,
           ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}),
         }),
       });
@@ -1460,6 +1524,7 @@ export default function ChatDetailPage() {
       }
 
       dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId, realId: data.message.id });
+      if (data.message.seq) setLastPrivateSeq(chatId, data.message.seq);
       addLog(`✓ 语音消息加密完成 | 时长: ${payload.duration}s | 密文长度: ${payload.ciphertext.length}`);
     } catch (error) {
       console.error('[ChatDetail] 私聊语音发送失败:', error);
@@ -1798,7 +1863,7 @@ export default function ChatDetailPage() {
           onConfirm={async (locResult: LocationPickerResult) => {
             if (!chatId) return;
             const effectiveBurnTimer = chat?.ephemeralTimer ?? burnTimer;
-            const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const tempId = createClientMsgId();
             const locTimestamp = Date.now();
             let locHmac: string | undefined;
             if (integrityKey) {
@@ -1848,6 +1913,7 @@ export default function ChatDetailPage() {
               content: wireContent,
               msgType: wireMsgType,
               tempId,
+              clientMsgId: tempId,
               ...(isPrivateLocation ? {} : { extra: { locationData } }),
               ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}),
               ...(locHmac ? { hmac: locHmac } : {}),
@@ -1863,7 +1929,10 @@ export default function ChatDetailPage() {
                   body: JSON.stringify(wirePayload),
                 });
                 const res = await response.json().catch(() => null);
-                if (res?.message) dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId, realId: res.message.id });
+                if (res?.message) {
+                  dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId, realId: res.message.id });
+                  if (res.message.seq) setLastPrivateSeq(chatId, res.message.seq);
+                }
               }
             }
             toast.success('位置消息已发送');

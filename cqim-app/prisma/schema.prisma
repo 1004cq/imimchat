@@ -403,9 +403,15 @@ model PrivateMessage {
   burnReadAt    DateTime?
   /// 阅后即焚：消息过期时间（burnReadAt + burnAfterRead 秒，便于定时清理）
   burnExpireAt  DateTime?
+  /// 会话内单调递增序号（同步层补洞游标）
+  seq           BigInt   @default(0)
+  /// 客户端幂等 ID（client_msg_id / tempId）
+  clientMsgId   String?
   createdAt     DateTime @default(now())
   chat          Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
   @@index([chatId, createdAt])
+  @@index([chatId, seq])
+  @@unique([chatId, clientMsgId])
   @@index([senderId])
   @@index([chatId, isRevoked])
   /// 阅后即焚：定时清理索引

@@ -22,6 +22,11 @@ import { userAuth } from './auth.js';
 import { avatarToProxy } from './cos-signer.js';
 import { notifyPrivateMessagePush } from './push-notify.js';
 import { publishImPush } from './publish-im.js';
+import {
+  deliverPrivateMessage,
+  formatPrivateMessage,
+  sendPrivateMessageCore,
+} from './private-message-core.js';
 
 const router = Router();
 const __filename = fileURLToPath(import.meta.url);
@@ -97,79 +102,29 @@ async function createPrivateMessageAndNotify(
   content: string,
   replyToId?: string | null,
   extra?: Record<string, any>,
+  clientMsgId?: string | null,
 ) {
   const currentUser = (req as any).user;
-  const chat = await prisma.chat.findUnique({ where: { id: chatId } });
-  if (!chat) {
-    return res.status(404).json({ error: '会话不存在' });
-  }
-  if (chat.participantA !== currentUser.id && chat.participantB !== currentUser.id) {
-    return res.status(403).json({ error: '无权发送消息' });
-  }
-
-  const message = await prisma.privateMessage.create({
-    data: {
+  try {
+    const { message, peerId, duplicate } = await sendPrivateMessageCore({
       chatId,
       senderId: currentUser.id,
       msgType,
       content,
-      replyToId: replyToId || null,
-      extra: extra ? JSON.stringify(extra) : null,
-      status: 'sent',
-    },
-  });
+      replyToId,
+      extra,
+      clientMsgId,
+    });
 
-  await prisma.chat.update({
-    where: { id: chatId },
-    data: {
-      lastMessage: messagePreview(msgType, content),
-      lastMessageAt: message.createdAt,
-    },
-  });
-
-  const result: any = {
-    id: message.id,
-    chatId: message.chatId,
-    senderId: message.senderId,
-    msgType: message.msgType,
-    content: message.content,
-    replyToId: message.replyToId,
-    isRevoked: message.isRevoked,
-    status: message.status,
-    extra: parseExtra(message.extra),
-    createdAt: message.createdAt.getTime(),
-  };
-
-  const peerId = chat.participantA === currentUser.id ? chat.participantB : chat.participantA;
-
-  await incrUnreadCount(peerId, chatId, 1);
-  await invalidateConversationList(currentUser.id);
-  await invalidateConversationList(peerId);
-
-  const trySendTo = req.app.locals.trySendTo as undefined | ((userId: string, msg: Record<string, any>) => boolean);
-  const sendTo = req.app.locals.sendTo as undefined | ((userId: string, msg: Record<string, any>) => void);
-  const wsPayload = { type: 'private_message', payload: result };
-  const delivered = trySendTo ? trySendTo(peerId, wsPayload) : Boolean(sendTo && (sendTo(peerId, wsPayload), true));
-
-  if (!delivered) {
-    await publishImPush(peerId, wsPayload);
-  }
-
-  if (!delivered) {
-    const peerOnlineElsewhere = await isUserOnline(peerId).catch(() => false)
-      || Boolean(await redis.get(`user:online:${peerId}`).catch(() => null));
-    if (!peerOnlineElsewhere) {
-      void notifyPrivateMessagePush({
-        toUserId: peerId,
-        senderId: currentUser.id,
-        chatId,
-        messageId: message.id,
-        previewText: messagePreview(msgType, content),
-      });
+    if (!duplicate) {
+      await deliverPrivateMessage(req.app.locals, currentUser.id, peerId, chatId, message);
     }
-  }
 
-  return res.json({ message: result });
+    return res.json({ message, duplicate: duplicate || undefined });
+  } catch (err: any) {
+    const status = err?.statusCode || 500;
+    return res.status(status).json({ error: err?.message || '发送失败' });
+  }
 }
 
 // ============ 所有路由需要登录 ============
@@ -570,7 +525,7 @@ router.post('/:chatId/messages', async (req: Request, res: Response) => {
   try {
     const currentUser = (req as any).user;
     const { chatId } = req.params;
-    const { content, msgType, replyToId, extra: rawExtra, burnAfterRead, hmac } = req.body;
+    const { content, msgType, replyToId, extra: rawExtra, burnAfterRead, hmac, clientMsgId, tempId } = req.body;
 
     // 强制 P0：私聊必须加密，禁止明文发送
     if (msgType !== 'encrypted') {
@@ -586,87 +541,32 @@ router.post('/:chatId/messages', async (req: Request, res: Response) => {
       return res.status(400).json({ error: '加密信封不能为空' });
     }
 
-    // 验证会话存在且用户有权限
-    const chat = await prisma.chat.findUnique({ where: { id: chatId } });
-    if (!chat) {
-      return res.status(404).json({ error: '会话不存在' });
-    }
-    if (chat.participantA !== currentUser.id && chat.participantB !== currentUser.id) {
-      return res.status(403).json({ error: '无权发送消息' });
-    }
-
-    // 解析阅后即焚参数
     const validBurnTimers = [5, 10, 30, 60, 300, 3600, 86400, 604800];
     const burnSeconds = (typeof burnAfterRead === 'number' && validBurnTimers.includes(burnAfterRead)) ? burnAfterRead : null;
 
-    // 创建消息
-    const message = await prisma.privateMessage.create({
-      data: {
+    try {
+      const { message, peerId, duplicate } = await sendPrivateMessageCore({
         chatId,
         senderId: currentUser.id,
         msgType: 'encrypted',
-        content: content || '', // 此时 content 存储的是加密信封 JSON
-        replyToId: replyToId || null,
-        extra: extra ? JSON.stringify(extra) : null,
-        status: 'sent',
+        content: content || '',
+        replyToId,
+        extra,
         burnAfterRead: burnSeconds,
-        hmac: (typeof hmac === 'string' && /^[a-f0-9]{64}$/i.test(hmac)) ? hmac : null,
-      },
-    });
+        hmac,
+        clientMsgId: clientMsgId || tempId || null,
+        tempId: tempId || clientMsgId || null,
+      });
 
-    await prisma.chat.update({
-      where: { id: chatId },
-      data: {
-        lastMessage: '🔒 [加密消息]', // 强制脱敏预览
-        lastMessageAt: message.createdAt,
-      },
-    });
-
-    const result: any = {
-      id: message.id,
-      chatId: message.chatId,
-      senderId: message.senderId,
-      msgType: message.msgType,
-      content: message.content,
-      replyToId: message.replyToId,
-      isRevoked: message.isRevoked,
-      status: message.status,
-      extra: parseExtra(message.extra),
-      createdAt: message.createdAt.getTime(),
-      ...(burnSeconds ? { burnAfterRead: burnSeconds } : {}),
-      ...(message.hmac ? { hmac: message.hmac } : {}),
-    };
-
-    const peerId = chat.participantA === currentUser.id ? chat.participantB : chat.participantA;
-
-    await incrUnreadCount(peerId, chatId, 1);
-    await invalidateConversationList(currentUser.id);
-    await invalidateConversationList(peerId);
-
-    const trySendTo = req.app.locals.trySendTo as undefined | ((userId: string, msg: Record<string, any>) => boolean);
-    const sendTo = req.app.locals.sendTo as undefined | ((userId: string, msg: Record<string, any>) => void);
-    const wsPayload = { type: 'private_message', payload: result };
-    const delivered = trySendTo ? trySendTo(peerId, wsPayload) : Boolean(sendTo && (sendTo(peerId, wsPayload), true));
-
-    if (!delivered) {
-      await publishImPush(peerId, wsPayload);
-    }
-
-    if (!delivered) {
-      const peerOnlineElsewhere = await isUserOnline(peerId).catch(() => false)
-        || Boolean(await redis.get(`user:online:${peerId}`).catch(() => null));
-      if (!peerOnlineElsewhere) {
-        void notifyPrivateMessagePush({
-          toUserId: peerId,
-          senderId: currentUser.id,
-          chatId,
-          messageId: message.id,
-          previewText: '🔒 [加密消息]',
-        });
+      if (!duplicate) {
+        await deliverPrivateMessage(req.app.locals, currentUser.id, peerId, chatId, message);
       }
-    }
 
-    res.json({ message: result });
+      return res.json({ message, duplicate: duplicate || undefined });
+    } catch (err: any) {
+      const status = err?.statusCode || 500;
+      return res.status(status).json({ error: err?.message || '发送消息失败' });
+    }
   } catch (err) {
     console.error('[PrivateChat] 发送消息失败:', err);
     res.status(500).json({ error: '发送消息失败' });
@@ -676,14 +576,14 @@ router.post('/:chatId/messages', async (req: Request, res: Response) => {
 /**
  * GET /api/chat/:chatId/messages
  * 拉取私聊消息（分页，支持游标）
- * Query: { before?: string (messageId), limit?: number (default 50) }
+ * Query: { before?: string (messageId), afterSeq?: number, limit?: number (default 50) }
  * Returns: { messages: MessageObject[], hasMore: boolean }
  */
 router.get('/:chatId/messages', async (req: Request, res: Response) => {
   try {
     const currentUser = (req as any).user;
     const { chatId } = req.params;
-    const { before, limit: limitStr } = req.query as { before?: string; limit?: string };
+    const { before, afterSeq, limit: limitStr } = req.query as { before?: string; afterSeq?: string; limit?: string };
     const limit = Math.min(parseInt(limitStr || '50', 10) || 50, 100);
 
     // 验证会话存在且用户有权限
@@ -695,9 +595,16 @@ router.get('/:chatId/messages', async (req: Request, res: Response) => {
       return res.status(403).json({ error: '无权访问此会话' });
     }
 
-    // 构建查询条件
     const where: any = { chatId };
-    if (before) {
+    let orderBy: { createdAt?: 'asc' | 'desc'; seq?: 'asc' | 'desc' } = { createdAt: 'desc' };
+
+    if (afterSeq) {
+      const seqNum = parseInt(afterSeq, 10);
+      if (!Number.isNaN(seqNum) && seqNum > 0) {
+        where.seq = { gt: BigInt(seqNum) };
+        orderBy = { seq: 'asc' };
+      }
+    } else if (before) {
       const cursorMsg = await prisma.privateMessage.findUnique({ where: { id: before } });
       if (cursorMsg) {
         where.createdAt = { lt: cursorMsg.createdAt };
@@ -706,12 +613,14 @@ router.get('/:chatId/messages', async (req: Request, res: Response) => {
 
     const messages = await prisma.privateMessage.findMany({
       where,
-      orderBy: { createdAt: 'desc' },
+      orderBy,
       take: limit + 1,
     });
 
     const hasMore = messages.length > limit;
-    const result = messages.slice(0, limit).reverse().map(m => ({
+    const slice = messages.slice(0, limit);
+    const ordered = afterSeq ? slice : slice.reverse();
+    const result = ordered.map(m => ({
       id: m.id,
       chatId: m.chatId,
       senderId: m.senderId,
@@ -722,6 +631,8 @@ router.get('/:chatId/messages', async (req: Request, res: Response) => {
       status: m.status,
       extra: m.isRevoked ? undefined : parseExtra(m.extra),
       createdAt: m.createdAt.getTime(),
+      seq: Number(m.seq),
+      ...(m.clientMsgId ? { clientMsgId: m.clientMsgId } : {}),
       // 阅后即焚字段
       ...(m.burnAfterRead ? {
         burnAfterRead: m.burnAfterRead,
