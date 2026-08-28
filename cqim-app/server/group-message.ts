@@ -20,6 +20,8 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { avatarToProxy } from './cos-signer.js';
 import { publicUrl } from './public-url.js';
+import { redis } from './redis.js';
+import { publishImPush } from './publish-im.js';
 
 // ESM 环境下兼容 __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -237,8 +239,10 @@ export function unregisterConnection(userId: string, ws?: WebSocket) {
   if (ws && onlineConnections.get(userId) !== ws) return;
   onlineConnections.delete(userId);
   // 从所有群在线列表中移除
-  for (const [, members] of groupOnlineMembers) {
-    members.delete(userId);
+  for (const [groupId, members] of groupOnlineMembers) {
+    if (members.delete(userId)) {
+      redis.srem(`group:online:${groupId}`, userId).catch(() => {});
+    }
   }
 }
 
@@ -247,10 +251,12 @@ export function joinGroupOnline(groupId: string, userId: string) {
     groupOnlineMembers.set(groupId, new Set());
   }
   groupOnlineMembers.get(groupId)!.add(userId);
+  redis.sadd(`group:online:${groupId}`, userId).catch(() => {});
 }
 
 export function leaveGroupOnline(groupId: string, userId: string) {
   groupOnlineMembers.get(groupId)?.delete(userId);
+  redis.srem(`group:online:${groupId}`, userId).catch(() => {});
 }
 
 /** 获取群在线成员列表（用于 MLS 信令广播） */
@@ -267,18 +273,43 @@ export function fanoutGroupSignal(
   excludeUserId?: string,
 ): void {
   const onlineMembers = groupOnlineMembers.get(groupId);
-  if (!onlineMembers?.size) return;
   const payload = JSON.stringify(signal);
-  for (const userId of onlineMembers) {
-    if (userId === excludeUserId) continue;
-    const ws = onlineConnections.get(userId);
-    if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-    if (ws.bufferedAmount > WS_BACKPRESSURE_THRESHOLD) continue;
-    try {
-      ws.send(payload);
-    } catch {
-      /* ignore */
+  const localDelivered = new Set<string>();
+
+  if (onlineMembers?.size) {
+    for (const userId of onlineMembers) {
+      if (userId === excludeUserId) continue;
+      const ws = onlineConnections.get(userId);
+      if (!ws || ws.readyState !== WebSocket.OPEN) continue;
+      if (ws.bufferedAmount > WS_BACKPRESSURE_THRESHOLD) continue;
+      try {
+        ws.send(payload);
+        localDelivered.add(userId);
+      } catch {
+        /* ignore */
+      }
     }
+  }
+
+  void fanoutGroupSignalRemote(groupId, signal, excludeUserId, localDelivered);
+}
+
+async function fanoutGroupSignalRemote(
+  groupId: string,
+  signal: Record<string, unknown>,
+  excludeUserId: string | undefined,
+  localDelivered: Set<string>,
+): Promise<void> {
+  try {
+    const remoteMembers = await redis.smembers(`group:online:${groupId}`);
+    for (const userId of remoteMembers) {
+      if (userId === excludeUserId || localDelivered.has(userId) || onlineConnections.has(userId)) {
+        continue;
+      }
+      await publishImPush(userId, signal);
+    }
+  } catch (err) {
+    console.error('[GroupMsg] 跨节点信令扇出失败:', err);
   }
 }
 
@@ -699,6 +730,20 @@ async function fanoutToGroup(groupId: string, msg: PushMessage, excludeUserId?: 
 
   if (memberCount > 100) {
     console.log(`[GroupMsg] 扇出完成: groupId=${groupId} online=${memberCount} pushed=${targetMembers.length} shards=${shards.length}`);
+  }
+
+  void fanoutGroupRemote(groupId, msg, excludeUserId);
+}
+
+async function fanoutGroupRemote(groupId: string, msg: PushMessage, excludeUserId?: string): Promise<void> {
+  try {
+    const remoteMembers = await redis.smembers(`group:online:${groupId}`);
+    for (const userId of remoteMembers) {
+      if (userId === excludeUserId || onlineConnections.has(userId)) continue;
+      await publishImPush(userId, msg);
+    }
+  } catch (err) {
+    console.error('[GroupMsg] 跨节点群消息扇出失败:', err);
   }
 }
 

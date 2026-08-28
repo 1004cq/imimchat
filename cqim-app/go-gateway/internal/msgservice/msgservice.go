@@ -165,6 +165,8 @@ func (q *batchQueue) flushBatch(groupID string, batch []*queueItem) {
 type ConnectionManager interface {
 	// PushToUser 推送消息给指定用户（已序列化）
 	PushToUser(userID string, serializedMsg []byte) bool
+	// PublishImPush 跨节点推送（本机未连接时由 Redis Pub/Sub 投递）
+	PublishImPush(userID string, serializedMsg []byte) error
 	// GetGroupOnlineMembers 获取群在线成员列表
 	GetGroupOnlineMembers(groupID string) []string
 	// GetGroupMemberCount 获取群成员总数（用于选择扇出策略）
@@ -346,7 +348,11 @@ func (svc *Service) fanoutToGroup(groupID string, msg PushMessage, excludeUserID
 		sm := serializedMsg
 		tasks[i] = func() {
 			for _, uid := range s {
-				svc.connMgr.PushToUser(uid, sm)
+				if !svc.connMgr.PushToUser(uid, sm) {
+					if err := svc.connMgr.PublishImPush(uid, sm); err != nil {
+						log.Printf("[MsgService] 跨节点推送失败: userId=%s err=%v", uid, err)
+					}
+				}
 			}
 		}
 	}
