@@ -21,6 +21,7 @@ RUN pnpm exec prisma generate && \
 # Stage 4: Production Dependencies
 FROM base AS prod-deps
 COPY package.json pnpm-lock.yaml ./
+COPY patches ./patches
 RUN pnpm config set registry https://registry.npmmirror.com && \
     pnpm install --prod --frozen-lockfile
 

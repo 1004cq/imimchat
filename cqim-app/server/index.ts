@@ -54,6 +54,7 @@ import apnsRouter from "./apns";
 import jpushRouter from "./jpush";
 import webPushRouter from "./web-push";
 import { notifyPrivateMessagePush } from "./push-notify.js";
+import { publishImPush, subscribeImPush } from "./publish-im.js";
 import cookieParser from "cookie-parser";
 import compression from "compression";
 import stickerRouter, { STICKER_STATIC_PREFIX, STICKER_FILES_DIR, ensureStickerStore } from "./sticker";
@@ -1363,12 +1364,19 @@ async function handleMessage(client: SignalClient, raw: string) {
 
             // 推送给对方
             const peerId = chat.participantA === client.userId ? chat.participantB : chat.participantA;
-            const delivered = trySendTo(peerId, {
+            let delivered = trySendTo(peerId, {
               type: 'private_message' as any,
               payload: msgPayload,
             });
 
-            const { incrUnreadCount, invalidateConversationList } = await import('./redis.js');
+            if (!delivered) {
+              await publishImPush(peerId, {
+                type: 'private_message',
+                payload: msgPayload,
+              });
+            }
+
+            const { incrUnreadCount, invalidateConversationList, isUserOnline, redis } = await import('./redis.js');
             await incrUnreadCount(peerId, pChatId, 1);
             await invalidateConversationList(client.userId);
             await invalidateConversationList(peerId);
@@ -1376,13 +1384,17 @@ async function handleMessage(client: SignalClient, raw: string) {
             console.log(`[PrivateChat] 消息已发送: from=${client.userId} to=${peerId} chatId=${pChatId} wsDelivered=${delivered}`);
 
             if (!delivered) {
-              await notifyPrivateMessagePush({
-                toUserId: peerId,
-                senderId: client.userId,
-                chatId: pChatId,
-                messageId: message.id,
-                previewText: '🔒 [加密消息]',
-              });
+              const peerOnlineElsewhere = await isUserOnline(peerId).catch(() => false)
+                || Boolean(await redis.get(`user:online:${peerId}`).catch(() => null));
+              if (!peerOnlineElsewhere) {
+                await notifyPrivateMessagePush({
+                  toUserId: peerId,
+                  senderId: client.userId,
+                  chatId: pChatId,
+                  messageId: message.id,
+                  previewText: '🔒 [加密消息]',
+                });
+              }
             }
           } catch (err) {
             console.error('[PrivateChat] 发送失败:', err);
@@ -3128,6 +3140,14 @@ app.use("/api/home", homeRouter);
   }, HEARTBEAT_INTERVAL);
 
   wss.on('close', () => clearInterval(heartbeatTimer));
+
+  // ★ 跨节点 IM 推送：订阅 Redis，将私聊/群消息投递到本机 /signal 连接
+  subscribeImPush((userId, payload) => {
+    if (!payload || typeof payload !== 'object') return;
+    const msg = payload as SignalMessage;
+    if (!msg.type) return;
+    trySendTo(userId, msg);
+  });
 
   // ★ 朋友圈实时事件推送：订阅 Redis 频道，将点赞/评论通知推送给在线用户
   subscribeChannel('moment_events', (message: any) => {

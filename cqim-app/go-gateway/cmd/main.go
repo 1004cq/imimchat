@@ -57,7 +57,9 @@ func main() {
 	defer verifier.Close()
 
 	// 初始化 Gateway
-	gw := gateway.New(verifier, s, rdb, ctx)
+	gw := gateway.New(verifier, s, rdb, ctx, cfg.GatewayID, cfg.CorsOrigins)
+	gw.StartPresenceLoop(ctx)
+	gw.StartPushSubscriber(ctx)
 
 	// 初始化消息服务
 	msgSvc := msgservice.New(s, gw, msgservice.Config{
@@ -94,7 +96,7 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		log.Printf("[Main] Go Gateway 监听在 ws://%s/ws/group", addr)
+		log.Printf("[Main] Go Gateway 监听在 ws://%s/ws/group (gatewayId=%s)", addr, cfg.GatewayID)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("[Main] HTTP 服务器启动失败: %v", err)
 		}
@@ -105,6 +107,8 @@ func main() {
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
+
+	gw.ShutdownPresence(shutdownCtx)
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("[Main] 服务器关闭失败: %v", err)

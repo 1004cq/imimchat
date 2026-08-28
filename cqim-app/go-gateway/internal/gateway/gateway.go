@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -79,6 +80,7 @@ func (c *Client) readPump() {
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error {
 		c.conn.SetReadDeadline(time.Now().Add(pongWait))
+		c.gateway.renewOnline(c.userID)
 		return nil
 	})
 
@@ -99,6 +101,7 @@ func (c *Client) readPump() {
 
 // Gateway WebSocket 接入层
 type Gateway struct {
+	id        string
 	upgrader  websocket.Upgrader
 	verifier  *auth.Verifier
 	store     *store.Store
@@ -119,13 +122,30 @@ func New(
 	s *store.Store,
 	rdb *redis.Client,
 	ctx context.Context,
+	gatewayID string,
+	corsOrigins []string,
 ) *Gateway {
+	allowedOrigins := make(map[string]struct{}, len(corsOrigins))
+	for _, origin := range corsOrigins {
+		allowedOrigins[origin] = struct{}{}
+	}
+
 	gw := &Gateway{
+		id: gatewayID,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  4096,
 			WriteBufferSize: 4096,
 			CheckOrigin: func(r *http.Request) bool {
-				return true // 允许跨域（生产环境应限制）
+				// 未配置 CORS_ORIGINS 时保持开发环境全放行
+				if len(allowedOrigins) == 0 {
+					return true
+				}
+				origin := strings.TrimSpace(r.Header.Get("Origin"))
+				if origin == "" {
+					return true
+				}
+				_, ok := allowedOrigins[origin]
+				return ok
 			},
 		},
 		verifier:    verifier,
@@ -243,8 +263,7 @@ func (gw *Gateway) unregister(client *Client) {
 			}
 		}
 
-		// 更新 Redis 在线状态
-		go gw.rdb.Del(gw.ctx, "user:online:"+client.userID)
+		go gw.clearOnline(client.userID)
 
 		log.Printf("[Gateway] 用户 %s 下线，当前在线: %d", client.userID, len(gw.clients))
 	}
@@ -289,6 +308,7 @@ func (gw *Gateway) handleClientMessage(c *Client, rawMsg []byte) {
 	case "group_ack":
 		gw.handleGroupAck(c, msg.Data)
 	case "ping":
+		gw.renewOnline(c.userID)
 		gw.sendToClient(c, map[string]string{"type": "pong"})
 	default:
 		log.Printf("[Gateway] 未知消息类型: %s", msg.Type)
@@ -465,9 +485,7 @@ func (gw *Gateway) HandleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	gw.register(client)
-
-	// 更新 Redis 在线状态
-	gw.rdb.Set(gw.ctx, "user:online:"+userID, "1", 10*time.Minute)
+	gw.setOnline(userID)
 
 	// 自动加入用户所在的所有群的在线列表
 	go func() {
@@ -492,9 +510,10 @@ func (gw *Gateway) HandleHealth(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"status":  "ok",
-		"online":  onlineCount,
-		"service": "cqim-go-gateway",
+		"status":    "ok",
+		"gatewayId": gw.id,
+		"online":    onlineCount,
+		"service":   "cqim-go-gateway",
 	})
 }
 
