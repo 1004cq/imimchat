@@ -38,14 +38,18 @@ fi
 
 if [[ ! -f .env ]]; then
   cp deploy/env.node3.example .env
-  echo "WARN: 已生成 .env，请填写与 node1 相同的 JWT_SECRET 后重新运行" >&2
-  exit 1
 fi
 
-if grep -q 'REPLACE_WITH_NODE1_JWT_SECRET' .env 2>/dev/null; then
-  echo "ERROR: .env 中 JWT_SECRET 仍为占位符，请从 node1 复制后重试" >&2
-  exit 1
-fi
+# 生产使用 DB Session，无 JWT_SECRET 时移除占位检查
+sed -i '/^JWT_SECRET=REPLACE_WITH/d' .env 2>/dev/null || true
+grep -q '^GATEWAY_ID=' .env || echo 'GATEWAY_ID=gw-app-3' >> .env
+grep -q '^REDIS_URL=' .env || echo 'REDIS_URL=redis://42.194.167.201:6380' >> .env
+grep -q '^SHARED_DATA_DIR=' .env || echo 'SHARED_DATA_DIR=/home/ubuntu/cqim_shared/data' >> .env
+sed -i 's|^PUBLIC_BASE_URL=.*|PUBLIC_BASE_URL=https://wed.imim.chat|' .env
+sed -i 's|^CORS_ORIGINS=.*|CORS_ORIGINS=https://wed.imim.chat,http://wed.imim.chat|' .env
+sed -i 's|^GATEWAY_ID=.*|GATEWAY_ID=gw-app-3|' .env
+sed -i 's|^REDIS_URL=.*|REDIS_URL=redis://42.194.167.201:6380|' .env
+sed -i 's|^REDIS_ADDR=.*|REDIS_ADDR=42.194.167.201:6380|' .env
 
 echo "==> 构建并启动节点3 应用层"
 if [[ -f deploy/standalone-up.sh ]]; then
