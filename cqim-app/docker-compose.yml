@@ -125,7 +125,7 @@ services:
     expose:
       - "8081"
     environment:
-      - GATEWAY_ID=${GATEWAY_ID:-cqim-gateway}
+      - GATEWAY_ID=${GATEWAY_ID:-gw-app-1}
       - REDIS_ADDR=redis:6379
       - REDIS_PASSWORD=
       - REDIS_DB=0
