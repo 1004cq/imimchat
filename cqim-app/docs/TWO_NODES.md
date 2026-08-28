@@ -43,7 +43,7 @@ cp deploy/env.app.example .env   # 或沿用现有 .env
 #   GATEWAY_ID=gw-app-1
 #   PUBLIC_BASE_URL=https://wed.imim.chat
 
-docker compose -f docker-compose.yml -f docker-compose.cqje.yml up -d
+docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml up -d
 ```
 
 ### SSL 证书
@@ -128,6 +128,7 @@ docker compose up -d
 | 文件 | 说明 |
 |------|------|
 | `deploy/nginx-lb.conf` | 节点1 upstream 模板 |
+| `deploy/docker-compose.prod.yml` | 节点1 生产覆盖（wed.imim.chat） |
 | `deploy/docker-compose.app.yml` | 节点2 仅应用层 |
 | `deploy/env.app.example` | 节点2 环境变量模板 |
 | `docs/dual-node-deploy.md` | 通用双节点说明（Mongo 版） |

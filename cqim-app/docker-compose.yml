@@ -99,7 +99,7 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       MYSQL_URL: ${MYSQL_URL:-mysql://cqim:cqim@mysql:3306/cqim_audit}
       MYSQL_AUDIT_ENABLED: ${MYSQL_AUDIT_ENABLED:-true}
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://cq.je}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://wed.imim.chat}
     deploy:
       resources:
         limits:
@@ -129,7 +129,7 @@ services:
       - REDIS_ADDR=redis:6379
       - REDIS_PASSWORD=
       - REDIS_DB=0
-      - CORS_ORIGINS=${CORS_ORIGINS:-https://cq.je,https://www.cq.je,http://cq.je,http://www.cq.je}
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://wed.imim.chat,http://wed.imim.chat}
     depends_on:
       redis:
         condition: service_healthy

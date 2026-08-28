@@ -53,7 +53,7 @@ GATEWAY_ID=gw-node1
 # 节点2 .env 示例（将 10.0.0.1 换成节点1 内网 IP）
 NODE_ENV=production
 PORT=3000
-PUBLIC_BASE_URL=https://cq.je
+PUBLIC_BASE_URL=https://wed.imim.chat
 
 DATABASE_URL=mongodb://10.0.0.1:27017/cqim?replicaSet=rs0&directConnection=true
 REDIS_URL=redis://10.0.0.1:6379
@@ -62,7 +62,7 @@ MYSQL_URL=mysql://cqim:YOUR_PASSWORD@10.0.0.1:3306/cqim_audit
 # 每台 Gateway 必须不同
 GATEWAY_ID=gw-node2
 REDIS_ADDR=10.0.0.1:6379
-CORS_ORIGINS=https://cq.je,https://www.cq.je
+CORS_ORIGINS=https://wed.imim.chat,http://wed.imim.chat
 ```
 
 安全组 / 防火墙：仅允许节点2 内网 IP 访问节点1 的 `27017`、`6379`、`3306`。
