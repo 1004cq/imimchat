@@ -1,0 +1,70 @@
+# 节点3 应用层（103.24.217.244）— 接入 node1/node2 集群
+# 前置：NFS 挂载 node1 共享 SQLite + node1 Redis 6380 可达
+#
+# 用法：
+#   cp deploy/env.node3.example .env   # 填入与 node1 相同的 JWT_SECRET
+#   bash deploy/scripts/node3-join-cluster.sh
+
+services:
+  nginx:
+    profiles: ["disabled"]
+
+  mongo:
+    profiles: ["disabled"]
+
+  redis:
+    profiles: ["disabled"]
+
+  mysql:
+    profiles: ["disabled"]
+
+  cqim:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.prebuilt
+    image: cqim:latest
+    container_name: cqim-node3-api
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:3011:3000"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: ${DATABASE_URL:-file:/app/data/cqim.db}
+      REDIS_URL: ${REDIS_URL:-redis://42.194.167.201:6380}
+      MYSQL_AUDIT_ENABLED: ${MYSQL_AUDIT_ENABLED:-false}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://wed.imim.chat}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://wed.imim.chat,http://wed.imim.chat}
+      GATEWAY_ID: ${GATEWAY_ID:-gw-app-3}
+    volumes:
+      - ${SHARED_DATA_DIR:-/home/ubuntu/cqim_shared/data}:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 8
+      start_period: 60s
+
+  go-gateway:
+    build:
+      context: ./go-gateway
+      dockerfile: Dockerfile
+    image: cqim-gateway:latest
+    container_name: cqim-node3-gateway
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:8082:8081"
+    environment:
+      GATEWAY_ID: ${GATEWAY_ID:-gw-app-3}
+      DB_PATH: /app/data/cqim.db
+      REDIS_ADDR: ${REDIS_ADDR:-42.194.167.201:6380}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DB: ${REDIS_DB:-0}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://wed.imim.chat,http://wed.imim.chat}
+    volumes:
+      - ${SHARED_DATA_DIR:-/home/ubuntu/cqim_shared/data}:/app/data
+    depends_on:
+      cqim:
+        condition: service_healthy

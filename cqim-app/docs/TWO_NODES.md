@@ -31,6 +31,7 @@
 |------|-----|----------|
 | 节点1（入口 + 数据） | 42.194.167.201 | cqim、go-gateway、Redis、MySQL、Mongo、宿主机 Nginx + SSL |
 | 节点2（应用） | 106.53.196.247 | 仅 cqim、go-gateway；**无** 对外 Nginx |
+| 节点3（应用） | 103.24.217.244 | 同节点2；`GATEWAY_ID=gw-app-3`，可选 `:999` 单机调试入口 |
 
 当前生产使用 **SQLite**（NFS 共享 `cqim.db`）+ **Redis Pub/Sub** 跨节点投递。若迁移 Mongo，将 `DATABASE_URL` 指向节点1 内网 `27017` 即可，双节点推送逻辑不变。
 
@@ -90,6 +91,20 @@ docker compose -f docker-compose.yml -f deploy/docker-compose.app.yml up -d cqim
 节点2 容器端口需对节点1 可达：`3011`（API）、`8082`（Gateway）。`docker-compose.app.yml` 已绑定 `0.0.0.0`；请在云安全组限制来源为节点1 公网 IP。
 
 **不要**在节点2 安装 wed.imim.chat 的 Nginx/SSL。
+
+## 节点3 部署（103.24.217.244）
+
+```bash
+# 节点1 先执行（NFS + Nginx upstream）
+sudo bash deploy/scripts/node1-add-node3.sh
+
+# 节点3
+cp deploy/env.node3.example .env
+# 编辑 .env：JWT_SECRET 与 node1 一致
+sudo bash deploy/scripts/node3-join-cluster.sh
+```
+
+节点3 需在防火墙放行 node1（42.194.167.201）访问 `3011`、`8082`。
 
 ## EdgeOne 配置
 
