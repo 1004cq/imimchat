@@ -359,7 +359,16 @@ export class E2EEManager {
   async fetchRemoteBundle(peerId: string): Promise<PreKeyBundle> {
     const resp = await fetch(`/api/crypto/get-bundle?userId=${encodeURIComponent(peerId)}`);
     if (!resp.ok) {
-      const errorText = await resp.text();
+      let errorText = await resp.text();
+      try {
+        const errJson = JSON.parse(errorText);
+        if (resp.status === 428 || errJson.error === 'peer_bundle_outdated') {
+          throw new Error(errJson.message || '对方安全凭证需要更新，请让对方重新登录后再试');
+        }
+        errorText = errJson.message || errJson.error || errorText;
+      } catch (parseErr) {
+        if (parseErr instanceof Error && parseErr.message.includes('对方安全凭证')) throw parseErr;
+      }
       throw new Error(`无法获取用户 ${peerId} 的安全凭证 (Bundle): ${errorText}`);
     }
 

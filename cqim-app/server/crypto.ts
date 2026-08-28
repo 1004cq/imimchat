@@ -265,6 +265,12 @@ router.post('/register-bundle', async (req: Request, res: Response) => {
   if (!userId || !identityKey || !signedPreKey) {
     return res.status(400).json({ error: '缺少必要参数' });
   }
+  if (!signingPublicKey) {
+    return res.status(400).json({
+      error: 'missing_signing_public_key',
+      message: '客户端版本过旧，请强制刷新页面后重新登录',
+    });
+  }
 
   try {
     // 存储身份公钥和签名预密钥
@@ -347,6 +353,13 @@ router.get('/get-bundle', async (req: Request, res: Response) => {
     }
 
     const bundle = JSON.parse(bundleConfig.value);
+
+    if (!bundle.signingPublicKey) {
+      return res.status(428).json({
+        error: 'peer_bundle_outdated',
+        message: '对方安全凭证需要更新，请让对方重新登录后再试',
+      });
+    }
 
     // 获取并消费一个 One-Time PreKey
     let oneTimePreKey: { keyId: number; publicKey: string } | undefined;
