@@ -50,6 +50,8 @@ export interface SessionRecord {
 export interface LocalRegistration {
   registrationId: number;
   identityKeyPair: KeyPairB64;
+  /** ECDSA 密钥对，用于 Signed PreKey 签名（与 ECDH Identity Key 分离） */
+  signingKeyPair?: KeyPairB64;
   createdAt: number;
 }
 

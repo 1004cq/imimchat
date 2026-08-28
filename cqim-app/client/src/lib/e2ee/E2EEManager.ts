@@ -42,7 +42,9 @@ import {
 /** PreKey Bundle — 用于 X3DH 初始化会话 */
 export interface PreKeyBundle {
   registrationId: number;
-  identityKey: string;      // Base64 公钥
+  identityKey: string;      // Base64 公钥 (ECDH)
+  /** ECDSA 公钥，用于验证 signedPreKey 签名（与 identityKey 分离） */
+  signingPublicKey?: string;
   signedPreKeyId: number;
   signedPreKey: string;     // Base64 公钥
   signedPreKeySignature: string;
@@ -170,6 +172,7 @@ export class E2EEManager {
     if (existing) {
       this._registrationId = existing.registrationId;
       this._identityKeyPair = existing.identityKeyPair;
+      await this.ensureSigningKeyPair();
       this._initialized = true;
       
       // 启动 Worker 代理（极致优化：计算密集型任务后台化）。
@@ -210,10 +213,13 @@ export class E2EEManager {
     const identityKP = await generateKeyPair();
     this._identityKeyPair = await exportKeyPair(identityKP);
 
-    // 3. 保存本地注册信息
+    // 3. 保存本地注册信息（含 ECDSA 签名密钥对）
+    const signingKP = await import('./CryptoUtils').then(m => m.generateSigningKeyPair());
+    const signingKeyPair = await import('./CryptoUtils').then(m => m.exportKeyPair(signingKP as any));
     await this.store.saveLocalRegistration({
       registrationId: this._registrationId,
       identityKeyPair: this._identityKeyPair,
+      signingKeyPair,
       createdAt: Date.now(),
     });
 
@@ -224,34 +230,34 @@ export class E2EEManager {
     await this.generatePreKeys(0, 20);
   }
 
+  /** 确保本地存在 ECDSA 签名密钥对（Signed PreKey 签名与 Identity ECDH 密钥分离） */
+  private async ensureSigningKeyPair(): Promise<KeyPairB64> {
+    const reg = await this.store.getLocalRegistration();
+    if (!reg) throw new Error('E2EE 未初始化');
+
+    if (reg.signingKeyPair?.pubKey && reg.signingKeyPair?.privKey) {
+      return reg.signingKeyPair;
+    }
+
+    const signingKP = await import('./CryptoUtils').then(m => m.generateSigningKeyPair());
+    const signingKeyPair = await import('./CryptoUtils').then(m => m.exportKeyPair(signingKP as any));
+    await this.store.saveLocalRegistration({
+      ...reg,
+      signingKeyPair,
+    });
+    // 旧用户升级：用新签名密钥重签 Signed PreKey
+    await this.generateSignedPreKey();
+    console.log('[E2EE] 已生成签名密钥并更新 Signed PreKey');
+    return signingKeyPair;
+  }
+
   /** 生成 Signed PreKey */
   async generateSignedPreKey(id: number = 1): Promise<void> {
     const keyPair = await generateKeyPair();
     const exported = await exportKeyPair(keyPair);
 
-    // 使用 Identity Key 签名
-    // 导入私钥（用于签名，必须是 ECDSA 类型）
-    // 注意：目前的 generateKeyPair 生成的是 ECDH 密钥，用于协商；
-    // Identity Key 在 Signal 中既用于协商也用于签名。
-    // 在 Web Crypto P-256 中，ECDH 密钥不能直接用于 ECDSA 签名。
-    // 为了合规，我们需要为 Identity 额外生成一对签名密钥，或者使用相同的种子。
-    // 这里采用最简单的合规做法：Identity Key 实际上包含两对 P-256，一对用于 ECDH，一对用于 ECDSA。
-    
-    // 获取本地注册信息中的签名私钥
-    const reg = await this.store.getLocalRegistration();
-    if (!reg || !(reg as any).signingKeyPair) {
-      // 如果没有签名密钥对，重新生成（平滑升级）
-      const signingKP = await import('./CryptoUtils').then(m => m.generateSigningKeyPair());
-      const exportedSigning = await import('./CryptoUtils').then(m => m.exportKeyPair(signingKP as any));
-      await this.store.saveLocalRegistration({
-        ...reg!,
-        signingKeyPair: exportedSigning,
-      } as any);
-      this._identityKeyPair = { ...this._identityKeyPair!, signingKeyPair: exportedSigning } as any;
-    }
-
-    const signingPrivKeyBase64 = (this._identityKeyPair as any).signingKeyPair.privKey;
-    const signingPriv = await import('./CryptoUtils').then(m => m.importPrivateKey(signingPrivKeyBase64, 'ECDSA'));
+    const signingKeyPair = await this.ensureSigningKeyPair();
+    const signingPriv = await import('./CryptoUtils').then(m => m.importPrivateKey(signingKeyPair.privKey, 'ECDSA'));
     const signedPubBuf = base64ToBuffer(exported.pubKey);
 
     const signatureBuf = await import('./CryptoUtils').then(m => m.sign(signingPriv, signedPubBuf));
@@ -287,10 +293,13 @@ export class E2EEManager {
 
     const preKeys = await this.store.getAllPreKeys();
     const oneTimePreKey = preKeys.length > 0 ? preKeys[0] : undefined;
+    const reg = await this.store.getLocalRegistration();
+    const signingPublicKey = reg?.signingKeyPair?.pubKey;
 
     return {
       registrationId: this._registrationId,
       identityKey: this._identityKeyPair.pubKey,
+      ...(signingPublicKey ? { signingPublicKey } : {}),
       signedPreKeyId: signedPreKey.id,
       signedPreKey: signedPreKey.keyPair.pubKey,
       signedPreKeySignature: signedPreKey.signature,
@@ -323,6 +332,7 @@ export class E2EEManager {
           userId,
           registrationId: bundle.registrationId,
           identityKey: bundle.identityKey,
+          ...(bundle.signingPublicKey ? { signingPublicKey: bundle.signingPublicKey } : {}),
           signedPreKey: {
             keyId: bundle.signedPreKeyId,
             publicKey: bundle.signedPreKey,
@@ -357,6 +367,7 @@ export class E2EEManager {
     const bundle: PreKeyBundle = {
       registrationId: data.registrationId,
       identityKey: data.identityKey,
+      signingPublicKey: data.signingPublicKey || undefined,
       signedPreKeyId: data.signedPreKey.keyId,
       signedPreKey: data.signedPreKey.publicKey,
       signedPreKeySignature: data.signedPreKey.signature,
@@ -437,12 +448,15 @@ export class E2EEManager {
 
     console.log('[E2EE] 开始 X3DH 密钥协商，对端:', peerId);
 
-    // 验证对端 Signed PreKey 签名 (P0 安全要求)
+    // 验证对端 Signed PreKey 签名（须用 ECDSA signingPublicKey，不能用 ECDH identityKey）
     try {
-      const remoteIdentityPubForVerify = await importPublicKey(bundle.identityKey, 'ECDSA');
+      if (!bundle.signingPublicKey) {
+        throw new Error('对方安全凭证版本过旧，请让对方重新登录后再试');
+      }
+      const verifyPub = await importPublicKey(bundle.signingPublicKey, 'ECDSA');
       const signatureBuf = base64ToBuffer(bundle.signedPreKeySignature);
       const signedPubBuf = base64ToBuffer(bundle.signedPreKey);
-      const isValid = await import('./CryptoUtils').then(m => m.verify(remoteIdentityPubForVerify, signatureBuf, signedPubBuf));
+      const isValid = await import('./CryptoUtils').then(m => m.verify(verifyPub, signatureBuf, signedPubBuf));
       if (!isValid) {
         throw new Error('对端安全凭证签名验证失败');
       }

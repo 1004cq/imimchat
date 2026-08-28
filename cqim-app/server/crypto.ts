@@ -260,7 +260,7 @@ router.post('/verify-message', async (req: Request, res: Response) => {
  * }
  */
 router.post('/register-bundle', async (req: Request, res: Response) => {
-  const { userId, registrationId, identityKey, signedPreKey, preKeys } = req.body;
+  const { userId, registrationId, identityKey, signingPublicKey, signedPreKey, preKeys } = req.body;
 
   if (!userId || !identityKey || !signedPreKey) {
     return res.status(400).json({ error: '缺少必要参数' });
@@ -274,6 +274,7 @@ router.post('/register-bundle', async (req: Request, res: Response) => {
         value: JSON.stringify({
           registrationId,
           identityKey,
+          ...(signingPublicKey ? { signingPublicKey } : {}),
           signedPreKey,
           updatedAt: new Date().toISOString(),
         }),
@@ -283,6 +284,7 @@ router.post('/register-bundle', async (req: Request, res: Response) => {
         value: JSON.stringify({
           registrationId,
           identityKey,
+          ...(signingPublicKey ? { signingPublicKey } : {}),
           signedPreKey,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
@@ -368,6 +370,7 @@ router.get('/get-bundle', async (req: Request, res: Response) => {
     res.json({
       registrationId: bundle.registrationId,
       identityKey: bundle.identityKey,
+      signingPublicKey: bundle.signingPublicKey || null,
       signedPreKey: bundle.signedPreKey,
       preKey: oneTimePreKey || null,
     });
