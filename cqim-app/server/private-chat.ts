@@ -18,6 +18,7 @@ import {
 } from './redis.js';
 import { userAuth } from './auth.js';
 import { avatarToProxy } from './cos-signer.js';
+import { notifyPrivateMessagePush } from './push-notify.js';
 
 const router = Router();
 const __filename = fileURLToPath(import.meta.url);
@@ -137,11 +138,23 @@ async function createPrivateMessageAndNotify(
   };
 
   const peerId = chat.participantA === currentUser.id ? chat.participantB : chat.participantA;
+
+  await incrUnreadCount(peerId, chatId, 1);
+  await invalidateConversationList(currentUser.id);
+  await invalidateConversationList(peerId);
+
+  const trySendTo = req.app.locals.trySendTo as undefined | ((userId: string, msg: Record<string, any>) => boolean);
   const sendTo = req.app.locals.sendTo as undefined | ((userId: string, msg: Record<string, any>) => void);
-  if (sendTo) {
-    sendTo(peerId, {
-      type: 'private_message',
-      payload: result,
+  const wsPayload = { type: 'private_message', payload: result };
+  const delivered = trySendTo ? trySendTo(peerId, wsPayload) : Boolean(sendTo && (sendTo(peerId, wsPayload), true));
+
+  if (!delivered) {
+    void notifyPrivateMessagePush({
+      toUserId: peerId,
+      senderId: currentUser.id,
+      chatId,
+      messageId: message.id,
+      previewText: messagePreview(msgType, content),
     });
   }
 
@@ -615,16 +628,22 @@ router.post('/:chatId/messages', async (req: Request, res: Response) => {
 
     const peerId = chat.participantA === currentUser.id ? chat.participantB : chat.participantA;
 
-    // 严格一致性策略：更新 Redis 未读并删除会话列表缓存，最后推送
     await incrUnreadCount(peerId, chatId, 1);
     await invalidateConversationList(currentUser.id);
     await invalidateConversationList(peerId);
 
+    const trySendTo = req.app.locals.trySendTo as undefined | ((userId: string, msg: Record<string, any>) => boolean);
     const sendTo = req.app.locals.sendTo as undefined | ((userId: string, msg: Record<string, any>) => void);
-    if (sendTo) {
-      sendTo(peerId, {
-        type: 'private_message',
-        payload: result,
+    const wsPayload = { type: 'private_message', payload: result };
+    const delivered = trySendTo ? trySendTo(peerId, wsPayload) : Boolean(sendTo && (sendTo(peerId, wsPayload), true));
+
+    if (!delivered) {
+      void notifyPrivateMessagePush({
+        toUserId: peerId,
+        senderId: currentUser.id,
+        chatId,
+        messageId: message.id,
+        previewText: '🔒 [加密消息]',
       });
     }
 

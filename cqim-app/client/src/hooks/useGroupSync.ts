@@ -421,34 +421,31 @@ export function useGroupSync(options: UseGroupSyncOptions) {
     try {
       const currentMessages = messagesRef.current;
       const oldestSeq = currentMessages.length > 0
-        ? Math.min(...currentMessages.map(m => m.seq)) - 1
+        ? Math.min(...currentMessages.map(m => m.seq))
         : undefined;
 
-      // 拉取更早的消息（反向分页）
       const params = new URLSearchParams({
         groupId,
         userId,
         limit: String(pageSize),
       });
-      // 拉取 seq < oldestSeq 的消息
-      if (oldestSeq !== undefined && oldestSeq > 0) {
-        // 使用 afterSeq=0 并限制到 oldestSeq 之前
-        params.set('afterSeq', String(Math.max(0, oldestSeq - pageSize)));
-        params.set('limit', String(pageSize));
+
+      if (oldestSeq !== undefined && oldestSeq > 1) {
+        params.set('beforeSeq', String(oldestSeq));
       }
 
       const resp = await fetch(`/api/group/messages?${params}`);
       if (!resp.ok) throw new Error('拉取失败');
       const data = await resp.json();
 
-      const olderRaw = (data.messages || [])
-        .filter((m: any) => m.seq < (oldestSeq ?? Infinity));
+      const olderRaw = (data.messages || []) as any[];
       const olderMsgs = await decryptGroupBatch(groupId, userId, olderRaw);
 
       if (olderMsgs.length === 0) {
         setHasMore(false);
       } else {
         handleBatchMessages(olderMsgs);
+        if (!data.hasMore) setHasMore(false);
       }
     } finally {
       setLoading(false);

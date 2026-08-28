@@ -1039,9 +1039,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
             const currentUserId = stateRef.current.currentUser?.id || localStorage.getItem('user_id') || 'me';
 
             if (ack && tempId) {
-              // 发送确认：替换临时消息ID
-              dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId, realId: id });
-              console.log(`[AppContext] 私聊消息确认: tempId=${tempId} -> realId=${id}`);
+              if (payload.error) {
+                dispatch({ type: 'UPDATE_MESSAGE_STATUS', chatId, messageId: tempId, status: 'failed' });
+                console.warn(`[AppContext] 私聊发送失败: tempId=${tempId} error=${payload.error}`);
+              } else if (id) {
+                dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId, realId: id });
+                console.log(`[AppContext] 私聊消息确认: tempId=${tempId} -> realId=${id}`);
+              }
             } else if (senderId !== currentUserId) {
               // 收到对方消息
               (async () => {
