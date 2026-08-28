@@ -162,18 +162,18 @@ export const VirtualMessageList = memo(forwardRef<VirtualMessageListHandle, Virt
   const prependScrollRef = useRef<{ height: number; top: number } | null>(null);
   const isLoadingMoreRef = useRef(false);
   const isAtBottomRef = useRef(true);
-  const prevLengthRef = useRef(safeMessages.length);
-  const rafRef = useRef<number | null>(null);
-  const saveAnchorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingAnchorRef = useRef<string | null | undefined>(undefined);
-  const restoreAttemptsRef = useRef(0);
-  const activeChatIdRef = useRef<string | null>(chatId || null);
   const messagesRef = useRef(messages);
   const safeMessages = useMemo(
     () => (Array.isArray(messages) ? messages : []).filter(msg => !!msg && !!msg.senderId && !!(msg.id || msg.seq)),
     [messages],
   );
   messagesRef.current = safeMessages;
+  const prevLengthRef = useRef(safeMessages.length);
+  const rafRef = useRef<number | null>(null);
+  const saveAnchorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingAnchorRef = useRef<string | null | undefined>(undefined);
+  const restoreAttemptsRef = useRef(0);
+  const activeChatIdRef = useRef<string | null>(chatId || null);
 
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);

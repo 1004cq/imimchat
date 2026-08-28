@@ -750,7 +750,7 @@ export default function ChatDetailPage() {
         id: `msg-${Date.now()}`,
         chatId,
         senderId: currentUserId,
-        senderProfile: { name: currentUser.name, avatar: currentUser.avatar }, // 强制注入当前用户 Profile
+        senderProfile: { name: currentUser?.name || '我', avatar: currentUser?.avatar || '' }, // 强制注入当前用户 Profile
         content: text,
         type: 'text',
         timestamp: Date.now(),
@@ -859,7 +859,7 @@ export default function ChatDetailPage() {
           id: encTempId,
           chatId,
           senderId: currentUserId,
-          senderProfile: { name: currentUser.name, avatar: currentUser.avatar },
+          senderProfile: { name: currentUser?.name || '我', avatar: currentUser?.avatar || '' },
           content: text, // UI 本地显示明文
           type: 'text',
           timestamp: msgTimestamp,
