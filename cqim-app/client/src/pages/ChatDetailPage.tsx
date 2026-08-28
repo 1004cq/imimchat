@@ -557,12 +557,16 @@ export default function ChatDetailPage() {
     fetch(`/api/group/members?groupId=${chat.groupId}`)
       .then(r => r.ok ? r.json() : null)
       .then(data => {
-        if (data?.members) {
-          setGroupMembers(data.members.map((m: any) => ({
-            id: m.userId,
-            name: m.name || m.nickname || m.user?.nickname || m.user?.username || m.userId,
-            avatar: m.avatar || m.user?.avatar || '',
-          })));
+        if (data?.members && Array.isArray(data.members)) {
+          setGroupMembers(
+            data.members
+              .filter((m: any) => m && (m.userId || m.id))
+              .map((m: any) => ({
+                id: m.userId || m.id,
+                name: m.name || m.nickname || m.user?.nickname || m.user?.username || m.userId || m.id,
+                avatar: m.avatar || m.user?.avatar || '',
+              })),
+          );
         }
       })
       .catch(() => {});
@@ -1708,7 +1712,7 @@ export default function ChatDetailPage() {
         placeholder={e2ee.isReady ? '输入消息...' : chat.groupId ? '输入消息，@ 提及成员...' : '输入消息...'}
         voice={voice}
         replyingTo={replyingTo}
-        replyLabel={replyingTo ? (replyingTo.senderId === currentUserId || replyingTo.senderId === 'me' ? '自己' : chat.type === 'group' ? (groupMembers.find(member => member.id === replyingTo.senderId)?.name || '群成员') : (otherUser?.name || '对方')) : undefined}
+        replyLabel={replyingTo ? (replyingTo.senderId === currentUserId || replyingTo.senderId === 'me' ? '自己' : chat?.type === 'group' ? (groupMembers.find(member => member.id === replyingTo.senderId)?.name || '群成员') : (otherUser?.name || '对方')) : undefined}
         effectiveBurnTimer={effectiveBurnTimer}
         ephemeralTimer={ephemeralTimer}
         forwardRestricted={forwardRestricted}
