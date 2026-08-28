@@ -52,7 +52,8 @@ import fcmRouter from "./fcm";
 import getuiRouter from "./getui";
 import apnsRouter from "./apns";
 import jpushRouter from "./jpush";
-import webPushRouter, { sendWebPush } from "./web-push";
+import webPushRouter from "./web-push";
+import { notifyPrivateMessagePush } from "./push-notify.js";
 import cookieParser from "cookie-parser";
 import compression from "compression";
 import stickerRouter, { STICKER_STATIC_PREFIX, STICKER_FILES_DIR, ensureStickerStore } from "./sticker";
@@ -65,6 +66,7 @@ import groupRouter, {
   sendGroupMessage,
   pullGroupMessages,
   ackGroupMessages,
+  fanoutGroupSignal,
 } from "./group-message";
 import { avatarToProxy } from "./cos-signer";
 import { publicUrl } from "./public-url";
@@ -649,17 +651,25 @@ const WS_BACKPRESSURE_LIMIT = 65536;
 const _serializeCache = new WeakMap<object, string>();
 
 function sendTo(userId: string, msg: SignalMessage) {
+  trySendTo(userId, msg);
+}
+
+/** 尝试 WS 投递；返回是否成功写入 socket（用于决定是否需要离线推送） */
+function trySendTo(userId: string, msg: SignalMessage): boolean {
   const client = clients.get(userId);
-  if (!client || client.ws.readyState !== WebSocket.OPEN) return;
-  // 背压检测：发送缓冲区积压过多时跳过，客户端可通过 pull 补偿
-  if (client.ws.bufferedAmount > WS_BACKPRESSURE_LIMIT) return;
-  // 使用预序列化缓存：同一对象只 stringify 一次
+  if (!client || client.ws.readyState !== WebSocket.OPEN) return false;
+  if (client.ws.bufferedAmount > WS_BACKPRESSURE_LIMIT) return false;
   let payload = _serializeCache.get(msg);
   if (!payload) {
     payload = JSON.stringify(msg);
     _serializeCache.set(msg, payload);
   }
-  client.ws.send(payload);
+  try {
+    client.ws.send(payload);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** 发送预序列化字符串（跳过 JSON.stringify） */
@@ -1276,15 +1286,30 @@ async function handleMessage(client: SignalClient, raw: string) {
       if (pChatId && pContent) {
         // 存储消息到数据库
         (async () => {
+          const failAck = (error: string) => {
+            if (tempId) {
+              sendTo(client.userId, {
+                type: 'private_message' as any,
+                payload: { ack: true, error, tempId },
+              });
+            }
+          };
+
           try {
             const chat = await prisma.chat.findUnique({ where: { id: pChatId } });
-            if (!chat) return;
-            // 验证发送者是会话参与者
-            if (chat.participantA !== client.userId && chat.participantB !== client.userId) return;
+            if (!chat) {
+              failAck('会话不存在');
+              return;
+            }
+            if (chat.participantA !== client.userId && chat.participantB !== client.userId) {
+              failAck('无权发送消息');
+              return;
+            }
 
-            // 解析阅后即焚参数（合法值：5, 10, 30, 60, 300, 3600, 86400, 604800）
             const validBurnTimers = [5, 10, 30, 60, 300, 3600, 86400, 604800];
-            const burnSeconds = (typeof pBurnAfterRead === 'number' && validBurnTimers.includes(pBurnAfterRead)) ? burnAfterRead : null;
+            const burnSeconds = (typeof pBurnAfterRead === 'number' && validBurnTimers.includes(pBurnAfterRead))
+              ? pBurnAfterRead
+              : null;
 
             const message = await prisma.privateMessage.create({
               data: {
@@ -1338,88 +1363,30 @@ async function handleMessage(client: SignalClient, raw: string) {
 
             // 推送给对方
             const peerId = chat.participantA === client.userId ? chat.participantB : chat.participantA;
-            sendTo(peerId, {
+            const delivered = trySendTo(peerId, {
               type: 'private_message' as any,
               payload: msgPayload,
             });
 
-            console.log(`[PrivateChat] 消息已发送: from=${client.userId} to=${peerId} chatId=${pChatId}`);
+            const { incrUnreadCount, invalidateConversationList } = await import('./redis.js');
+            await incrUnreadCount(peerId, pChatId, 1);
+            await invalidateConversationList(client.userId);
+            await invalidateConversationList(peerId);
 
-            // 如果对方离线，发送推送通知（个推优先，FCM 备选）
-            const peerOnline = await isUserOnline(peerId);
-            if (!peerOnline) {
-              const senderUser = await prisma.user.findUnique({
-                where: { id: client.userId },
-                select: { nickname: true, username: true, avatar: true },
-              });
-              const senderName = senderUser?.nickname || senderUser?.username || '有人';
-              // 获取发送者头像的完整 URL（用于推送通知显示）
-              const senderAvatarPath = avatarToProxy(senderUser?.avatar);
-              const senderAvatarUrl = senderAvatarPath ? publicUrl(senderAvatarPath) : '';
-              const previewText = '🔒 [加密消息]';
-              // 查询接收方的推送 Token 类型
-              const peerUser = await prisma.user.findUnique({
-                where: { id: peerId },
-                select: { fcmToken: true },
-              });
-              // 优先使用自建 APNs，其次个推，最后 FCM
-              const { parseAPNsToken: parseAPNs } = await import('./apns.js');
-              if (parseAPNs(peerUser?.fcmToken)) {
-                const { sendAPNsPush } = await import('./apns.js');
-                await sendAPNsPush({
-                  toUserId: peerId,
-                  title: senderName,
-                  body: previewText,
-                  senderAvatar: senderAvatarUrl,
-                  customData: { chatId: pChatId, senderId: client.userId, sender_name: senderName },
-                }).catch((e: any) => console.error('[APNs] 推送异常:', e));
-              } else {
-                const { parseJPushToken, sendJPushPush } = await import('./jpush.js');
-                if (parseJPushToken(peerUser?.fcmToken)) {
-                  await sendJPushPush({
-                    toUserId: peerId,
-                    title: senderName,
-                    body: previewText,
-                    extras: {
-                      chatId: pChatId,
-                      senderId: client.userId,
-                    },
-                  }).catch((e: any) => console.error('[JPush] 推送异常:', e));
-                } else {
-                const { parseGetuiToken: parseGT } = await import('./getui.js');
-                if (parseGT(peerUser?.fcmToken)) {
-                  // 使用个推推送（国内高到达率）
-                  const { sendGetuiPush } = await import('./getui.js');
-                  await sendGetuiPush({
-                    toUserId: peerId,
-                    title: senderName,
-                    body: previewText,
-                    senderAvatar: senderAvatarUrl,
-                    payload: JSON.stringify({ chatId: pChatId, senderId: client.userId, senderAvatar: senderAvatarUrl }),
-                  }).catch((e: any) => console.error('[个推] 推送异常:', e));
-                } else {
-                  // 使用 FCM 推送（海外/GMS 设备）
-                  const { sendFCMPush } = await import('./fcm.js');
-                  await sendFCMPush({
-                    toUserId: peerId,
-                    title: senderName,
-                    body: previewText,
-                    data: { chatId: pChatId, senderId: client.userId, sender_avatar: senderAvatarUrl },
-                  }).catch((e: any) => console.error('[FCM] 推送异常:', e));
-                }
-                }
-              }
+            console.log(`[PrivateChat] 消息已发送: from=${client.userId} to=${peerId} chatId=${pChatId} wsDelivered=${delivered}`);
 
-              // 浏览器设备使用 Web Push 唤醒；payload 固定为 encrypted_message，绝不带正文。
-              await sendWebPush({
+            if (!delivered) {
+              await notifyPrivateMessagePush({
                 toUserId: peerId,
+                senderId: client.userId,
                 chatId: pChatId,
                 messageId: message.id,
-                senderId: client.userId,
-              }).catch((e: any) => console.error('[WebPush] 推送异常:', e));
+                previewText: '🔒 [加密消息]',
+              });
             }
           } catch (err) {
             console.error('[PrivateChat] 发送失败:', err);
+            failAck('发送失败，请重试');
           }
         })();
       }
@@ -1533,13 +1500,12 @@ async function handleMessage(client: SignalClient, raw: string) {
           where: { id: recallGroupMsgId },
           data: { isRevoked: true },
         }).catch(err => console.error('[GroupRecall] DB更新失败:', err));
-        // 广播撤回通知给群内在线成员
-        const recallNotify: SignalMessage = {
+        // 广播撤回通知给群内在线成员（走 groupOnlineMembers，而非 WebRTC rooms）
+        fanoutGroupSignal(recallGroupId, {
           type: 'group_recall_notify',
           from: client.userId,
           payload: { groupId: recallGroupId, messageId: recallGroupMsgId, seq: recallSeq },
-        };
-        broadcastToRoom(recallGroupId, recallNotify);
+        }, client.userId);
         console.log(`[GroupRecall] 群聊撤回: from=${client.userId} group=${recallGroupId} msgId=${recallGroupMsgId}`);
       }
       break;
@@ -1577,6 +1543,7 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
   app.locals.sendTo = sendTo;
+  app.locals.trySendTo = trySendTo;
 
   // 信任上游代理（仅信任 Docker 内网和本地回环）
   app.set('trust proxy', ['loopback', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']);

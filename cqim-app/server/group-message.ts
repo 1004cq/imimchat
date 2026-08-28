@@ -258,6 +258,59 @@ export function getGroupOnlineMembers(groupId: string): Set<string> | undefined 
   return groupOnlineMembers.get(groupId);
 }
 
+/**
+ * 向群在线成员广播信令（撤回、系统事件等），走 groupOnlineMembers 通道。
+ */
+export function fanoutGroupSignal(
+  groupId: string,
+  signal: Record<string, unknown>,
+  excludeUserId?: string,
+): void {
+  const onlineMembers = groupOnlineMembers.get(groupId);
+  if (!onlineMembers?.size) return;
+  const payload = JSON.stringify(signal);
+  for (const userId of onlineMembers) {
+    if (userId === excludeUserId) continue;
+    const ws = onlineConnections.get(userId);
+    if (!ws || ws.readyState !== WebSocket.OPEN) continue;
+    if (ws.bufferedAmount > WS_BACKPRESSURE_THRESHOLD) continue;
+    try {
+      ws.send(payload);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+async function notifyOfflineGroupMembers(groupId: string, msg: PushMessage, senderId: string): Promise<void> {
+  try {
+    const members = await prisma.groupMember.findMany({
+      where: { groupId },
+      select: { userId: true },
+      take: 2000,
+    });
+    const { notifyGroupMessagePush } = await import('./push-notify.js');
+    const senderName = msg.senderName || senderId;
+    const targets = members
+      .map(m => m.userId)
+      .filter(uid => uid !== senderId && !onlineConnections.has(uid));
+
+    await Promise.all(
+      targets.slice(0, 100).map(userId =>
+        notifyGroupMessagePush({
+          toUserId: userId,
+          groupId,
+          senderId,
+          senderName,
+          previewText: '🔒 [群消息]',
+        }).catch(() => {}),
+      ),
+    );
+  } catch (err) {
+    console.error('[GroupMsg] 离线群推送失败:', err);
+  }
+}
+
 // ============ 批量落库消息队列 ============
 
 interface QueueItem {
@@ -597,6 +650,7 @@ export async function sendGroupMessage(payload: GroupMessagePayload): Promise<{
   // 异步扇出推送（不等待完成）
   pushPromise.then(async (pushMsg) => {
     await fanoutToGroup(payload.groupId, pushMsg, payload.senderId);
+    void notifyOfflineGroupMembers(payload.groupId, pushMsg, payload.senderId);
   }).catch(err => {
     console.error(`[GroupMsg] 异步落库/推送失败: groupId=${payload.groupId} seq=${seq}`, err);
   });
