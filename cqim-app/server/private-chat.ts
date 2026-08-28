@@ -15,10 +15,13 @@ import {
   getUnreadCount,
   incrUnreadCount,
   clearUnreadCount,
+  isUserOnline,
+  redis,
 } from './redis.js';
 import { userAuth } from './auth.js';
 import { avatarToProxy } from './cos-signer.js';
 import { notifyPrivateMessagePush } from './push-notify.js';
+import { publishImPush } from './publish-im.js';
 
 const router = Router();
 const __filename = fileURLToPath(import.meta.url);
@@ -149,13 +152,21 @@ async function createPrivateMessageAndNotify(
   const delivered = trySendTo ? trySendTo(peerId, wsPayload) : Boolean(sendTo && (sendTo(peerId, wsPayload), true));
 
   if (!delivered) {
-    void notifyPrivateMessagePush({
-      toUserId: peerId,
-      senderId: currentUser.id,
-      chatId,
-      messageId: message.id,
-      previewText: messagePreview(msgType, content),
-    });
+    await publishImPush(peerId, wsPayload);
+  }
+
+  if (!delivered) {
+    const peerOnlineElsewhere = await isUserOnline(peerId).catch(() => false)
+      || Boolean(await redis.get(`user:online:${peerId}`).catch(() => null));
+    if (!peerOnlineElsewhere) {
+      void notifyPrivateMessagePush({
+        toUserId: peerId,
+        senderId: currentUser.id,
+        chatId,
+        messageId: message.id,
+        previewText: messagePreview(msgType, content),
+      });
+    }
   }
 
   return res.json({ message: result });
@@ -638,13 +649,21 @@ router.post('/:chatId/messages', async (req: Request, res: Response) => {
     const delivered = trySendTo ? trySendTo(peerId, wsPayload) : Boolean(sendTo && (sendTo(peerId, wsPayload), true));
 
     if (!delivered) {
-      void notifyPrivateMessagePush({
-        toUserId: peerId,
-        senderId: currentUser.id,
-        chatId,
-        messageId: message.id,
-        previewText: '🔒 [加密消息]',
-      });
+      await publishImPush(peerId, wsPayload);
+    }
+
+    if (!delivered) {
+      const peerOnlineElsewhere = await isUserOnline(peerId).catch(() => false)
+        || Boolean(await redis.get(`user:online:${peerId}`).catch(() => null));
+      if (!peerOnlineElsewhere) {
+        void notifyPrivateMessagePush({
+          toUserId: peerId,
+          senderId: currentUser.id,
+          chatId,
+          messageId: message.id,
+          previewText: '🔒 [加密消息]',
+        });
+      }
     }
 
     res.json({ message: result });

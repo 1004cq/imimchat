@@ -1,0 +1,44 @@
+# wed.imim.chat 节点1 生产覆盖：宿主机 Nginx 终结 TLS，应用使用 SQLite 共享数据
+services:
+  nginx:
+    profiles: ["container-edge"]
+
+  mongo:
+    container_name: cqim-release-mongo
+
+  redis:
+    container_name: cqim-release-redis
+    ports:
+      - "0.0.0.0:6380:6379"
+
+  mysql:
+    container_name: cqim-release-mysql
+
+  cqim:
+    container_name: cqim-release-api
+    ports:
+      - "127.0.0.1:3011:3000"
+    environment:
+      DATABASE_URL: file:/app/data/cqim.db
+      REDIS_URL: redis://redis:6379
+      MYSQL_URL: mysql://${MYSQL_USER:-cqim}:${MYSQL_PASSWORD:-cqim}@mysql:3306/${MYSQL_DATABASE:-cqim_audit}
+      MYSQL_AUDIT_ENABLED: ${MYSQL_AUDIT_ENABLED:-false}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://wed.imim.chat}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://wed.imim.chat,http://wed.imim.chat}
+      GATEWAY_ID: ${GATEWAY_ID:-gw-app-1}
+    volumes:
+      - /home/ubuntu/cqim_shared/data:/app/data
+
+  go-gateway:
+    container_name: cqim-release-gateway
+    ports:
+      - "127.0.0.1:8082:8081"
+    environment:
+      GATEWAY_ID: ${GATEWAY_ID:-gw-app-1}
+      DB_PATH: /app/data/cqim.db
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DB: ${REDIS_DB:-0}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://wed.imim.chat,http://wed.imim.chat}
+    volumes:
+      - /home/ubuntu/cqim_shared/data:/app/data

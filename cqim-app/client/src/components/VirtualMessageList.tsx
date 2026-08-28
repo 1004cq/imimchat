@@ -12,6 +12,7 @@ import React, {
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -94,7 +95,7 @@ const DefaultMessageBubble = memo(({ msg, isOwn }: { msg: VirtualMessageItem; is
     <div className={`flex ${isOwn ? 'justify-end' : 'justify-start'} px-3 py-0.5 message-item`}>
       {!isOwn && (
         <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-dove-green/20 to-dove-bamboo/20 flex items-center justify-center text-xs font-medium text-dove-green mr-2 mt-0.5 flex-shrink-0">
-          {(msg.senderName || msg.senderId).charAt(0).toUpperCase()}
+          {((msg.senderName || msg.senderId) || '?').charAt(0).toUpperCase()}
         </div>
       )}
       <div className={`max-w-[70%] ${isOwn ? 'items-end' : 'items-start'} flex flex-col`}>
@@ -161,14 +162,18 @@ export const VirtualMessageList = memo(forwardRef<VirtualMessageListHandle, Virt
   const prependScrollRef = useRef<{ height: number; top: number } | null>(null);
   const isLoadingMoreRef = useRef(false);
   const isAtBottomRef = useRef(true);
-  const prevLengthRef = useRef(messages.length);
+  const prevLengthRef = useRef(safeMessages.length);
   const rafRef = useRef<number | null>(null);
   const saveAnchorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingAnchorRef = useRef<string | null | undefined>(undefined);
   const restoreAttemptsRef = useRef(0);
   const activeChatIdRef = useRef<string | null>(chatId || null);
   const messagesRef = useRef(messages);
-  messagesRef.current = messages;
+  const safeMessages = useMemo(
+    () => (Array.isArray(messages) ? messages : []).filter(msg => !!msg && !!msg.senderId && !!(msg.id || msg.seq)),
+    [messages],
+  );
+  messagesRef.current = safeMessages;
 
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
@@ -184,27 +189,27 @@ export const VirtualMessageList = memo(forwardRef<VirtualMessageListHandle, Virt
     const endLimit = scrollTop + viewportHeight + OVERSCAN_PX;
     let offset = 0;
     let start = 0;
-    let end = messages.length;
-    for (let i = 0; i < messages.length; i += 1) {
-      const next = offset + getHeight(messages[i], i);
+    let end = safeMessages.length;
+    for (let i = 0; i < safeMessages.length; i += 1) {
+      const next = offset + getHeight(safeMessages[i], i);
       if (next >= startLimit) { start = i; break; }
       offset = next;
     }
     offset = 0;
-    for (let i = 0; i < messages.length; i += 1) {
-      offset += getHeight(messages[i], i);
+    for (let i = 0; i < safeMessages.length; i += 1) {
+      offset += getHeight(safeMessages[i], i);
       if (offset >= endLimit) { end = i + 1; break; }
     }
     return { start, end };
-  }, [getHeight, messages, scrollTop, viewportHeight]);
+  }, [getHeight, safeMessages, scrollTop, viewportHeight]);
 
   const getOffsetBefore = useCallback((index: number) => {
     let offset = 0;
-    for (let i = 0; i < index; i += 1) offset += getHeight(messages[i], i);
+    for (let i = 0; i < index; i += 1) offset += getHeight(safeMessages[i], i);
     return offset;
-  }, [getHeight, messages]);
+  }, [getHeight, safeMessages]);
 
-  const totalHeight = messages.reduce((sum, msg, index) => sum + getHeight(msg, index), 0);
+  const totalHeight = safeMessages.reduce((sum, msg, index) => sum + getHeight(msg, index), 0);
   const { start, end } = getRange();
 
   const getVisibleAnchorMessageId = useCallback((): string | null => {
@@ -294,7 +299,7 @@ export const VirtualMessageList = memo(forwardRef<VirtualMessageListHandle, Virt
 
   // 消息就绪后恢复锚点；无锚点或消息不在列表则滚到底
   useLayoutEffect(() => {
-    if (!chatId || messages.length === 0) return;
+    if (!chatId || safeMessages.length === 0) return;
     if (pendingAnchorRef.current === undefined) return;
 
     const container = scrollContainerRef.current;
@@ -323,7 +328,7 @@ export const VirtualMessageList = memo(forwardRef<VirtualMessageListHandle, Virt
     if (restoreAttemptsRef.current >= 4 || layoutVersion >= 3) {
       pendingAnchorRef.current = undefined;
     }
-  }, [chatId, messages.length, layoutVersion, scrollToMessageId]);
+  }, [chatId, safeMessages.length, layoutVersion, scrollToMessageId]);
 
   const handleScroll = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -379,10 +384,10 @@ export const VirtualMessageList = memo(forwardRef<VirtualMessageListHandle, Virt
     if (delta > 0) container.scrollTop = pending.top + delta;
     prependScrollRef.current = null;
     setScrollTop(container.scrollTop);
-  }, [messages.length, layoutVersion]);
+  }, [safeMessages.length, layoutVersion]);
 
   useEffect(() => {
-    const added = messages.length - prevLengthRef.current;
+    const added = safeMessages.length - prevLengthRef.current;
     if (added > 0 && pendingAnchorRef.current === undefined) {
       if (isAtBottomRef.current) {
         requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ behavior: added <= 3 ? 'smooth' : 'auto' }));
@@ -391,8 +396,8 @@ export const VirtualMessageList = memo(forwardRef<VirtualMessageListHandle, Virt
         setShowNewMsgTip(true);
       }
     }
-    prevLengthRef.current = messages.length;
-  }, [messages.length]);
+    prevLengthRef.current = safeMessages.length;
+  }, [safeMessages.length]);
 
   useEffect(() => () => {
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
@@ -428,13 +433,13 @@ export const VirtualMessageList = memo(forwardRef<VirtualMessageListHandle, Virt
         style={{ WebkitOverflowScrolling: 'touch' }}
       >
         {loading && hasMore && <div className="flex justify-center py-3"><span className="w-4 h-4 border-2 border-dove-green/30 border-t-dove-green rounded-full animate-spin" /></div>}
-        {loading && messages.length === 0 && <MessageSkeleton />}
-        {!hasMore && messages.length > 0 && <div className="flex justify-center py-3"><span className="text-[10px] text-dove-ink/25">—— 已无更多消息 ——</span></div>}
+        {loading && safeMessages.length === 0 && <MessageSkeleton />}
+        {!hasMore && safeMessages.length > 0 && <div className="flex justify-center py-3"><span className="text-[10px] text-dove-ink/25">—— 已无更多消息 ——</span></div>}
         <div style={{ height: totalHeight, position: 'relative' }}>
-          {messages.slice(start, end).map((msg, visibleIndex) => {
+          {safeMessages.slice(start, end).map((msg, visibleIndex) => {
             const index = start + visibleIndex;
             const key = getKey(msg, index);
-            const previous = index > 0 ? messages[index - 1] : undefined;
+            const previous = index > 0 ? safeMessages[index - 1] : undefined;
             const isOwn = msg.senderId === currentUserId;
             return (
               <div

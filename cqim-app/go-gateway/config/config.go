@@ -3,13 +3,16 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 )
 
 // Config 全局配置
 type Config struct {
 	// Gateway 配置
+	GatewayID   string
 	GatewayPort int
 	GatewayHost string
+	CorsOrigins []string
 
 	// Redis 配置
 	RedisAddr     string
@@ -34,9 +37,21 @@ type Config struct {
 
 // Load 从环境变量加载配置
 func Load() *Config {
+	gatewayID := getEnv("GATEWAY_ID", "")
+	if gatewayID == "" {
+		hostname, err := os.Hostname()
+		if err != nil || hostname == "" {
+			gatewayID = "gateway-unknown"
+		} else {
+			gatewayID = hostname
+		}
+	}
+
 	return &Config{
+		GatewayID:            gatewayID,
 		GatewayPort:          getEnvInt("GATEWAY_PORT", 8081),
 		GatewayHost:          getEnv("GATEWAY_HOST", "0.0.0.0"),
+		CorsOrigins:          parseCSV(getEnv("CORS_ORIGINS", "")),
 		RedisAddr:            getEnv("REDIS_ADDR", "127.0.0.1:6379"),
 		RedisPassword:        getEnv("REDIS_PASSWORD", ""),
 		RedisDB:              getEnvInt("REDIS_DB", 0),
@@ -68,4 +83,19 @@ func getEnvInt(key string, defaultVal int) int {
 		}
 	}
 	return defaultVal
+}
+
+func parseCSV(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

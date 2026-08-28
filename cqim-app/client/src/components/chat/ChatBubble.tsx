@@ -107,7 +107,7 @@ function getTimeGroupLabel(timestamp: number): string {
 }
 
 // 判断是否需要显示时间分组
-function shouldShowTimeGroup(current: Message, previous?: Message): boolean {
+export function shouldShowTimeGroup(current: Message, previous?: Message): boolean {
   if (!previous) return true;
   return current.timestamp - previous.timestamp > 300000; // 5分钟
 }
@@ -1124,9 +1124,9 @@ const ChatBubble: React.FC<{
           )}
 
           {/* Reactions */}
-          {Object.keys(message.reactions).length > 0 && (
+          {Object.keys(message.reactions ?? {}).length > 0 && (
             <div className={`flex gap-1 mt-0.5 ${isSelf ? 'justify-end' : 'justify-start'}`}>
-              {Object.entries(message.reactions).map(([emoji, count]) => (
+              {Object.entries(message.reactions ?? {}).map(([emoji, count]) => (
                 <span key={emoji} className="bg-dove-warm-gray rounded-full px-1.5 py-0.5 text-[11px]">
                   {emoji} {count}
                 </span>
