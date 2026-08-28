@@ -918,10 +918,18 @@ export default function ChatDetailPage() {
         return;
       } catch (err: any) {
         console.error('[E2EE] 发送失败:', err);
+        const msg = String(err?.message || err || '');
+        const userMsg = msg.includes('对方安全凭证') || msg.includes('peer_bundle_outdated') || msg.includes('428')
+          ? '对方需要重新登录一次才能恢复加密聊天（戈涛账号凭证过旧）'
+          : msg.includes('missing_signing_public_key') || msg.includes('客户端版本过旧')
+            ? '请清除浏览器缓存后重新打开 wed.imim.chat 并登录'
+            : msg.includes('无法获取用户') && msg.includes('Bundle')
+              ? '无法获取对方加密凭证，请让对方重新登录后再试'
+              : `无法建立加密连接: ${msg.replace(/^安全凭证验证失败:\s*/, '')}`;
         trackE2EEFailure(err?.message?.includes('Bundle') || err?.message?.includes('安全凭证') ? 'bundle' : 'encrypt', { chatId, msgType: 'encrypted', error: err, direction: 'outbound' });
         trackEvent('message_send_failed', { chatId, msgType: 'encrypted', error: err, direction: 'outbound' });
-        toast.error(`无法建立加密连接: ${err.message}`);
-        addLog(`❌ E2EE 错误: ${err.message}`);
+        toast.error(userMsg);
+        addLog(`❌ E2EE 错误: ${msg}`);
         return;
       }
     }

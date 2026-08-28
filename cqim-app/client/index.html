@@ -22,6 +22,38 @@
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <link href="https://cdn.bootcdn.net/ajax/libs/lxgw-wenkai-webfont/1.7.0/lxgwwenkai-regular.css" rel="stylesheet" />
     <link rel="manifest" href="/manifest.json" />
+    <!-- 移动端 PWA/Safari 强缓存兜底：版本变更时清缓存并刷新一次 -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <script>
+      (function () {
+        var BUILD = '20260828-e2ee-v3';
+        var KEY = 'cqim_app_build';
+        var RELOAD_KEY = 'cqim_build_reload';
+        try {
+          if (localStorage.getItem(KEY) !== BUILD) {
+            localStorage.setItem(KEY, BUILD);
+            if ('caches' in window) {
+              caches.keys().then(function (names) {
+                names.forEach(function (n) { caches.delete(n); });
+              });
+            }
+            if ('serviceWorker' in navigator) {
+              navigator.serviceWorker.getRegistrations().then(function (regs) {
+                regs.forEach(function (r) { r.unregister(); });
+              });
+            }
+            if (sessionStorage.getItem(RELOAD_KEY) !== BUILD) {
+              sessionStorage.setItem(RELOAD_KEY, BUILD);
+              location.reload();
+            }
+          } else {
+            sessionStorage.removeItem(RELOAD_KEY);
+          }
+        } catch (e) { /* ignore quota / private mode */ }
+      })();
+    </script>
   </head>
 
   <body>
