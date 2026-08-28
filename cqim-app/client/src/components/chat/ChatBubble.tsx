@@ -107,7 +107,7 @@ function getTimeGroupLabel(timestamp: number): string {
 }
 
 // 判断是否需要显示时间分组
-function shouldShowTimeGroup(current: Message, previous?: Message): boolean {
+export function shouldShowTimeGroup(current: Message, previous?: Message): boolean {
   if (!previous) return true;
   return current.timestamp - previous.timestamp > 300000; // 5分钟
 }

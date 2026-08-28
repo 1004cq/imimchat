@@ -42,7 +42,9 @@ import VirtualMessageList, { type VirtualMessageItem, type VirtualMessageListHan
 import ChatHeader from '@/components/chat/ChatHeader';
 import MessageListContainer from '@/components/chat/MessageListContainer';
 import Composer from '@/components/chat/Composer';
-import { ChatSkeleton, MemoizedChatBubble } from '@/components/chat/ChatBubble';
+import { ChatSkeleton, MemoizedChatBubble, shouldShowTimeGroup } from '@/components/chat/ChatBubble';
+import MessageListErrorBoundary from '@/components/chat/MessageListErrorBoundary';
+import { sanitizeMessages } from '@/lib/messageListUtils';
 import LottieSticker from '@/components/LottieSticker';
 import { GroupSettingsModal } from '@/components/GroupSettingsModal';
 import { GroupInfoSheet } from '@/components/GroupInfoSheet';
@@ -125,6 +127,7 @@ export default function ChatDetailPage() {
     muteChat, clearMessages, pinChat, showProfile, updateMessageStatus,
   } = useAppActions();
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [chatMissing, setChatMissing] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [inputText, setInputText] = useState('');
   const [showExtra, setShowExtra] = useState(false);
@@ -204,7 +207,10 @@ export default function ChatDetailPage() {
   // 将 GroupMessage 转换为 Message 格式
   const groupMessagesAsMessages = useMemo((): Message[] => {
     if (!isGroupChat || !chatId) return [];
-    return groupSync.messages.map((gm: GroupMessage): Message => ({
+    const raw = Array.isArray(groupSync.messages) ? groupSync.messages : [];
+    return raw
+      .filter((gm): gm is GroupMessage => !!gm?.id)
+      .map((gm: GroupMessage): Message => ({
       id: gm.id,
       chatId,
       senderId: gm.senderId,
@@ -227,9 +233,12 @@ export default function ChatDetailPage() {
   }, [isGroupChat, chatId, groupSync.messages]);
 
   // 统一消息列表：群聊用 groupSync，私聊用 AppContext
-  const messages = isGroupChat
-    ? groupMessagesAsMessages
-    : (chatId ? (state.messages[chatId] || []) : []);
+  const messages = useMemo(() => {
+    const raw = isGroupChat
+      ? groupMessagesAsMessages
+      : (chatId ? (state.messages[chatId] || []) : []);
+    return sanitizeMessages(raw);
+  }, [isGroupChat, groupMessagesAsMessages, chatId, state.messages]);
 
   // E2EE Hook
   const e2ee = useE2EE();
@@ -297,8 +306,8 @@ export default function ChatDetailPage() {
 
     const mergeMessages = (base: Message[], incoming: Message[]) => {
       const byId = new Map<string, Message>();
-      for (const message of base) byId.set(message.id, message);
-      for (const message of incoming) {
+      for (const message of sanitizeMessages(base)) byId.set(message.id, message);
+      for (const message of sanitizeMessages(incoming)) {
         const existing = byId.get(message.id);
         // 服务端只返回密文；本地已有已解密展示稿时不能被 ciphertext 占位覆盖。
         if (existing && existing.decryptionStatus === 'decrypted' && message.decryptionStatus === 'ciphertext') continue;
@@ -319,14 +328,23 @@ export default function ChatDetailPage() {
         const response = await fetch(`/api/chat/${chatId}/messages?limit=50`, {
           headers: { 'Authorization': `Bearer ${token}` },
         });
+        if (response.status === 404) {
+          if (!cancelled) {
+            setChatMissing(true);
+            toast.error('会话不存在或已被删除');
+          }
+          return;
+        }
         if (!response.ok) throw new Error(`history_${response.status}`);
         const data = await response.json();
         if (!data?.messages || cancelled) return;
 
+        const serverMessages = Array.isArray(data.messages) ? data.messages : [];
         // Double Ratchet 必须按同一对端的时间顺序串行推进，不能对整批消息 Promise.all。
         const decryptResults = new Map<string, { plaintext?: string; error?: string; success: boolean }>();
         const bySender = new Map<string, Array<{ id: string; envelope: any }>>();
-        for (const m of data.messages as any[]) {
+        for (const m of serverMessages) {
+          if (!m?.id) continue;
           // 自己发出的密文优先使用本地解密副本；换机后没有副本时不伪造明文。
           if (m.msgType !== 'encrypted' || !m.content || m.isRevoked || m.senderId === currentUserId) continue;
           try {
@@ -355,7 +373,9 @@ export default function ChatDetailPage() {
           for (const result of results) decryptResults.set(result.id, result);
         }
 
-        const msgs: Message[] = (data.messages as any[]).map((m: any) => {
+        const msgs: Message[] = serverMessages
+          .filter((m: any) => !!m?.id)
+          .map((m: any) => {
           let decryptedContent = m.isRevoked ? '消息已撤回' : (m.content || '');
           let finalMsgType = m.msgType || 'text';
           let finalExtra = typeof m.extra === 'string' ? (() => { try { return JSON.parse(m.extra); } catch { return {}; } })() : (m.extra || {});
@@ -428,6 +448,10 @@ export default function ChatDetailPage() {
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId, currentUserId]);
+
+  useEffect(() => {
+    setChatMissing(false);
+  }, [chatId]);
 
   // 检查会话状态
   useEffect(() => {
@@ -1493,8 +1517,9 @@ export default function ChatDetailPage() {
 
   const renderVirtualMessage = useCallback((virtualMsg: VirtualMessageItem, _isOwn: boolean, index: number, previousVirtual?: VirtualMessageItem) => {
     const msg = virtualMsg as unknown as Message;
+    if (!msg?.id || !msg.senderId) return null;
     const previous = previousVirtual as unknown as Message | undefined;
-    const showAvatar = !previous || previous.senderId !== msg.senderId || (msg.timestamp - previous.timestamp > 300000);
+    const showAvatar = !previous || previous.senderId !== msg.senderId || ((msg.timestamp ?? 0) - (previous.timestamp ?? 0) > 300000);
     const showTimeGroup = shouldShowTimeGroup(msg, previous);
     const senderProfile = (() => {
       if (msg.senderId === currentUserId || msg.senderId === 'me') {
@@ -1552,9 +1577,37 @@ export default function ChatDetailPage() {
     }
   };
 
-  if (!chat) return null;
+  const handleBackToChats = useCallback(() => {
+    messageListRef.current?.persistAnchor();
+    closeChat();
+  }, [closeChat]);
 
-  const ephemeralTimer = chat.ephemeralTimer;
+  if (chatMissing) {
+    return (
+      <div className="tg-chat-shell flex flex-col h-full items-center justify-center px-6 text-center gap-4">
+        <p className="text-base font-medium text-foreground">会话不存在或已被删除</p>
+        <p className="text-sm text-muted-foreground">请返回会话列表后重新选择聊天。</p>
+        <button
+          type="button"
+          onClick={handleBackToChats}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm"
+        >
+          <ArrowLeft size={16} />
+          返回会话列表
+        </button>
+      </div>
+    );
+  }
+
+  if (!chat) {
+    return (
+      <div className="tg-chat-shell flex flex-col h-full">
+        <ChatSkeleton />
+      </div>
+    );
+  }
+
+  const ephemeralTimer = chat?.ephemeralTimer;
   const effectiveBurnTimer = ephemeralTimer ?? burnTimer;
 
   return (
@@ -1633,19 +1686,21 @@ export default function ChatDetailPage() {
         </motion.div>
       )}
 
-      <MessageListContainer
-        listRef={messageListRef}
-        chatId={chatId}
-        messages={messages as unknown as VirtualMessageItem[]}
-        currentUserId={currentUserId}
-        loading={loadingMessages}
-        hasMore={hasMoreMessages}
-        renderMessage={renderVirtualMessage}
-        typing={typingIndicator}
-        typingName={otherUser?.name}
-        typingUserId={otherMember || 'typing-user'}
-        typingAvatar={otherMember === 'BOT' || chat?.members?.includes('BOT') ? '/imim-ai-avatar.jpg?v=2' : otherUser?.avatar}
-      />
+      <MessageListErrorBoundary>
+        <MessageListContainer
+          listRef={messageListRef}
+          chatId={chatId}
+          messages={messages as unknown as VirtualMessageItem[]}
+          currentUserId={currentUserId}
+          loading={loadingMessages}
+          hasMore={hasMoreMessages}
+          renderMessage={renderVirtualMessage}
+          typing={typingIndicator}
+          typingName={otherUser?.name}
+          typingUserId={otherMember || 'typing-user'}
+          typingAvatar={otherMember === 'BOT' || chat?.members?.includes('BOT') ? '/imim-ai-avatar.jpg?v=2' : otherUser?.avatar}
+        />
+      </MessageListErrorBoundary>
 
       <Composer
         inputText={inputText}
