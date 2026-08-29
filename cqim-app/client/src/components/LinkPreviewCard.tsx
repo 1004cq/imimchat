@@ -179,8 +179,9 @@ export function isPureUrl(text: string): boolean {
  * 将文本中的 URL 渲染为可点击链接
  */
 export function renderTextWithLinks(text: string, isSelf: boolean): React.ReactNode {
+  const safeText = typeof text === 'string' ? text : String(text ?? '');
   const urlRegex = /(https?:\/\/[^\s<>"{}|\\^`[\]]+)/gi;
-  const parts = text.split(urlRegex);
+  const parts = safeText.split(urlRegex);
 
   return parts.map((part, i) => {
     if (urlRegex.test(part)) {

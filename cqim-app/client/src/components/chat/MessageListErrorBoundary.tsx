@@ -7,13 +7,14 @@ interface Props {
 
 interface State {
   hasError: boolean;
+  retryKey: number;
 }
 
 /** 仅包裹消息列表：单条坏消息或渲染异常不炸整页 */
 export default class MessageListErrorBoundary extends Component<Props, State> {
-  state: State = { hasError: false };
+  state: State = { hasError: false, retryKey: 0 };
 
-  static getDerivedStateFromError(): State {
+  static getDerivedStateFromError(): Partial<State> {
     return { hasError: true };
   }
 
@@ -32,7 +33,7 @@ export default class MessageListErrorBoundary extends Component<Props, State> {
             <button
               type="button"
               className="mt-2 text-xs text-primary underline"
-              onClick={() => this.setState({ hasError: false })}
+              onClick={() => this.setState((s) => ({ hasError: false, retryKey: s.retryKey + 1 }))}
             >
               重试加载消息
             </button>
@@ -40,6 +41,6 @@ export default class MessageListErrorBoundary extends Component<Props, State> {
         </div>
       );
     }
-    return this.props.children;
+    return <div key={this.state.retryKey}>{this.props.children}</div>;
   }
 }

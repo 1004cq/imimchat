@@ -44,7 +44,9 @@ import MessageListContainer from '@/components/chat/MessageListContainer';
 import Composer from '@/components/chat/Composer';
 import { ChatSkeleton, MemoizedChatBubble, shouldShowTimeGroup } from '@/components/chat/ChatBubble';
 import MessageListErrorBoundary from '@/components/chat/MessageListErrorBoundary';
+import SingleMessageErrorBoundary from '@/components/chat/SingleMessageErrorBoundary';
 import { sanitizeMessages } from '@/lib/messageListUtils';
+import { mapServerPrivateRow } from '@/lib/privateMessageMapper';
 import { createClientMsgId, fetchPrivateGap, setLastPrivateSeq, trackPrivateSeqFromMessages } from '@/lib/privateSync';
 import LottieSticker from '@/components/LottieSticker';
 import { GroupSettingsModal } from '@/components/GroupSettingsModal';
@@ -313,6 +315,13 @@ export default function ChatDetailPage() {
         const existing = byId.get(message.id);
         // 服务端只返回密文；本地已有已解密展示稿时不能被 ciphertext 占位覆盖。
         if (existing && existing.decryptionStatus === 'decrypted' && message.decryptionStatus === 'ciphertext') continue;
+        if (
+          existing
+          && existing.senderId === currentUserId
+          && existing.content
+          && !existing.content.startsWith('🔒')
+          && (message.decryptionStatus === 'ciphertext' || String(message.content || '').startsWith('🔒'))
+        ) continue;
         byId.set(message.id, message);
       }
       return Array.from(byId.values()).sort((a, b) => a.timestamp - b.timestamp);
@@ -377,64 +386,7 @@ export default function ChatDetailPage() {
 
         const msgs: Message[] = serverMessages
           .filter((m: any) => !!m?.id)
-          .map((m: any) => {
-          let decryptedContent = m.isRevoked ? '消息已撤回' : (m.content || '');
-          let finalMsgType = m.msgType || 'text';
-          let finalExtra = typeof m.extra === 'string' ? (() => { try { return JSON.parse(m.extra); } catch { return {}; } })() : (m.extra || {});
-          let decryptionFailed = false;
-          let decryptionStatus: Message['decryptionStatus'] = 'decrypted';
-
-          if (m.msgType === 'encrypted' && m.content && !m.isRevoked) {
-            if (m.senderId === currentUserId) {
-              decryptedContent = '🔒 [本地加密消息]';
-              decryptionStatus = 'ciphertext';
-            } else {
-              const result = decryptResults.get(m.id);
-              try {
-                if (!result?.success || !result.plaintext) throw new Error(result?.error || 'decrypt_failed');
-                const decrypted = JSON.parse(result.plaintext);
-                decryptedContent = decrypted.content;
-                finalMsgType = decrypted.msgType || 'text';
-                finalExtra = { ...finalExtra, ...decrypted.extra };
-              } catch (err) {
-                console.error('[E2EE] 历史消息解密失败:', err);
-                trackE2EEFailure('decrypt', { chatId, msgType: m.msgType, error: err, direction: 'inbound' });
-                decryptedContent = '🔒 无法解密历史消息，请重新验证安全会话';
-                decryptionFailed = true;
-                decryptionStatus = 'failed';
-              }
-            }
-          } else if (m.msgType !== 'encrypted' && !m.isRevoked) {
-            decryptedContent = '⚠️ [不支持的旧明文消息]';
-            decryptionFailed = true;
-            decryptionStatus = 'legacy';
-          }
-
-          return {
-            id: m.id,
-            chatId: m.chatId,
-            cursor: m.id,
-            seq: typeof m.seq === 'number' ? m.seq : undefined,
-            senderId: m.senderId,
-            content: decryptedContent,
-            type: finalMsgType as any,
-            timestamp: m.createdAt || Date.now(),
-            isEncrypted: m.msgType === 'encrypted',
-            decryptionFailed,
-            decryptionStatus,
-            direction: m.senderId === currentUserId ? 'outbound' as const : 'inbound' as const,
-            reactions: {},
-            status: m.status || 'sent',
-            isRecalled: m.isRevoked || false,
-            replyTo: m.replyToId || undefined,
-            ...(finalExtra?.voiceUrl ? { voiceUrl: finalExtra.voiceUrl, duration: finalExtra.duration || 0 } : {}),
-            ...(finalExtra?.imageUrl ? { imageUrl: finalExtra.imageUrl } : {}),
-            ...(finalExtra?.videoUrl ? { videoUrl: finalExtra.videoUrl } : {}),
-            ...(finalExtra?.locationData ? { locationData: finalExtra.locationData } : {}),
-            ...(finalExtra?.stickerUrl ? { stickerUrl: finalExtra.stickerUrl, stickerEmoji: finalExtra.stickerEmoji, stickerSetName: finalExtra.stickerSetName } : {}),
-            ...(m.hmac ? { hmac: m.hmac, integrityStatus: 'unverified' as const } : {}),
-          };
-        });
+          .map((m: any) => mapServerPrivateRow(m, chatId, currentUserId, decryptResults));
 
         if (!cancelled) {
           setMessages(chatId, mergeMessages(cached, msgs));
@@ -473,24 +425,38 @@ export default function ChatDetailPage() {
         }
         if (!gap.ok || gap.messages.length === 0) return;
         const currentUserId = state.currentUser?.id || localStorage.getItem('user_id') || 'me';
-        const incoming = gap.messages
-          .filter((m: any) => m?.id)
-          .map((m: any) => ({
-            id: m.id,
-            chatId,
-            cursor: m.id,
-            seq: m.seq,
-            senderId: m.senderId,
-            content: m.isRevoked ? '消息已撤回' : (m.content || ''),
-            type: (m.msgType || 'text') as Message['type'],
-            timestamp: m.createdAt || Date.now(),
-            isEncrypted: m.msgType === 'encrypted',
-            reactions: {},
-            status: m.status || 'delivered',
-            isRecalled: m.isRevoked || false,
-            replyTo: m.replyToId || undefined,
-            direction: m.senderId === currentUserId ? 'outbound' as const : 'inbound' as const,
-          }));
+        const rows = gap.messages.filter((m: any) => m?.id);
+
+        const decryptResults = new Map<string, { id: string; plaintext?: string; error?: string; success: boolean }>();
+        const bySender = new Map<string, Array<{ id: string; envelope: any }>>();
+        for (const m of rows) {
+          if (m.msgType !== 'encrypted' || !m.content || m.isRevoked || m.senderId === currentUserId) continue;
+          try {
+            const list = bySender.get(m.senderId) || [];
+            list.push({ id: m.id, envelope: JSON.parse(m.content) });
+            bySender.set(m.senderId, list);
+          } catch {
+            decryptResults.set(m.id, { id: m.id, success: false, error: 'invalid_envelope' });
+          }
+        }
+        for (const [senderId, encryptedMessages] of bySender) {
+          const results = e2eeProxy.isReady
+            ? await e2eeProxy.signalBatchDecrypt(senderId, encryptedMessages)
+            : await (async () => {
+                const fallback: Array<{ id: string; plaintext?: string; error?: string; success: boolean }> = [];
+                for (const item of encryptedMessages) {
+                  try {
+                    fallback.push({ id: item.id, plaintext: await e2ee.decrypt(senderId, item.envelope), success: true });
+                  } catch (error) {
+                    fallback.push({ id: item.id, error: error instanceof Error ? error.message : String(error), success: false });
+                  }
+                }
+                return fallback;
+              })();
+          for (const result of results) decryptResults.set(result.id, result);
+        }
+
+        const incoming = rows.map((m: any) => mapServerPrivateRow(m, chatId, currentUserId, decryptResults));
         const merged = [...(state.messages[chatId] || []), ...incoming]
           .filter((msg, idx, arr) => arr.findIndex(x => x.id === msg.id) === idx)
           .sort((a, b) => (a.seq || a.timestamp) - (b.seq || b.timestamp));
@@ -868,6 +834,7 @@ export default function ChatDetailPage() {
           type: 'text',
           timestamp: msgTimestamp,
           isEncrypted: true,
+          reactions: {},
           status: 'sending',
           burnAfterRead: effectiveBurnTimer,
           forwardRestricted: forwardRestricted,
@@ -1621,37 +1588,39 @@ export default function ChatDetailPage() {
     })();
 
     return (
-      <MemoizedChatBubble
-        key={msg.id || `${msg.senderId}-${index}`}
-        message={msg}
-        showAvatar={showAvatar}
-        showTimeGroup={showTimeGroup}
-        senderProfile={senderProfile}
-        onReaction={(emoji) => chatId && addReaction(chatId, msg.id, emoji)}
-        onBurn={handleBurn}
-        onMarkRead={handleMarkRead}
-        onPlayVoice={handlePlayVoice}
-        onStopVoice={handleStopVoice}
-        voicePlaybackState={voice.playbackStates[msg.id]}
-        onJoinLocationShare={(shareId) => { setLocationShareId(shareId); setShowLocationShare(true); }}
-        onRecall={(msgId) => {
-          if (!chatId) return;
-          if (isGroupChat && chat?.groupId) {
-            const gm = groupSync.messages.find(groupMessage => groupMessage.id === msgId);
-            groupSync.recallMessage(msgId, gm?.seq || 0);
-            toast('消息已撤回');
-          } else {
-            recallMessage(chatId, msgId);
-            const ws = signalWs?.current;
-            if (ws && ws.readyState === WebSocket.OPEN && otherMember) {
-              ws.send(JSON.stringify({ type: 'recall', payload: { toUserId: otherMember, messageId: msgId } }));
+      <SingleMessageErrorBoundary messageId={msg.id || `${msg.senderId}-${index}`}>
+        <MemoizedChatBubble
+          key={msg.id || `${msg.senderId}-${index}`}
+          message={msg}
+          showAvatar={showAvatar}
+          showTimeGroup={showTimeGroup}
+          senderProfile={senderProfile}
+          onReaction={(emoji) => chatId && addReaction(chatId, msg.id, emoji)}
+          onBurn={handleBurn}
+          onMarkRead={handleMarkRead}
+          onPlayVoice={handlePlayVoice}
+          onStopVoice={handleStopVoice}
+          voicePlaybackState={voice.playbackStates[msg.id]}
+          onJoinLocationShare={(shareId) => { setLocationShareId(shareId); setShowLocationShare(true); }}
+          onRecall={(msgId) => {
+            if (!chatId) return;
+            if (isGroupChat && chat?.groupId) {
+              const gm = groupSync.messages.find(groupMessage => groupMessage.id === msgId);
+              groupSync.recallMessage(msgId, gm?.seq || 0);
+              toast('消息已撤回');
+            } else {
+              recallMessage(chatId, msgId);
+              const ws = signalWs?.current;
+              if (ws && ws.readyState === WebSocket.OPEN && otherMember) {
+                ws.send(JSON.stringify({ type: 'recall', payload: { toUserId: otherMember, messageId: msgId } }));
+              }
             }
-          }
-        }}
-        onVerifyIntegrity={handleVerifyIntegrity}
-        onReply={handleReplyToMessage}
-        onShowProfile={showProfile}
-      />
+          }}
+          onVerifyIntegrity={handleVerifyIntegrity}
+          onReply={handleReplyToMessage}
+          onShowProfile={showProfile}
+        />
+      </SingleMessageErrorBoundary>
     );
   }, [addReaction, chat, chatId, currentUserId, groupMembers, groupSync, handleBurn, handleMarkRead, handlePlayVoice, handleReplyToMessage, handleStopVoice, handleVerifyIntegrity, isGroupChat, otherMember, otherUser, recallMessage, showProfile, signalWs, state.currentUser, voice.playbackStates]);
 

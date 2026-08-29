@@ -546,7 +546,7 @@ const ChatBubble: React.FC<{
 
   // 官方账号消息：特殊蓝色卡片样式
   const isOfficialMsg = message.senderId === 'official';
-  const isLoginAlert = isOfficialMsg && message.content.includes('登录安全提醒');
+  const isLoginAlert = isOfficialMsg && typeof message.content === 'string' && message.content.includes('登录安全提醒');
 
   // AI 机器人消息：紫色渐变卡片样式（支持文字+语音同时显示）
   if (isBotMsg) {
@@ -852,8 +852,8 @@ const ChatBubble: React.FC<{
     );
   }
 
-  // 显示的消息内容（优先使用解密后的内容）
-  const displayContent = message.decryptedContent || message.content;
+  // 显示的消息内容（优先使用解密后的内容，强制 string 避免 React 子节点异常）
+  const displayContent = String(message.decryptedContent ?? message.content ?? '');
   const isRestricted = message.forwardRestricted;
   const useInlineMeta = message.type === 'text' || !message.type;
   const shouldPinEncryptionBadge = message.isEncrypted && useInlineMeta;

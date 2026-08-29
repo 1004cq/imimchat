@@ -5,6 +5,7 @@
  * - 重连后按 afterSeq 补洞（不假设 WS 必达）
  */
 import type { Message } from '@/lib/store';
+import { mapServerPrivateRow as mapPrivateRowFromServer } from '@/lib/privateMessageMapper';
 
 const SEQ_KEY_PREFIX = 'cqim:private-seq:';
 
@@ -72,28 +73,11 @@ export async function fetchPrivateGap(
   return { ok: true, messages };
 }
 
-/** 将服务端私聊消息转为客户端 Message 骨架（解密由调用方处理） */
+/** 将服务端私聊消息转为客户端 Message 骨架（无解密） */
 export function mapServerPrivateRow(
   m: Record<string, any>,
   chatId: string,
   currentUserId: string,
 ): Message {
-  return {
-    id: m.id,
-    chatId,
-    cursor: m.id,
-    seq: m.seq,
-    senderId: m.senderId,
-    content: m.isRevoked ? '消息已撤回' : (m.content || ''),
-    type: (m.msgType || 'text') as Message['type'],
-    timestamp: m.createdAt || Date.now(),
-    isEncrypted: m.msgType === 'encrypted',
-    reactions: {},
-    status: m.status || 'sent',
-    isRecalled: m.isRevoked || false,
-    replyTo: m.replyToId || undefined,
-    direction: m.senderId === currentUserId ? 'outbound' : 'inbound',
-    ...(m.burnAfterRead ? { burnAfterRead: m.burnAfterRead } : {}),
-    ...(m.hmac ? { hmac: m.hmac, integrityStatus: 'unverified' as const } : {}),
-  };
+  return mapPrivateRowFromServer(m, chatId, currentUserId);
 }
