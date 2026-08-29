@@ -1770,6 +1770,7 @@ export default function ChatDetailPage() {
         />
       </MessageListErrorBoundary>
 
+      <div className="flex-shrink-0 relative z-[2]">
       <Composer
         inputText={inputText}
         inputRef={inputRef}
@@ -1812,6 +1813,7 @@ export default function ChatDetailPage() {
         onClearPrivacy={() => { setBurnTimer(undefined); setForwardRestricted(false); }}
         isSending={isSending}
       />
+      </div>
 
       {/* E2EE 加密信息弹窗 */}
       {otherUser && (

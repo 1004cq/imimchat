@@ -33,7 +33,7 @@ export default class MessageListErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="flex flex-1 items-center justify-center px-6 py-10 text-center">
+        <div className="flex flex-1 min-h-0 flex-col items-center justify-center px-6 py-10 text-center overflow-hidden">
           <div className="max-w-xs space-y-2">
             <AlertTriangle className="mx-auto text-amber-500" size={28} />
             <p className="text-sm text-foreground">部分消息无法显示</p>
@@ -49,6 +49,10 @@ export default class MessageListErrorBoundary extends Component<Props, State> {
         </div>
       );
     }
-    return <div key={this.state.retryKey}>{this.props.children}</div>;
+    return (
+      <div key={this.state.retryKey} className="flex flex-1 min-h-0 flex-col overflow-hidden">
+        {this.props.children}
+      </div>
+    );
   }
 }
