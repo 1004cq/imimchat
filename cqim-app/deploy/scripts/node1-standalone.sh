@@ -37,6 +37,18 @@ else:
 PY
 fi
 
+echo "==> 切换为 Let's Encrypt 证书（CDN 关闭后直连必需，避免 TrustAsia 链不完整）"
+CQIM_SITE="/etc/nginx/sites-enabled/cqim"
+LE_FULL="/etc/letsencrypt/live/wed.imim.chat/fullchain.pem"
+LE_KEY="/etc/letsencrypt/live/wed.imim.chat/privkey.pem"
+if [[ -f "$LE_FULL" && -f "$LE_KEY" ]]; then
+  sudo sed -i "s|ssl_certificate .*|ssl_certificate ${LE_FULL};|" "$CQIM_SITE"
+  sudo sed -i "s|ssl_certificate_key .*|ssl_certificate_key ${LE_KEY};|" "$CQIM_SITE"
+  echo "OK: 已指向 Let's Encrypt"
+else
+  echo "WARN: 未找到 Let's Encrypt 证书，请执行: sudo certbot certonly --nginx -d wed.imim.chat" >&2
+fi
+
 echo "==> 校验并重载 Nginx"
 sudo nginx -t
 sudo systemctl reload nginx

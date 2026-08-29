@@ -2,6 +2,13 @@
 
 当只需 **node1（42.194.167.201）** 独立运行、暂不接入 node2/node3 时使用。
 
+## CDN 关闭 / DNS 直连 node1
+
+DNS 指向 `42.194.167.201` 后，**必须**使用 node1 上的 **Let's Encrypt** 证书（`/etc/letsencrypt/live/wed.imim.chat/`）。  
+勿再使用 `/etc/nginx/ssl/` 下的 TrustAsia 单文件证书，否则浏览器会报「无法验证服务器身份」。
+
+`node1-standalone.sh` 会自动切换 Nginx 到 Let's Encrypt。
+
 ## 一键切换
 
 在 node1 上，进入代码目录后执行：
