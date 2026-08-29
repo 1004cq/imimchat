@@ -20,7 +20,11 @@ docker cp "$SRC" "$CONTAINER:/app/dist/index.js"
 
 if [[ -d "$PUBLIC_DIR" ]]; then
   echo "==> 同步前端静态文件 -> $CONTAINER:/app/dist/public/"
-  tar -C "$PUBLIC_DIR" -cf - . | docker exec -i "$CONTAINER" tar -xf - -C /app/dist/public
+  # 先清空 assets 再全量覆盖，避免 hash 变更后旧文件残留、以及 tar 覆盖权限失败
+  docker exec -u root "$CONTAINER" bash -c 'rm -rf /app/dist/public/assets && mkdir -p /app/dist/public/assets'
+  docker cp "$PUBLIC_DIR/index.html" "$CONTAINER:/app/dist/public/index.html"
+  docker cp "$PUBLIC_DIR/assets/." "$CONTAINER:/app/dist/public/assets/"
+  docker exec -u root "$CONTAINER" chown -R node:1001 /app/dist/public/index.html /app/dist/public/assets 2>/dev/null || true
 fi
 echo "==> 重启 $CONTAINER"
 docker restart "$CONTAINER"
