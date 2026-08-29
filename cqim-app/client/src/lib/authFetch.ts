@@ -1,10 +1,12 @@
+import { getAuthToken } from '@/lib/authToken';
+
 /**
  * authFetch — 自动携带 Bearer Token 的 fetch 封装
  *
  * 用法与原生 fetch 完全一致，只需将 `fetch(url, options)` 替换为
  * `authFetch(url, options)` 即可。
  *
- * - 自动从 localStorage 读取 `user_token` 并注入 Authorization 头
+ * - 自动从 localStorage 读取 `user_token` / `auth_token` 并注入 Authorization 头
  * - 若 token 不存在则不注入（兼容公开接口）
  * - 支持自定义 headers，自定义 Authorization 优先级更高
  */
@@ -12,7 +14,7 @@ export async function authFetch(
   input: RequestInfo | URL,
   init: RequestInit = {}
 ): Promise<Response> {
-  const token = localStorage.getItem('user_token');
+  const token = getAuthToken();
   const headers = new Headers(init.headers);
   if (token && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${token}`);

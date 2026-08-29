@@ -434,6 +434,12 @@ export const VirtualMessageList = memo(forwardRef<VirtualMessageListHandle, Virt
       >
         {loading && hasMore && <div className="flex justify-center py-3"><span className="w-4 h-4 border-2 border-dove-green/30 border-t-dove-green rounded-full animate-spin" /></div>}
         {loading && safeMessages.length === 0 && <MessageSkeleton />}
+        {!loading && safeMessages.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-16 px-6 text-center pointer-events-none">
+            <p className="text-sm text-muted-foreground/70">暂无消息</p>
+            <p className="text-xs text-muted-foreground/50 mt-1">发送第一条消息开始聊天</p>
+          </div>
+        )}
         {!hasMore && safeMessages.length > 0 && <div className="flex justify-center py-3"><span className="text-[10px] text-dove-ink/25">—— 已无更多消息 ——</span></div>}
         <div style={{ height: totalHeight, position: 'relative' }}>
           {safeMessages.slice(start, end).map((msg, visibleIndex) => {

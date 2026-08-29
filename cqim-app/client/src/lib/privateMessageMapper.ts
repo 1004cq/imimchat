@@ -74,6 +74,7 @@ export function mapServerPrivateRow(
   if (msgType === 'encrypted' && m.content && !m.isRevoked) {
     if (m.senderId === currentUserId) {
       decryptedContent = '🔒 [本地加密消息]';
+      finalMsgType = 'text';
       decryptionStatus = 'ciphertext';
     } else {
       const result = decryptResults?.get(String(m.id));

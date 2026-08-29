@@ -3,6 +3,8 @@ import { AlertTriangle } from 'lucide-react';
 
 interface Props {
   children: ReactNode;
+  /** 切换会话时重置错误状态 */
+  chatId?: string | null;
 }
 
 interface State {
@@ -20,6 +22,12 @@ export default class MessageListErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error) {
     console.error('[MessageList] 渲染异常:', error);
+  }
+
+  componentDidUpdate(prevProps: Props) {
+    if (prevProps.chatId !== this.props.chatId && this.state.hasError) {
+      this.setState({ hasError: false, retryKey: this.state.retryKey + 1 });
+    }
   }
 
   render() {

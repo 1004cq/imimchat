@@ -46,6 +46,7 @@ import { ChatSkeleton, MemoizedChatBubble, shouldShowTimeGroup } from '@/compone
 import MessageListErrorBoundary from '@/components/chat/MessageListErrorBoundary';
 import SingleMessageErrorBoundary from '@/components/chat/SingleMessageErrorBoundary';
 import { sanitizeMessages } from '@/lib/messageListUtils';
+import { getAuthToken, getCurrentUserId, resolveOtherMember } from '@/lib/authToken';
 import { mapServerPrivateRow } from '@/lib/privateMessageMapper';
 import { createClientMsgId, fetchPrivateGap, setLastPrivateSeq, trackPrivateSeqFromMessages } from '@/lib/privateSync';
 import LottieSticker from '@/components/LottieSticker';
@@ -247,8 +248,8 @@ export default function ChatDetailPage() {
   // E2EE Hook
   const e2ee = useE2EE();
 
-  const currentUserId = state.currentUser?.id || localStorage.getItem('user_id') || 'me';
-  const otherMember = chat?.members?.find(m => m !== currentUserId) || chat?.members?.find(m => m !== 'me');
+  const currentUserId = getCurrentUserId(state.currentUser?.id);
+  const otherMember = resolveOtherMember(chat?.members, currentUserId);
 
   // ===== 消息防篡改：派生 HMAC 完整性密钥 =====
   const [integrityKey, setIntegrityKey] = useState<ArrayBuffer | null>(null);
@@ -288,7 +289,7 @@ export default function ChatDetailPage() {
   // 进入会话时加载 Presence
   useEffect(() => {
     if (!otherMember || chat?.type !== 'private') return;
-    const token = localStorage.getItem('auth_token');
+    const token = getAuthToken();
     fetch(`/api/users/${otherMember}/presence`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
@@ -304,7 +305,7 @@ export default function ChatDetailPage() {
   // ===== 本地秒开 + 后台同步私聊历史 =====
   useEffect(() => {
     if (!chatId || chatId === 'c0' || chatId === 'cBOT') return;
-    const token = localStorage.getItem('user_token');
+    const token = getAuthToken();
     if (!token) return;
     let cancelled = false;
 
@@ -328,16 +329,22 @@ export default function ChatDetailPage() {
     };
 
     (async () => {
+      let cached = state.messages[chatId] || [];
       try {
-        const localMessages = await loadPrivateMessagesFromLocalDb(chatId, currentUserId);
+        let localMessages: Message[] = [];
+        try {
+          localMessages = await loadPrivateMessagesFromLocalDb(chatId, currentUserId);
+        } catch (localErr) {
+          console.warn('[ChatDetail] 本地消息加载失败，继续从服务端同步:', localErr);
+        }
         if (cancelled) return;
         const current = state.messages[chatId] || [];
-        const cached = localMessages.length > 0 ? mergeMessages(current, localMessages) : current;
+        cached = localMessages.length > 0 ? mergeMessages(current, localMessages) : current;
         if (localMessages.length > 0 && current.length === 0) setMessages(chatId, cached);
         setLoadingMessages(cached.length === 0);
 
         const response = await fetch(`/api/chat/${chatId}/messages?limit=50`, {
-          headers: { 'Authorization': `Bearer ${token}` },
+          headers: { Authorization: `Bearer ${token}` },
         });
         if (response.status === 404) {
           if (!cancelled) {
@@ -351,12 +358,10 @@ export default function ChatDetailPage() {
         if (!data?.messages || cancelled) return;
 
         const serverMessages = Array.isArray(data.messages) ? data.messages : [];
-        // Double Ratchet 必须按同一对端的时间顺序串行推进，不能对整批消息 Promise.all。
         const decryptResults = new Map<string, { plaintext?: string; error?: string; success: boolean }>();
         const bySender = new Map<string, Array<{ id: string; envelope: any }>>();
         for (const m of serverMessages) {
           if (!m?.id) continue;
-          // 自己发出的密文优先使用本地解密副本；换机后没有副本时不伪造明文。
           if (m.msgType !== 'encrypted' || !m.content || m.isRevoked || m.senderId === currentUserId) continue;
           try {
             const list = bySender.get(m.senderId) || [];
@@ -368,20 +373,28 @@ export default function ChatDetailPage() {
         }
 
         for (const [senderId, encryptedMessages] of bySender) {
-          const results = e2eeProxy.isReady
-            ? await e2eeProxy.signalBatchDecrypt(senderId, encryptedMessages)
-            : await (async () => {
-                const fallbackResults: Array<{ id: string; plaintext?: string; error?: string; success: boolean }> = [];
-                for (const item of encryptedMessages) {
-                  try {
-                    fallbackResults.push({ id: item.id, plaintext: await e2ee.decrypt(senderId, item.envelope), success: true });
-                  } catch (error) {
-                    fallbackResults.push({ id: item.id, error: error instanceof Error ? error.message : String(error), success: false });
+          try {
+            const results = e2eeProxy.isReady
+              ? await e2eeProxy.signalBatchDecrypt(senderId, encryptedMessages)
+              : await (async () => {
+                  const fallbackResults: Array<{ id: string; plaintext?: string; error?: string; success: boolean }> = [];
+                  for (const item of encryptedMessages) {
+                    try {
+                      const plaintext = await e2ee.decrypt(senderId, item.envelope);
+                      fallbackResults.push({ id: item.id, plaintext: plaintext || undefined, success: !!plaintext });
+                    } catch (error) {
+                      fallbackResults.push({ id: item.id, error: error instanceof Error ? error.message : String(error), success: false });
+                    }
                   }
-                }
-                return fallbackResults;
-              })();
-          for (const result of results) decryptResults.set(result.id, result);
+                  return fallbackResults;
+                })();
+            for (const result of results) decryptResults.set(result.id, result);
+          } catch (decryptErr) {
+            console.warn('[ChatDetail] 批量解密失败:', decryptErr);
+            for (const item of encryptedMessages) {
+              decryptResults.set(item.id, { success: false, error: 'batch_decrypt_failed' });
+            }
+          }
         }
 
         const msgs: Message[] = serverMessages
@@ -395,7 +408,10 @@ export default function ChatDetailPage() {
           trackEvent('private_history_sync', { chatId, count: msgs.length, direction: 'inbound' });
         }
       } catch (err) {
-        if (!cancelled) console.error('[ChatDetail] 加载消息失败:', err);
+        if (!cancelled) {
+          console.error('[ChatDetail] 加载消息失败:', err);
+          toast.error('消息加载失败，请下拉刷新或重新进入会话');
+        }
       } finally {
         if (!cancelled) setLoadingMessages(false);
       }
@@ -403,7 +419,7 @@ export default function ChatDetailPage() {
 
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatId, currentUserId]);
+  }, [chatId, currentUserId, e2ee.isReady]);
 
   useEffect(() => {
     setChatMissing(false);
@@ -412,7 +428,7 @@ export default function ChatDetailPage() {
   // 重连后按 seq 补洞（不假设 WS 必达）
   useEffect(() => {
     if (!chatId || isGroupChat || chatId === 'c0' || chatId === 'cBOT') return;
-    const token = localStorage.getItem('user_token');
+    const token = getAuthToken();
     if (!token) return;
 
     const onSignalOpen = async () => {
@@ -709,8 +725,6 @@ export default function ChatDetailPage() {
       setShowEmoji(false);
     };
 
-    const authToken = () => localStorage.getItem('user_token') || localStorage.getItem('auth_token');
-
     setIsSending(true);
     try {
       messageListRef.current?.scrollToBottom('smooth');
@@ -861,11 +875,11 @@ export default function ChatDetailPage() {
             },
           }));
         } else {
-          const token = authToken();
+          const token = getAuthToken();
           if (token) {
             fetch(`/api/chat/${chatId}/messages`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
               body: JSON.stringify({ content: envelopeStr, msgType: 'encrypted', clientMsgId: encTempId, tempId: encTempId, ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), ...(msgHmac ? { hmac: msgHmac } : {}), ...(activeReply ? { replyToId: activeReply.id } : {}) }),
             })
               .then(async r => {
@@ -1035,11 +1049,11 @@ export default function ChatDetailPage() {
             if (ws && ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ type: 'private_send', payload }));
             } else {
-              const token = localStorage.getItem('user_token');
+              const token = getAuthToken();
               if (!token) throw new Error('登录状态已失效');
               const response = await fetch(`/api/chat/${chatId}/messages`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                 body: JSON.stringify(payload),
               });
               if (!response.ok) throw new Error(`发送失败 ${response.status}`);
@@ -1467,7 +1481,7 @@ export default function ChatDetailPage() {
     sendMessage(chatId, msg);
 
     try {
-      const token = localStorage.getItem('user_token');
+      const token = getAuthToken();
       if (!token) {
         toast.error('登录状态已失效，请重新登录后再发送语音');
         return;
@@ -1740,7 +1754,7 @@ export default function ChatDetailPage() {
         </motion.div>
       )}
 
-      <MessageListErrorBoundary>
+      <MessageListErrorBoundary chatId={chatId}>
         <MessageListContainer
           listRef={messageListRef}
           chatId={chatId}
@@ -1907,11 +1921,11 @@ export default function ChatDetailPage() {
             if (ws && ws.readyState === WebSocket.OPEN && chatId !== 'c0' && chatId !== 'cBOT') {
               ws.send(JSON.stringify({ type: 'private_send', payload: wirePayload }));
             } else if (chatId !== 'c0' && chatId !== 'cBOT') {
-              const token = localStorage.getItem('user_token');
+              const token = getAuthToken();
               if (token) {
                 const response = await fetch(`/api/chat/${chatId}/messages`, {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                   body: JSON.stringify(wirePayload),
                 });
                 const res = await response.json().catch(() => null);
