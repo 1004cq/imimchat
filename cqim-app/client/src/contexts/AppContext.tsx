@@ -2,6 +2,7 @@
  * DoveIM 应用全局状态上下文
  */
 import React, { createContext, useContext, useReducer, useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { toast } from 'sonner';
 import { createStore, useStore } from 'zustand';
 import {
   type Chat, type Message, type MomentPost, type CallState, type BurnAfterReadTimer,
@@ -1043,6 +1044,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               if (payload.error) {
                 dispatch({ type: 'UPDATE_MESSAGE_STATUS', chatId, messageId: tempId, status: 'failed' });
                 console.warn(`[AppContext] 私聊发送失败: tempId=${tempId} error=${payload.error}`);
+                toast.error(payload.error || '消息发送失败，请稍后重试');
               } else if (id) {
                 dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId, realId: id });
                 if (seq) setLastPrivateSeq(chatId, seq);
