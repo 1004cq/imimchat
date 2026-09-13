@@ -1,66 +1,26 @@
-# CQIM 生产环境部署指南 (Docker Compose 版)
+# CQIM 部署
 
-本文档介绍如何使用 Docker Compose 部署 CQIM（cqim-app）生产环境。
+与 [README](../../README.md) 一致。Prisma 主库不是 Mongo。
 
-## 1. 架构说明
+## 组件
 
-CQIM 采用单机容器化部署方案，拓扑结构如下：
+- Nginx：TLS、`/api`、`/signal`
+- Node API + Go Gateway
+- **PostgreSQL**（`DATABASE_URL=postgresql://...`）
+- Redis
+- MySQL 仅审计（可选）
 
-- **Nginx**: 统一入口，负责 TLS 终止、静态资源分流及 WebSocket 升级。
-- **Node API (cqim)**: 核心业务逻辑，处理 API 请求、私聊消息及朋友圈。
-- **Go Gateway**: 实时消息网关，处理群聊 WebSocket 连接与扇出。
-- **MongoDB**: 主业务数据库（Replica Set 模式）。
-- **Redis**: 实时状态、缓存及 Pub/Sub 消息总线。
-- **MySQL**: 审计日志与后台运营数据。
+线上若仍指 `file:./dev.db`，运行的仍是 SQLite，见 MIGRATE_POSTGRES.md。
 
-## 2. 部署步骤
+## 起动
 
-### 2.1 环境准备
-- 安装 Docker 24.0+ 和 Docker Compose 2.20+。
-- 准备域名并获取 SSL 证书（存放至 `./certs` 目录）。
-
-### 2.2 配置文件
-1. 复制模板：`cp .env.example .env`
-2. 修改 `.env` 中的生产密钥（**严禁使用默认密码**）：
-   - `MYSQL_ROOT_PASSWORD`: 强随机密码。
-   - `DATABASE_URL`: 确保包含正确的 MongoDB 凭据。
-   - `REDIS_PASSWORD`: 建议为 Redis 设置密码。
-   - `REDIS_ADDR`: 指向 `redis:6379`。
-
-### 2.3 启动服务
 ```bash
-# 构建并启动所有服务
-docker-compose up -d --build
-
-# 检查服务状态
-docker-compose ps
-
-# 查看日志
-docker-compose logs -f cqim
+cd cqim-app
+cp .env.example .env
+# 填强密码、postgresql DATABASE_URL、PUBLIC_BASE_URL=https://wed.imim.chat
+docker compose up -d --build
 ```
 
-## 3. 安全建议
+验证：`https://wed.imim.chat/api/health` 与 `wss://wed.imim.chat/signal`。
 
-- **端口隔离**: 数据库服务（Mongo/Redis/MySQL）默认不对外映射端口，仅限容器内访问。如需本地维护，请使用 `ssh` 隧道或将 `ports` 改为 `127.0.0.1:27017:27017`。
-- **非 Root 运行**: 应用镜像已配置为以 `nodeuser` 用户运行，降低容器逃逸风险。
-- **资源限制**: `cqim` 容器默认限制内存为 1GB，建议根据实际负载调整 `deploy.resources`。
-
-## 4. 备份与维护
-
-### 4.1 数据库备份
-- **MongoDB**: `docker exec cqim-mongo mongodump --out /data/db/backups/$(date +%F)`
-- **MySQL**: `docker exec cqim-mysql mysqldump -u root -p$MYSQL_ROOT_PASSWORD cqim_audit > backup.sql`
-
-### 4.2 升级流程
-```bash
-git pull
-docker-compose up -d --build cqim go-gateway
-```
-
-## 5. 验证部署
-
-1. **API 健康检查**: 访问 `https://your-domain/api/health`。
-2. **WebSocket 连通性**:
-   - 使用工具连接 `wss://your-domain/ws/group`。
-   - 验证握手是否成功（需携带有效 Token）。
-3. **朋友圈图片**: 验证发布后图片能否正常上传至 COS 或本地目录。
+库端口不要对公网。双机见 TWO_NODES.md。
