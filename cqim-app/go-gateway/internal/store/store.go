@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -40,6 +41,9 @@ type GroupMember struct {
 
 // New 创建数据库连接
 func New(dbPath string) (*Store, error) {
+	if strings.TrimSpace(dbPath) == "" {
+		return nil, fmt.Errorf("DB_PATH is empty: refuse implicit SQLite")
+	}
 	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_synchronous=NORMAL&_cache_size=10000")
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)

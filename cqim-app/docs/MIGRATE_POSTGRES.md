@@ -26,4 +26,4 @@ npx prisma migrate dev --name init_postgres
 ## 切流
 
 备份 `.db` → 空库 migrate → 导数据 → 停写 → 改生产 DATABASE_URL → 起服务。  
-禁止两台共享 SQLite。Gateway 迁完要离开 `DB_PATH`。
+禁止两台共享 SQLite。Gateway 仍是 sqlite-only：必须显式节点本地 `DB_PATH`（空值 / `cqim.db` 会拒绝启动），迁完再离开 sqlite。

@@ -26,7 +26,7 @@ WuKongIM 不是主路径。
 | 线上 wed.imim.chat | **仍可能在跑 SQLite 文件**（`dev.db`），直到你改 `DATABASE_URL` 并 `migrate deploy` |
 | Mongo | **不是** Prisma 主库。compose 里可能还有 mongo 服务，不要填进 `DATABASE_URL` |
 | Redis | 在线、缓存、`cqim:im:push` |
-| Go Gateway | 仍可读 `DB_PATH` 默认 sqlite，迁库后要改 |
+| Go Gateway | 仍是 sqlite-only（无 Postgres 驱动）。`DB_PATH` 必须显式设置节点本地文件，空值或 `cqim.db` / NFS 共享路径会拒绝启动 |
 
 切 PG 见 [cqim-app/docs/MIGRATE_POSTGRES.md](./cqim-app/docs/MIGRATE_POSTGRES.md)。
 仓里还**没有**可直接在空 PG 上 `deploy` 的正式 migration SQL，要在空库自己 `prisma migrate dev`。
@@ -63,7 +63,7 @@ EdgeOne 源站只回第一台，不要源站组轮询 WebSocket。禁止 NFS 共
 
 1. 生产切 PostgreSQL + 提交 migrate SQL
 2. APNs：仅 foreground 免推
-3. Gateway 离开 sqlite
+3. Gateway 离开 sqlite（当前只是禁止隐式/共享 sqlite，还没有 PG 驱动）
 4. iOS 与 Web 对齐（另仓）
 
 ## 版权

@@ -3,7 +3,7 @@
 已提交：
 - `server/presence.ts` + `push-notify.ts`：只有 foreground 跳过推送
 - Web TUICallKit 去掉硬编码 1600136830
-- Gateway `DB_PATH` 默认改空（见 config.go）
+- Gateway `DB_PATH` 默认改空，且空值 / `cqim.db` / NFS 共享路径会拒绝启动（见 config.go）
 
 还要你手动：
 1. 生产 `.env`：`TRTC_SDK_APP_ID=1600159677`，删掉代码里 `|| 1600136830`

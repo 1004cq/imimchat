@@ -95,7 +95,8 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      DATABASE_URL: ${DATABASE_URL:-mongodb://mongo:27017/cqim?replicaSet=rs0&directConnection=true}
+      # Prisma/API: PostgreSQL only. Never Mongo. Never file:/app/data/cqim.db.
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be postgresql://... (never file: sqlite, never Mongo)}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       MYSQL_URL: ${MYSQL_URL:-mysql://cqim:cqim@mysql:3306/cqim_audit}
       MYSQL_AUDIT_ENABLED: ${MYSQL_AUDIT_ENABLED:-true}
@@ -126,6 +127,8 @@ services:
       - "8081"
     environment:
       - GATEWAY_ID=${GATEWAY_ID:-gw-app-1}
+      # Gateway is still sqlite-only. Empty DB_PATH refuses to start. Never NFS-share. Never cqim.db.
+      - DB_PATH=${DB_PATH:-}
       - REDIS_ADDR=redis:6379
       - REDIS_PASSWORD=
       - REDIS_DB=0

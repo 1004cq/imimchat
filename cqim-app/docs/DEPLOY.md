@@ -17,7 +17,7 @@
 ```bash
 cd cqim-app
 cp .env.example .env
-# 填强密码、postgresql DATABASE_URL、PUBLIC_BASE_URL=https://wed.imim.chat
+# 填强密码、postgresql DATABASE_URL、节点本地 DB_PATH（禁止 cqim.db / NFS）、PUBLIC_BASE_URL=https://wed.imim.chat
 docker compose up -d --build
 ```
 

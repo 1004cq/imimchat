@@ -3,6 +3,7 @@ package auth
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +26,9 @@ type Verifier struct {
 
 // NewVerifier 创建 Session 验证器
 func NewVerifier(dbPath string) (*Verifier, error) {
+	if strings.TrimSpace(dbPath) == "" {
+		return nil, fmt.Errorf("DB_PATH is empty: refuse implicit SQLite")
+	}
 	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&mode=ro")
 	if err != nil {
 		return nil, fmt.Errorf("open auth db: %w", err)

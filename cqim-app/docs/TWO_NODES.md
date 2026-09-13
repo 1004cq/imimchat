@@ -19,8 +19,9 @@
               │ GATEWAY_ID=gw-app-1        GATEWAY_ID=gw-app-2  │
               └───────────────────────┬───────────────────────┘
                                       │
-                           节点1：Redis（6380）+ 共享数据（NFS/SQLite）
+                           节点1：Redis（6380）+ PostgreSQL（Prisma/API）
                            跨节点推送：Redis Pub/Sub cqim:im:push
+                           禁止 NFS 共享 .db；Gateway 各节点本地 DB_PATH
 ```
 
 **禁止**：EdgeOne 多源站轮询、两套独立数据库、在节点2 对外暴露 wed.imim.chat 的 Nginx/SSL。
@@ -32,7 +33,8 @@
 | 节点1（入口 + 数据） | 42.194.167.201 | cqim、go-gateway、Redis、MySQL、Mongo、宿主机 Nginx + SSL |
 | 节点2（应用） | 106.53.196.247 | 仅 cqim、go-gateway；**无** 对外 Nginx |
 
-当前生产使用 **SQLite**（NFS 共享 `cqim.db`）+ **Redis Pub/Sub** 跨节点投递。若迁移 Mongo，将 `DATABASE_URL` 指向节点1 内网 `27017` 即可，双节点推送逻辑不变。
+Prisma/API 用 **PostgreSQL**（`DATABASE_URL=postgresql://...`）。**禁止** NFS 共享 `.db`，**禁止**把 Mongo URL 填进 `DATABASE_URL`。  
+Gateway 仍是 sqlite-only：每台必须显式设置**节点本地** `DB_PATH`（空值或 `cqim.db` 会拒绝启动）。跨节点投递仍走 **Redis Pub/Sub**。
 
 ## 节点1 部署
 
@@ -42,6 +44,8 @@ cp deploy/env.app.example .env   # 或沿用现有 .env
 # 节点1 必须设置：
 #   GATEWAY_ID=gw-app-1
 #   PUBLIC_BASE_URL=https://wed.imim.chat
+#   DATABASE_URL=postgresql://...   # 禁止 file: sqlite / Mongo
+#   DB_PATH=/var/lib/cqim/gateway-local.db  # 节点本地，禁止 cqim.db / NFS
 
 docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml up -d
 ```
@@ -66,16 +70,10 @@ docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml up -d
 
 节点1 Docker Redis 映射 `6380:6379`，安全组 / `ufw` 仅允许 `106.53.196.247` 访问 `6380`。
 
-### NFS 共享数据（SQLite）
+### 不要 NFS 共享 SQLite
 
-```bash
-# 节点1
-echo '/home/ubuntu/cqim_shared/data 106.53.196.247(rw,sync,no_subtree_check,no_root_squash)' | sudo tee -a /etc/exports
-sudo exportfs -ra
-
-# 节点2
-sudo mount -t nfs 42.194.167.201:/home/ubuntu/cqim_shared/data /home/ubuntu/cqim_shared/data
-```
+禁止把 `cqim.db` / Gateway `DB_PATH` 放到 NFS。双机共享库用节点1 的 PostgreSQL；每台 Gateway 用自己的本地 sqlite 文件（直到 Gateway 离开 sqlite）。  
+`SHARED_DATA_DIR` 若仍挂载，只放附件，不要放 `.db`。
 
 ## 节点2 部署
 
@@ -83,6 +81,8 @@ sudo mount -t nfs 42.194.167.201:/home/ubuntu/cqim_shared/data /home/ubuntu/cqim
 cd /home/ubuntu/cqim-release
 cp deploy/env.app.example .env
 # 编辑 .env：NODE1_HOST=42.194.167.201，GATEWAY_ID=gw-app-2
+#   DATABASE_URL=postgresql://...@NODE1_HOST:5432/cqim
+#   DB_PATH=/var/lib/cqim/gateway-local.db  # 本机文件，不要与节点1 共享
 
 docker compose -f docker-compose.yml -f deploy/docker-compose.app.yml up -d cqim go-gateway
 ```
