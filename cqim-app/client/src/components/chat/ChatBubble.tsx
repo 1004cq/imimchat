@@ -12,6 +12,9 @@ import LottieSticker from '@/components/LottieSticker';
 import { formatChatTime, getUserById, type Message, type BurnAfterReadTimer, BURN_TIMER_OPTIONS, formatBurnTimer } from '@/lib/store';
 import { bubbleAnimations, springBubble, tgEaseOut } from '@/lib/animations';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
+import { authFetch } from '@/lib/authFetch';
+import { looksLikeCiphertext } from '@/lib/chatPreview';
+import { extractMediaFields } from '@/lib/mediaFields';
 
 const isAnimatedStickerSource = (url?: string, format?: string) => {
   if (format === 'json' || format === 'tgs') return true;
@@ -346,30 +349,48 @@ export const ChatSkeleton: React.FC = () => (
 const EncryptedMediaLoader = React.memo(({ url, fileKey, iv, type }: { url: string, fileKey: string, iv: string, type: 'image' | 'video' }) => {
   const [decryptedUrl, setDecryptedUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
     let objectUrl: string | null = null;
+    setLoading(true);
+    setError(null);
+    setDecryptedUrl(null);
+
     (async () => {
       try {
-        const resp = await fetch(url);
-        if (!resp.ok) throw new Error('下载失败');
+        const resp = await authFetch(url);
+        if (!resp.ok) throw new Error(resp.status === 401 ? '未授权，请重新登录' : '下载失败');
         const buffer = await resp.arrayBuffer();
-        
+
         const { E2EEManager } = await import('@/lib/e2ee/E2EEManager');
         const e2ee = E2EEManager.shared();
         const decrypted = await e2ee.decryptFile(buffer, fileKey, iv);
-        
+        if (cancelled) return;
+
         const blob = new Blob([decrypted]);
         objectUrl = URL.createObjectURL(blob);
+        if (cancelled) {
+          URL.revokeObjectURL(objectUrl);
+          objectUrl = null;
+          return;
+        }
         setDecryptedUrl(objectUrl);
       } catch (err) {
         console.error('[E2EE] 媒体解密失败:', err);
+        if (!cancelled) setError(err instanceof Error ? err.message : '解密失败');
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
-    return () => { if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [url, fileKey, iv]);
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [url, fileKey, iv, type, retryTick]);
 
   if (loading) {
     return (
@@ -382,9 +403,16 @@ const EncryptedMediaLoader = React.memo(({ url, fileKey, iv, type }: { url: stri
 
   if (!decryptedUrl) {
     return (
-      <div className="flex flex-col items-center justify-center w-[180px] h-[120px] bg-red-50 rounded-lg border border-red-100">
+      <div className="flex flex-col items-center justify-center w-[180px] h-[120px] bg-red-50 rounded-lg border border-red-100 gap-1.5">
         <Ban size={16} className="text-red-300" />
-        <span className="text-[10px] text-red-400 mt-1">解密失败</span>
+        <span className="text-[10px] text-red-400">{error || '解密失败'}</span>
+        <button
+          type="button"
+          onClick={() => setRetryTick(value => value + 1)}
+          className="text-[10px] text-red-500 underline underline-offset-2"
+        >
+          重试
+        </button>
       </div>
     );
   }
@@ -398,6 +426,69 @@ const EncryptedMediaLoader = React.memo(({ url, fileKey, iv, type }: { url: stri
   );
 });
 EncryptedMediaLoader.displayName = 'EncryptedMediaLoader';
+
+const RemoteChatMedia = React.memo(({ src, type }: { src: string; type: 'image' | 'video' }) => {
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [retryTick, setRetryTick] = useState(0);
+  const mediaSrc = retryTick > 0 ? `${src}${src.includes('?') ? '&' : '?'}_r=${retryTick}` : src;
+
+  if (type === 'video') {
+    return (
+      <div className="relative rounded-lg max-w-[240px] overflow-hidden">
+        <video
+          src={mediaSrc}
+          className="rounded-lg max-w-[240px] max-h-[180px] object-cover"
+          controls
+          preload="metadata"
+          onLoadedData={() => setStatus('ready')}
+          onError={() => setStatus('error')}
+          onContextMenu={(e) => e.preventDefault()}
+        />
+        {status === 'error' && (
+          <button
+            type="button"
+            onClick={() => { setStatus('loading'); setRetryTick(value => value + 1); }}
+            className="absolute inset-0 flex items-center justify-center bg-black/40 text-[11px] text-white"
+          >
+            加载失败，点击重试
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative">
+      {status !== 'ready' && (
+        <div className="flex flex-col items-center justify-center w-[180px] h-[120px] bg-dove-warm-gray/20 rounded-lg gap-1.5">
+          {status === 'loading' ? (
+            <Loader2 size={16} className="animate-spin text-dove-green/40" />
+          ) : (
+            <>
+              <Ban size={16} className="text-red-300" />
+              <button
+                type="button"
+                onClick={() => { setStatus('loading'); setRetryTick(value => value + 1); }}
+                className="text-[10px] text-red-400 underline underline-offset-2"
+              >
+                图片加载失败，重试
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      <img
+        src={mediaSrc}
+        alt=""
+        className={`rounded-lg max-w-[240px] max-h-[180px] object-cover ${status === 'ready' ? '' : 'hidden'}`}
+        onLoad={() => setStatus('ready')}
+        onError={() => setStatus('error')}
+        onContextMenu={(e) => e.preventDefault()}
+      />
+    </div>
+  );
+});
+RemoteChatMedia.displayName = 'RemoteChatMedia';
 
 // ===== 消息气泡组件（含阅后即焚倒计时 + 焚毁动画）=====
 // 使用 React.memo 避免不必要的重渲染
@@ -853,7 +944,13 @@ const ChatBubble: React.FC<{
   }
 
   // 显示的消息内容（优先使用解密后的内容）
-  const displayContent = message.decryptedContent || message.content;
+  const extraMedia = extractMediaFields((message as any).extra);
+  const fileKey = message.fileKey || extraMedia.fileKey;
+  const mediaIv = message.iv || extraMedia.iv;
+  const imageUrl = message.imageUrl || extraMedia.imageUrl;
+  const videoUrl = message.videoUrl || extraMedia.videoUrl;
+  const rawDisplay = message.decryptedContent || message.content;
+  const displayContent = looksLikeCiphertext(rawDisplay) ? '🔒 [加密消息]' : (rawDisplay || '');
   const isRestricted = message.forwardRestricted;
   const useInlineMeta = message.type === 'text' || !message.type;
   const shouldPinEncryptionBadge = message.isEncrypted && useInlineMeta;
@@ -919,37 +1016,24 @@ const ChatBubble: React.FC<{
               </div>
             )}
 
-            {message.type === 'image' && (message as any).fileKey && (message as any).iv ? (
-              <EncryptedMediaLoader 
-                url={message.imageUrl!} 
-                fileKey={(message as any).fileKey} 
-                iv={(message as any).iv} 
-                type="image" 
+            {message.type === 'image' && fileKey && mediaIv && imageUrl ? (
+              <EncryptedMediaLoader
+                url={imageUrl}
+                fileKey={fileKey}
+                iv={mediaIv}
+                type="image"
               />
-            ) : message.type === 'image' && message.imageUrl ? (
-              <img
-                src={message.imageUrl}
-                alt=""
-                className="rounded-lg max-w-[240px] max-h-[180px] object-cover"
-                onContextMenu={(e) => e.preventDefault()}
+            ) : message.type === 'image' && imageUrl ? (
+              <RemoteChatMedia src={imageUrl} type="image" />
+            ) : message.type === 'video' && fileKey && mediaIv && videoUrl ? (
+              <EncryptedMediaLoader
+                url={videoUrl}
+                fileKey={fileKey}
+                iv={mediaIv}
+                type="video"
               />
-            ) : message.type === 'video' && (message as any).fileKey && (message as any).iv ? (
-              <EncryptedMediaLoader 
-                url={message.videoUrl!} 
-                fileKey={(message as any).fileKey} 
-                iv={(message as any).iv} 
-                type="video" 
-              />
-            ) : message.type === 'video' && message.videoUrl ? (
-              <div className="relative rounded-lg max-w-[240px] overflow-hidden">
-                <video
-                  src={message.videoUrl}
-                  className="rounded-lg max-w-[240px] max-h-[180px] object-cover"
-                  controls
-                  preload="metadata"
-                  onContextMenu={(e) => e.preventDefault()}
-                />
-              </div>
+            ) : message.type === 'video' && videoUrl ? (
+              <RemoteChatMedia src={videoUrl} type="video" />
             ) : message.type === 'voice' && message.voiceCiphertext ? (
               <VoiceMessageBubble
                 messageId={message.id}

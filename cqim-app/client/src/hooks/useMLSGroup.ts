@@ -60,6 +60,8 @@ export interface UseMLSGroupReturn {
   hasMLSState: boolean;
   /** 错误信息 */
   error: string | null;
+  /** 重试 Welcome/Commit 同步 */
+  retrySync: () => Promise<void>;
 }
 
 // ============================================================
@@ -97,18 +99,19 @@ export function useMLSGroup(options: UseMLSGroupOptions): UseMLSGroupReturn {
         // 上传 KeyPackage（如果还没有）
         await manager.uploadKeyPackage().catch(() => {});
 
-        // 检查群组是否已有 MLS 状态
-        const hasMLS = await manager.hasMLSState(groupId);
+        const recovered = await manager.recoverFromServer(groupId);
 
         if (!cancelled) {
-          setHasMLSState(hasMLS);
-          if (hasMLS) {
+          setHasMLSState(recovered.ready);
+          if (recovered.ready) {
             const groupStatus = await manager.getGroupStatus(groupId);
             setStatus(groupStatus);
             setEpoch(groupStatus?.epoch || 0);
+            setError(null);
+          } else {
+            setError(recovered.error || '群安全会话未就绪');
           }
           setIsReady(true);
-          setError(null);
         }
       } catch (err: any) {
         console.error('[useMLSGroup] 初始化失败:', err);
@@ -150,8 +153,9 @@ export function useMLSGroup(options: UseMLSGroupOptions): UseMLSGroupReturn {
               setEpoch(state.epoch);
               setStatus(await manager.getGroupStatus(groupId));
               console.log(`[useMLSGroup] Welcome 处理成功, epoch=${state.epoch}`);
-            } catch (err) {
+            } catch (err: any) {
               console.error('[useMLSGroup] Welcome 处理失败:', err);
+              setError(err?.message || 'Welcome 处理失败');
             }
           }
         }
@@ -165,8 +169,9 @@ export function useMLSGroup(options: UseMLSGroupOptions): UseMLSGroupReturn {
               setEpoch(state.epoch);
               setStatus(await manager.getGroupStatus(groupId));
               console.log(`[useMLSGroup] Commit 处理成功, epoch=${state.epoch}`);
-            } catch (err) {
+            } catch (err: any) {
               console.error('[useMLSGroup] Commit 处理失败:', err);
+              setError(err?.message || 'Commit 处理失败');
             }
           }
         }
@@ -343,6 +348,27 @@ export function useMLSGroup(options: UseMLSGroupOptions): UseMLSGroupReturn {
     }
   }, [groupId, ws, hasMLSState]);
 
+  const retrySync = useCallback(async () => {
+    const manager = managerRef.current;
+    if (!manager) return;
+    setError(null);
+    try {
+      if (!manager.isInitialized) await manager.initialize(userId);
+      const recovered = await manager.recoverFromServer(groupId);
+      setHasMLSState(recovered.ready);
+      if (recovered.ready) {
+        const groupStatus = await manager.getGroupStatus(groupId);
+        setStatus(groupStatus);
+        setEpoch(groupStatus?.epoch || 0);
+        setError(null);
+      } else {
+        setError(recovered.error || '群安全会话未就绪');
+      }
+    } catch (err: any) {
+      setError(err?.message || '同步失败');
+    }
+  }, [groupId, userId]);
+
   return {
     isReady,
     status,
@@ -355,5 +381,6 @@ export function useMLSGroup(options: UseMLSGroupOptions): UseMLSGroupReturn {
     updateKeys,
     hasMLSState,
     error,
+    retrySync,
   };
 }

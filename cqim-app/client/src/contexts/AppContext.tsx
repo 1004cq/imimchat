@@ -27,6 +27,8 @@ import {
   clearDecryptedMessageCache,
 } from '@/lib/localdb';
 import { e2eeProxy } from '@/lib/e2ee/WorkerProxy';
+import { formatChatListPreview, preferLocalChatPreview, sanitizePreviewText } from '@/lib/chatPreview';
+import { messageMediaPatch } from '@/lib/mediaFields';
 
 export interface AuthUser {
   id: string;
@@ -191,7 +193,7 @@ function dedupeChats(chats: Chat[]): Chat[] {
         ...chat,
         members: mergeMembers(existing.members, chat.members),
         avatar: chat.avatar || existing.avatar,
-        lastMessage: chat.lastMessage || existing.lastMessage,
+        lastMessage: preferLocalChatPreview(chat.lastMessage, existing.lastMessage),
         lastMessageTime: Math.max(existing.lastMessageTime || 0, chat.lastMessageTime || 0),
         unreadCount: Math.max(existing.unreadCount || 0, chat.unreadCount || 0),
       });
@@ -281,7 +283,7 @@ function reducer(state: AppState, action: Action): AppState {
 
       const newChats = state.chats.map(c =>
         c.id === action.chatId
-          ? { ...c, lastMessage: stickerPreview || action.message.content || '[图片]', lastMessageTime: action.message.timestamp }
+          ? { ...c, lastMessage: stickerPreview || formatChatListPreview(action.message) || '[图片]', lastMessageTime: action.message.timestamp }
           : c
       );
       return {
@@ -298,7 +300,7 @@ function reducer(state: AppState, action: Action): AppState {
         c.id === action.chatId
           ? {
               ...c,
-              lastMessage: recvStickerPreview || action.message.content || '[图片]',
+              lastMessage: recvStickerPreview || formatChatListPreview(action.message) || '[图片]',
               lastMessageTime: action.message.timestamp,
               unreadCount: isViewing ? c.unreadCount : c.unreadCount + 1,
             }
@@ -902,7 +904,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             type: 'private' as const,
             name: peerName,
             avatar: c.peer?.avatar || '',
-            lastMessage: c.lastMessage || '',
+            lastMessage: sanitizePreviewText(c.lastMessage),
             lastMessageTime: c.lastMessageAt || c.createdAt,
             unreadCount: c.unreadCount || 0,
             isPinned: false,
@@ -918,7 +920,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           type: 'group' as const,
           name: g.name || '未命名群聊',
           avatar: g.avatar || '',
-          lastMessage: g.lastMessage || '',
+          lastMessage: sanitizePreviewText(g.lastMessage),
           lastMessageTime: g.updatedAt || g.createdAt || Date.now(),
           unreadCount: g.unreadCount || 0,
           isPinned: false,
@@ -1097,11 +1099,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                   decryptionFailed,
                   decryptionStatus: decryptionFailed ? 'failed' : 'decrypted',
                   direction: 'inbound',
-                  ...(finalExtra?.voiceUrl ? { voiceUrl: finalExtra.voiceUrl, duration: finalExtra.duration || 0 } : {}),
-                  ...(finalExtra?.imageUrl ? { imageUrl: finalExtra.imageUrl } : {}),
-                  ...(finalExtra?.videoUrl ? { videoUrl: finalExtra.videoUrl } : {}),
-                  ...(finalExtra?.locationData ? { locationData: finalExtra.locationData } : {}),
-                  ...(finalExtra?.stickerUrl ? { stickerUrl: finalExtra.stickerUrl, stickerEmoji: finalExtra.stickerEmoji, stickerSetName: finalExtra.stickerSetName } : {}),
+                  ...messageMediaPatch(finalExtra),
                   ...(burnAfterRead ? { burnAfterRead } : {}),
                   ...(hmac ? { hmac, integrityStatus: 'unverified' as const } : {}),
                 };

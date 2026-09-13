@@ -1071,25 +1071,92 @@ export class MLSGroupManager {
   }
 
   /**
-   * 从服务器同步群组 MLS 状态
-   * 用于新设备登录或状态丢失时恢复
+   * 从服务器同步群组 MLS 状态。
+   * 服务端只存 Welcome/Commit 元数据，不含 epoch 密钥；不能靠 group-state 伪造会话。
    */
   async syncGroupState(groupId: string): Promise<MLSEpochState | null> {
-    try {
-      const resp = await fetch(`/api/mls/group-state?groupId=${encodeURIComponent(groupId)}&userId=${encodeURIComponent(this.userId)}`);
-      if (!resp.ok) return null;
+    const result = await this.recoverFromServer(groupId);
+    return result.ready ? this.getEpochState(groupId) : null;
+  }
 
-      const data = await resp.json();
-      if (data.epochState) {
-        const state = data.epochState as MLSEpochState;
-        await this.store.saveEpochState(state);
-        this.epochCache.set(groupId, state);
-        return state;
-      }
-    } catch (err) {
-      console.warn('[MLS] 同步群组状态失败:', err);
+  /**
+   * 重装/新设备：先吃 pending Welcome，再追 pending Commits。
+   * 旧设备 KeyPackage 私钥丢失时 Welcome 解不开，只能提示重新邀请。
+   */
+  async recoverFromServer(groupId: string): Promise<{ ready: boolean; error?: string; recoveredVia?: string }> {
+    if (!this._initialized) {
+      return { ready: false, error: 'MLS 未初始化' };
     }
-    return null;
+
+    try {
+      await this.uploadKeyPackage().catch(() => {});
+
+      if (await this.hasMLSState(groupId)) {
+        await this.applyPendingCommits(groupId);
+        return { ready: true, recoveredVia: 'local' };
+      }
+
+      const welcomeResp = await fetch(`/api/mls/pending-welcome?userId=${encodeURIComponent(this.userId)}`);
+      if (welcomeResp.ok) {
+        const data = await welcomeResp.json();
+        const welcomes = Array.isArray(data?.welcomes) ? data.welcomes : [];
+        const match = welcomes.find((item: any) => item?.groupId === groupId && item?.welcome);
+        if (match) {
+          try {
+            await this.processWelcome(match.welcome, match.senderIdentityKey || '');
+            await fetch('/api/mls/ack-welcome', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ groupId, userId: this.userId }),
+            }).catch(() => {});
+            await this.applyPendingCommits(groupId);
+            return { ready: true, recoveredVia: 'welcome' };
+          } catch (err: any) {
+            return {
+              ready: false,
+              error: err?.message || '无法解密 Welcome。重装后需要群成员重新邀请。',
+            };
+          }
+        }
+      }
+
+      const metaResp = await fetch(`/api/mls/group-state?groupId=${encodeURIComponent(groupId)}&userId=${encodeURIComponent(this.userId)}`);
+      if (metaResp.ok) {
+        const meta = await metaResp.json();
+        if (meta?.enabled && !meta?.epochState) {
+          return {
+            ready: false,
+            error: '群 MLS 已启用，但本机没有 epoch 密钥。请重试或等待重新邀请。',
+          };
+        }
+      }
+
+      return { ready: false, error: '未找到可恢复的群密钥，房间可能暂时无法解密。' };
+    } catch (err: any) {
+      console.warn('[MLS] 恢复群密钥失败:', err);
+      return { ready: false, error: err?.message || '同步群密钥失败' };
+    }
+  }
+
+  private async applyPendingCommits(groupId: string): Promise<void> {
+    const state = await this.getEpochState(groupId);
+    const afterEpoch = state?.epoch ?? 0;
+    const resp = await fetch(
+      `/api/mls/pending-commits?groupId=${encodeURIComponent(groupId)}&afterEpoch=${encodeURIComponent(String(afterEpoch))}`
+    );
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const commits = Array.isArray(data?.commits) ? data.commits : [];
+    for (const item of commits) {
+      const commit = item?.commit || item;
+      if (!commit?.groupId) commit.groupId = groupId;
+      try {
+        await this.processCommit(commit);
+      } catch (err) {
+        console.warn('[MLS] 应用 pending commit 失败:', err);
+        break;
+      }
+    }
   }
 }
 

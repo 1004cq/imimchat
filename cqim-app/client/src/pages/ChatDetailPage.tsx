@@ -45,6 +45,10 @@ import Composer from '@/components/chat/Composer';
 import { ChatSkeleton, MemoizedChatBubble, shouldShowTimeGroup } from '@/components/chat/ChatBubble';
 import MessageListErrorBoundary from '@/components/chat/MessageListErrorBoundary';
 import { sanitizeMessages } from '@/lib/messageListUtils';
+import { formatChatListPreview, isOpaquePreview } from '@/lib/chatPreview';
+import { messageMediaPatch } from '@/lib/mediaFields';
+import { authFetch } from '@/lib/authFetch';
+import { KeySyncBanner } from '@/components/chat/KeySyncBanner';
 import LottieSticker from '@/components/LottieSticker';
 import { GroupSettingsModal } from '@/components/GroupSettingsModal';
 import { GroupInfoSheet } from '@/components/GroupInfoSheet';
@@ -141,6 +145,8 @@ export default function ChatDetailPage() {
   // 录音按下状态（按住录音模式）
   const [voicePressActive, setVoicePressActive] = useState(false);
   const [sessionEstablished, setSessionEstablished] = useState(false);
+  const [historyNonce, setHistoryNonce] = useState(0);
+  const [keySyncing, setKeySyncing] = useState(false);
   const [encryptionLog, setEncryptionLog] = useState<string[]>([]);
   const messageListRef = useRef<VirtualMessageListHandle>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -185,16 +191,16 @@ export default function ChatDetailPage() {
     userId: state.currentUser?.id || localStorage.getItem('user_id') || 'me',
     wsRef: signalWs,
     enabled: isGroupChat,
-    onNewMessage: useCallback((msg) => {
+    onNewMessage: useCallback((msg: GroupMessage) => {
       if (!chatId || !chat) return;
       // 更新会话列表的最后一条消息预览
-      const preview = msg.msgType === 'image' ? '[图片]' :
-        msg.msgType === 'video' ? '[视频]' :
-        msg.msgType === 'voice' ? '[语音]' :
-        msg.msgType === 'sticker' ? '[贴纸]' :
-        msg.msgType === 'location' ? '[位置]' :
-        msg.msgType === 'system' ? msg.content :
-        msg.content || '';
+      const preview = formatChatListPreview({
+        content: msg.content,
+        type: msg.msgType,
+        decryptionStatus: msg.decryptionStatus,
+        isRecalled: msg.isRevoked,
+        stickerEmoji: msg.extra?.stickerEmoji,
+      });
       const senderLabel = msg.senderId === (state.currentUser?.id || 'me') ? '' : `${msg.senderName}: `;
       upsertChat({
         ...chat,
@@ -222,11 +228,9 @@ export default function ChatDetailPage() {
       reactions: {},
       status: gm.status === 'sending' ? 'sending' : 'delivered',
       isRecalled: gm.isRevoked,
-      ...(gm.extra?.imageUrl ? { imageUrl: gm.extra.imageUrl } : {}),
-      ...(gm.extra?.videoUrl ? { videoUrl: gm.extra.videoUrl } : {}),
-      ...(gm.extra?.stickerUrl ? { stickerUrl: gm.extra.stickerUrl, stickerEmoji: gm.extra.stickerEmoji, stickerSetName: gm.extra.stickerSetName } : {}),
-      ...(gm.extra?.locationData ? { locationData: gm.extra.locationData } : {}),
-      ...(gm.extra?.voiceUrl ? { voiceUrl: gm.extra.voiceUrl, duration: gm.extra.duration || 0 } : {}),
+      decryptionFailed: gm.mlsDecryptFailed,
+      decryptionStatus: gm.decryptionStatus,
+      ...messageMediaPatch(gm.extra),
       ...(gm.replyToId ? { replyTo: gm.replyToId } : {}),
       ...(gm.extra?.mentions ? { mentions: gm.extra.mentions } : {}),
     }));
@@ -424,18 +428,22 @@ export default function ChatDetailPage() {
             status: m.status || 'sent',
             isRecalled: m.isRevoked || false,
             replyTo: m.replyToId || undefined,
-            ...(finalExtra?.voiceUrl ? { voiceUrl: finalExtra.voiceUrl, duration: finalExtra.duration || 0 } : {}),
-            ...(finalExtra?.imageUrl ? { imageUrl: finalExtra.imageUrl } : {}),
-            ...(finalExtra?.videoUrl ? { videoUrl: finalExtra.videoUrl } : {}),
-            ...(finalExtra?.locationData ? { locationData: finalExtra.locationData } : {}),
-            ...(finalExtra?.stickerUrl ? { stickerUrl: finalExtra.stickerUrl, stickerEmoji: finalExtra.stickerEmoji, stickerSetName: finalExtra.stickerSetName } : {}),
+            ...messageMediaPatch(finalExtra),
             ...(m.hmac ? { hmac: m.hmac, integrityStatus: 'unverified' as const } : {}),
           };
         });
 
         if (!cancelled) {
-          setMessages(chatId, mergeMessages(cached, msgs));
+          const merged = mergeMessages(cached, msgs);
+          setMessages(chatId, merged);
           setHasMoreMessages(data.hasMore || false);
+          const lastVisible = [...merged].reverse().find(item => !item.isRecalled);
+          if (lastVisible && chat) {
+            const preview = formatChatListPreview(lastVisible);
+            if (preview && (isOpaquePreview(chat.lastMessage) || !chat.lastMessage)) {
+              upsertChat({ ...chat, lastMessage: preview, lastMessageTime: lastVisible.timestamp });
+            }
+          }
           trackEvent('private_history_sync', { chatId, count: msgs.length, direction: 'inbound' });
         }
       } catch (err) {
@@ -447,7 +455,7 @@ export default function ChatDetailPage() {
 
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatId, currentUserId]);
+  }, [chatId, currentUserId, historyNonce]);
 
   useEffect(() => {
     setChatMissing(false);
@@ -1142,7 +1150,7 @@ export default function ChatDetailPage() {
       }
 
       // 上传到服务器
-      const resp = await fetch('/api/media/upload', {
+      const resp = await authFetch('/api/media/upload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1201,9 +1209,12 @@ export default function ChatDetailPage() {
           type: mediaType,
           timestamp: msgTimestamp,
           isEncrypted: true,
+          reactions: {},
           status: 'sending',
           imageUrl: mediaType === 'image' ? data.url : undefined,
           videoUrl: mediaType === 'video' ? data.url : undefined,
+          fileKey,
+          iv,
           burnAfterRead: effectiveBurnTimer,
           forwardRestricted,
         };
@@ -1586,6 +1597,40 @@ export default function ChatDetailPage() {
     closeChat();
   }, [closeChat]);
 
+  const failedDecryptCount = messages.filter(message => message.decryptionFailed || message.decryptionStatus === 'failed').length;
+  const showPrivateKeyBanner = !isGroupChat
+    && !chat?.members?.includes('official')
+    && !chat?.members?.includes('BOT')
+    && failedDecryptCount > 0;
+  const showGroupKeyBanner = isGroupChat && (
+    groupSync.mlsSyncing
+    || !!groupSync.mlsError
+    || failedDecryptCount > 0
+    || (messages.length === 0 && !groupSync.loading && !groupSync.mlsReady && !loadingMessages)
+  );
+
+  const retryPrivateKeySync = useCallback(async () => {
+    if (!otherMember) return;
+    setKeySyncing(true);
+    try {
+      await e2ee.resetSession(otherMember);
+      const bundle = await e2ee.fetchRemoteBundle(otherMember);
+      await e2ee.establishSession(otherMember, bundle);
+      setSessionEstablished(true);
+      setHistoryNonce(value => value + 1);
+      toast.success('安全会话已重建，正在重新解密');
+    } catch (err: any) {
+      toast.error(err?.message || '重建安全会话失败');
+    } finally {
+      setKeySyncing(false);
+    }
+  }, [otherMember, e2ee]);
+
+  const retryGroupKeySync = useCallback(async () => {
+    await groupSync.retryMls();
+    await groupSync.reload();
+  }, [groupSync]);
+
   if (chatMissing) {
     return (
       <div className="tg-chat-shell flex flex-col h-full items-center justify-center px-6 text-center gap-4">
@@ -1624,7 +1669,11 @@ export default function ChatDetailPage() {
         presenceLabel={presenceLastSeen ? `最后在线 ${formatLastSeen(presenceLastSeen)}` : undefined}
         groupMemberCount={groupMembers.length}
         ephemeralTimer={ephemeralTimer}
-        e2ee={{ isReady: e2ee.isReady, isInitializing: e2ee.isInitializing, sessionEstablished }}
+        e2ee={{
+          isReady: isGroupChat ? groupSync.mlsReady : e2ee.isReady,
+          isInitializing: isGroupChat ? groupSync.mlsSyncing : e2ee.isInitializing,
+          sessionEstablished: isGroupChat ? groupSync.mlsReady : sessionEstablished,
+        }}
         onBack={() => {
           messageListRef.current?.persistAnchor();
           closeChat();
@@ -1646,6 +1695,22 @@ export default function ChatDetailPage() {
         onShowMLS={() => setShowMLSInfo(true)}
       />
       {/* E2EE 状态已合并到 Header 副标题行，此处不再重复展示 */}
+      {showGroupKeyBanner && (
+        <KeySyncBanner
+          kind="group"
+          syncing={groupSync.mlsSyncing}
+          error={groupSync.mlsError}
+          onRetry={retryGroupKeySync}
+        />
+      )}
+      {showPrivateKeyBanner && (
+        <KeySyncBanner
+          kind="private"
+          syncing={keySyncing}
+          error={failedDecryptCount > 0 ? `有 ${failedDecryptCount} 条消息无法解密` : null}
+          onRetry={retryPrivateKeySync}
+        />
+      )}
 
       {/* 官方账号认证横幅 */}
       {chat.members?.includes('official') && (

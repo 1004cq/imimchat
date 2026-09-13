@@ -81,6 +81,8 @@ export interface Message {
   direction?: 'inbound' | 'outbound';
   /** 解密缓存状态，不记录到服务器 */
   decryptionStatus?: 'decrypted' | 'ciphertext' | 'failed' | 'legacy';
+  /** 入站解密失败标记（与 decryptionStatus=failed 同步） */
+  decryptionFailed?: boolean;
   isEncrypted: boolean;
   reactions: Record<string, number>;
   status: 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
@@ -88,6 +90,10 @@ export interface Message {
   imageUrl?: string;
   /** 视频消息 URL */
   videoUrl?: string;
+  /** AES file key for encrypted image/video blobs (local only) */
+  fileKey?: string;
+  /** AES IV for encrypted image/video blobs (local only) */
+  iv?: string;
   fileName?: string;
   fileSize?: string;
   duration?: number; // 语音时长(秒)

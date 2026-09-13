@@ -4,6 +4,7 @@ import { Pin, X, VolumeX, Lock, MessageCircle } from 'lucide-react';
 import { DoveAvatar } from '@/components/DoveAvatar';
 import { GoldVerifiedBadge } from '@/components/GoldVerifiedBadge';
 import { formatTime, type Chat } from '@/lib/store';
+import { sanitizePreviewText } from '@/lib/chatPreview';
 
 interface ChatListItemProps {
   chat: Chat;
@@ -123,7 +124,7 @@ export const ChatListItem = React.memo(function ChatListItem({
             <span className="text-[11px] text-muted-foreground/50 flex-shrink-0 ml-2">{formatTime(chat.lastMessageTime || 0)}</span>
           </div>
           <div className="flex items-center justify-between">
-            <p className="text-[12px] text-muted-foreground truncate flex-1">{chat.lastMessage || ''}</p>
+            <p className="text-[12px] text-muted-foreground truncate flex-1">{sanitizePreviewText(chat.lastMessage)}</p>
             {chat.unreadCount > 0 && (
               <motion.span
                 initial={{ scale: 0 }}
