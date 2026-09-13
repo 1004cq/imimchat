@@ -244,6 +244,9 @@ export function useGroupSync(options: UseGroupSyncOptions) {
   const [hasMore, setHasMore] = useState(true);
   const [unreadCount, setUnreadCount] = useState(0);
   const [latestSeq, setLatestSeq] = useState(0);
+  const [mlsReady, setMlsReady] = useState(false);
+  const [mlsSyncing, setMlsSyncing] = useState(false);
+  const [mlsError, setMlsError] = useState<string | null>(null);
 
   const lastAckSeqRef = useRef(0);
   const localSeqRef = useRef(0);
@@ -341,6 +344,25 @@ export function useGroupSync(options: UseGroupSyncOptions) {
   const lastSeqStorageKey = `cqim:last-seq:${groupId}:${userId}`;
   const syncStateId = `group:${groupId}:${userId}`;
 
+  const retryMls = useCallback(async () => {
+    if (!groupId || !userId) return;
+    setMlsSyncing(true);
+    setMlsError(null);
+    try {
+      const { MLSGroupManager } = await import('@/lib/e2ee/MLSGroupManager');
+      const manager = MLSGroupManager.shared();
+      if (!manager.isInitialized) await manager.initialize(userId);
+      const result = await manager.recoverFromServer(groupId);
+      setMlsReady(result.ready);
+      setMlsError(result.ready ? null : (result.error || '群安全会话未就绪'));
+    } catch (error) {
+      setMlsReady(false);
+      setMlsError(error instanceof Error ? error.message : '同步群密钥失败');
+    } finally {
+      setMlsSyncing(false);
+    }
+  }, [groupId, userId]);
+
   const persistLastSeq = useCallback((seq: number) => {
     if (!groupId || !userId || seq <= 0) return;
     try {
@@ -383,6 +405,8 @@ export function useGroupSync(options: UseGroupSyncOptions) {
       if (cached.length > 0) initialSeq = Math.max(initialSeq, cached[cached.length - 1].seq);
       localSeqRef.current = initialSeq;
 
+      await retryMls();
+
       // 只拉本地最后一条之后的新消息；无缓存时由服务端返回最近一页。
       const pulled = await pullMessages(initialSeq > 0 ? initialSeq : undefined);
       if (pulled.length > 0) {
@@ -391,15 +415,19 @@ export function useGroupSync(options: UseGroupSyncOptions) {
         const newestSeq = Math.max(initialSeq, ...decrypted.map(message => message.seq));
         localSeqRef.current = newestSeq;
         persistLastSeq(newestSeq);
+        const last = decrypted[decrypted.length - 1];
+        if (last) onNewMessageRef.current?.(last);
       } else if (initialSeq > 0) {
         persistLastSeq(initialSeq);
+        const cachedLast = messagesRef.current[messagesRef.current.length - 1];
+        if (cachedLast) onNewMessageRef.current?.(cachedLast);
       }
     } catch (error) {
       console.error('[GroupSync] 初始化失败:', error);
     } finally {
       setLoading(false);
     }
-  }, [enabled, groupId, userId, pullMessages, syncStateId, lastSeqStorageKey, maxMessagesInMemory, handleBatchMessages, persistLastSeq]);
+  }, [enabled, groupId, userId, pullMessages, syncStateId, lastSeqStorageKey, maxMessagesInMemory, handleBatchMessages, persistLastSeq, retryMls]);
 
   // 首次进入加载
   useEffect(() => {
@@ -803,5 +831,13 @@ export function useGroupSync(options: UseGroupSyncOptions) {
     recallMessage,
     /** 重新加载 */
     reload: loadInitial,
+    /** 群 MLS 是否已有本地 epoch */
+    mlsReady,
+    /** 正在拉 Welcome/Commit */
+    mlsSyncing,
+    /** 密钥同步错误（重装后常见） */
+    mlsError,
+    /** 重试 MLS 恢复 */
+    retryMls,
   };
 }

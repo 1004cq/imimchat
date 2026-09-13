@@ -88,7 +88,7 @@ export const ChatHeader = React.memo(function ChatHeader({
           ) : isGroupChat ? (
             <>
               <span className="text-[9px] font-medium text-muted-foreground">{groupMemberCount > 0 ? `${groupMemberCount} 位成员` : '群聊'}</span>
-              <EncryptionBadge e2ee={{ ...e2ee, sessionEstablished: true }} isGroupChat onClick={onShowMLS} />
+              <EncryptionBadge e2ee={e2ee} isGroupChat onClick={onShowMLS} />
             </>
           ) : (
             <>
