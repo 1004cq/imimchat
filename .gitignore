@@ -27,6 +27,7 @@ redisdata/
 backups/
 *.sql
 *.sql.gz
+!cqim-app/prisma/migrations/**/*.sql
 
 # junk
 .DS_Store
