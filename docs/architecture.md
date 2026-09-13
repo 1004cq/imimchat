@@ -33,4 +33,4 @@ iOS 原生在仓 `imimchatios`，本仓只有 Web + 后端。
 
 不做 MTProto。双机用 Redis Pub/Sub，不要共享 SQLite，EdgeOne 不要轮询 `/signal`。
 
-迁库：[cqim-app/docs/MIGRATE_POSTGRES.md](../cqim-app/docs/MIGRATE_POSTGRES.md)
+迁库：[cqim-app/docs/MIGRATE_POSTGRES.md](../cqim-app/docs/MIGRATE_POSTGRES.md)（Git 已有 `init_postgres` SQL；线上仍要机主改 `DATABASE_URL` 并 `migrate deploy`）

@@ -19,8 +19,9 @@
               │ GATEWAY_ID=gw-app-1        GATEWAY_ID=gw-app-2  │
               └───────────────────────┬───────────────────────┘
                                       │
-                           节点1：Redis（6380）+ 共享数据（NFS/SQLite）
+                           节点1：Redis（6380）；Prisma = 腾讯云 PostgreSQL（两节点同一库）
                            跨节点推送：Redis Pub/Sub cqim:im:push
+                           禁止 NFS 共享 .db；禁止 mongodb:// 当 DATABASE_URL
 ```
 
 **禁止**：EdgeOne 多源站轮询、两套独立数据库、在节点2 对外暴露 wed.imim.chat 的 Nginx/SSL。
@@ -29,10 +30,10 @@
 
 | 角色 | IP | 运行服务 |
 |------|-----|----------|
-| 节点1（入口 + 数据） | 42.194.167.201 | cqim、go-gateway、Redis、MySQL、Mongo、宿主机 Nginx + SSL |
+| 节点1（入口 + 数据） | 42.194.167.201 | cqim、go-gateway、Redis、MySQL（可选）、宿主机 Nginx + SSL；Prisma 连腾讯云 PG |
 | 节点2（应用） | 106.53.196.247 | 仅 cqim、go-gateway；**无** 对外 Nginx |
 
-当前生产使用 **SQLite**（NFS 共享 `cqim.db`）+ **Redis Pub/Sub** 跨节点投递。若迁移 Mongo，将 `DATABASE_URL` 指向节点1 内网 `27017` 即可，双节点推送逻辑不变。
+Prisma 主库必须是 **PostgreSQL**（腾讯云内网 `DATABASE_URL=postgresql://...`）。**Mongo 不是 Prisma 主库**，不要把 `mongodb://` 填进 `DATABASE_URL`。切流前线上可能仍是 SQLite 文件；**禁止 NFS 共享 `.db`**。跨节点投递仍用 Redis Pub/Sub。切流步骤见 [MIGRATE_POSTGRES.md](./MIGRATE_POSTGRES.md)。
 
 ## 节点1 部署
 
@@ -66,16 +67,9 @@ docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml up -d
 
 节点1 Docker Redis 映射 `6380:6379`，安全组 / `ufw` 仅允许 `106.53.196.247` 访问 `6380`。
 
-### NFS 共享数据（SQLite）
+### 不要 NFS 共享 Prisma `.db`
 
-```bash
-# 节点1
-echo '/home/ubuntu/cqim_shared/data 106.53.196.247(rw,sync,no_subtree_check,no_root_squash)' | sudo tee -a /etc/exports
-sudo exportfs -ra
-
-# 节点2
-sudo mount -t nfs 42.194.167.201:/home/ubuntu/cqim_shared/data /home/ubuntu/cqim_shared/data
-```
+两节点的 `DATABASE_URL` 都指向**同一条**腾讯云 PG。`/home/ubuntu/cqim_shared/data` 只给媒体等文件用，**不是**主库。Gateway `DB_PATH` 仍可能读本机 sqlite，迁网关另做。
 
 ## 节点2 部署
 
@@ -131,4 +125,4 @@ docker compose up -d
 | `deploy/docker-compose.prod.yml` | 节点1 生产覆盖（wed.imim.chat） |
 | `deploy/docker-compose.app.yml` | 节点2 仅应用层 |
 | `deploy/env.app.example` | 节点2 环境变量模板 |
-| `docs/dual-node-deploy.md` | 通用双节点说明（Mongo 版） |
+| `docs/dual-node-deploy.md` | 旧通用双节点说明（Mongo 时代；Prisma 主库以本页 + MIGRATE_POSTGRES.md 为准） |

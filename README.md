@@ -29,7 +29,7 @@ WuKongIM 不是主路径。
 | Go Gateway | 仍可读 `DB_PATH` 默认 sqlite，迁库后要改 |
 
 切 PG 见 [cqim-app/docs/MIGRATE_POSTGRES.md](./cqim-app/docs/MIGRATE_POSTGRES.md)。
-仓里还**没有**可直接在空 PG 上 `deploy` 的正式 migration SQL，要在空库自己 `prisma migrate dev`。
+Git 已有 `cqim-app/prisma/migrations/20260913225500_init_postgres/`。线上仍要机主改 `DATABASE_URL` 并 `prisma migrate deploy`（本仓不改 wed 机器）。
 
 ---
 
@@ -48,7 +48,7 @@ WuKongIM 不是主路径。
 ```bash
 cd cqim-app
 cp .env.example .env   # DATABASE_URL 必须是 postgresql://...
-npx prisma migrate dev  # 空 PG
+npx prisma migrate deploy  # 空 PG 应用 init_postgres
 docker compose up -d --build
 ```
 
@@ -61,7 +61,7 @@ EdgeOne 源站只回第一台，不要源站组轮询 WebSocket。禁止 NFS 共
 
 ## 还没做完
 
-1. 生产切 PostgreSQL + 提交 migrate SQL
+1. 生产切 PostgreSQL：Git 侧 SQL 已提交，机主仍须设 `DATABASE_URL` + `migrate deploy`
 2. APNs：仅 foreground 免推
 3. Gateway 离开 sqlite
 4. iOS 与 Web 对齐（另仓）
