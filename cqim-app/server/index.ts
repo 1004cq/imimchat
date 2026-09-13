@@ -54,6 +54,7 @@ import apnsRouter from "./apns";
 import jpushRouter from "./jpush";
 import webPushRouter from "./web-push";
 import { notifyPrivateMessagePush } from "./push-notify.js";
+import { setPresence } from "./presence";
 import { publishImPush, subscribeImPush } from "./publish-im.js";
 import cookieParser from "cookie-parser";
 import compression from "compression";
@@ -1633,6 +1634,29 @@ app.use("/api/home", homeRouter);
   app.use('/api/apns', apnsRouter);
   app.use('/api/jpush', jpushRouter);
   app.use('/api/web-push', webPushRouter);
+
+  /**
+   * POST /api/presence
+   * Body: { state: "foreground"|"background"|"offline", activeChatId?: string|null }
+   */
+  app.post('/api/presence', userAuth, async (req, res) => {
+    try {
+      const currentUser = (req as any).user;
+      const { state, activeChatId } = req.body || {};
+      if (state !== 'foreground' && state !== 'background' && state !== 'offline') {
+        return res.status(400).json({ error: '无效的 state' });
+      }
+      const chatId =
+        typeof activeChatId === 'string' && activeChatId.length > 0
+          ? activeChatId
+          : undefined;
+      await setPresence(currentUser.id, state, chatId);
+      return res.json({ success: true });
+    } catch (err) {
+      console.error('[presence] 设置失败:', err);
+      return res.status(500).json({ error: '服务器内部错误' });
+    }
+  });
 
   // ============ 贴纸 API ============
   // 注册 TGS 和 WebP 的正确 MIME 类型，确保浏览器能正确处理
