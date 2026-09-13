@@ -71,6 +71,7 @@ import groupRouter, {
 } from "./group-message";
 import { avatarToProxy } from "./cos-signer";
 import { publicUrl } from "./public-url";
+import { resolveTrtcSdkAppId } from "./trtc-config";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1672,8 +1673,12 @@ app.use("/api/home", homeRouter);
         return res.status(401).json({ error: '未登录' });
       }
 
-      const TRTC_SDK_APPID = Number(process.env.TRTC_SDK_APP_ID) || 1600136830;
+      const TRTC_SDK_APPID = resolveTrtcSdkAppId(process.env.TRTC_SDK_APP_ID);
       const TRTC_SECRET_KEY = process.env.TRTC_SECRET_KEY || '';
+      if (!TRTC_SDK_APPID) {
+        console.error('[TRTC] TRTC_SDK_APP_ID 未配置或无效，拒绝签发 UserSig');
+        return res.status(500).json({ error: 'TRTC 未配置' });
+      }
       if (!TRTC_SECRET_KEY) {
         return res.status(500).json({ error: 'TRTC 未配置' });
       }

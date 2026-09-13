@@ -39,7 +39,7 @@ WuKongIM 不是主路径。
 - API：Node + Express（`cqim-app/server`）
 - 网关：Go（`cqim-app/go-gateway`）
 - 私聊：强制 `msgType=encrypted`
-- 通话：TRTC SDKAppID **1600159677**（禁止 1600136830）
+- 通话：TRTC SDKAppID **1600159677**（已移除 1600136830 回落；缺 env 直接失败）
 
 ---
 

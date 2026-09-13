@@ -20,7 +20,7 @@ export async function initTUICallKit(token: string, userId: string, nickname: st
     const data = await res.json();
     const { userSig, sdkAppId } = data;
     if (!userSig || !sdkAppId) {
-      console.error('[TUICallKit] usersig 缺 sdkAppId，禁止回落 1600136830');
+      console.error('[TUICallKit] usersig 缺 sdkAppId，已移除本地 SDKAppID 回落');
       globalInitializing = false;
       return false;
     }
