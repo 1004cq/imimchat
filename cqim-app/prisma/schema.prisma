@@ -6,3 +6,474 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+model User {
+  id          String   @id @default(cuid())
+  dialogId    String?  @unique
+  username    String   @unique
+  email       String?  @unique
+  phone       String?  @unique
+  password    String
+  nickname    String?
+  avatar      String?
+  backgroundUrl String?
+  bio         String?
+  gender      String?
+  region      String?
+  birthday    String?
+  isBot       Boolean  @default(false)
+  isBanned    Boolean  @default(false)
+  banReason   String?
+  role        String   @default("user")
+  phoneVerified Boolean @default(false)
+  emailVerified Boolean @default(false)
+  lastLoginAt DateTime?
+  lastLoginIp String?
+  fcmToken    String?
+  voipToken   String?
+  webPushSubscription String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  moments     Moment[]
+  comments    MomentComment[]
+  likes       MomentLike[]
+  loginLogs   LoginLog[]
+  sessions    UserSession[]
+  mediaFiles  MediaFile[]
+  hiddenChats ChatHidden[]
+  @@index([dialogId])
+  @@index([username])
+  @@index([email])
+  @@index([phone])
+}
+
+model UserSession {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  device    String?
+  ip        String?
+  location  String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([token])
+  @@index([userId])
+  @@index([token, expiresAt])
+}
+
+model VerifyCode {
+  id        String   @id @default(cuid())
+  target    String
+  code      String
+  type      String
+  channel   String
+  used      Boolean  @default(false)
+  attempts  Int      @default(0)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  @@index([target, type, channel])
+  @@index([expiresAt])
+  @@index([target, type, channel, used, expiresAt])
+}
+
+model Moment {
+  id          String   @id @default(cuid())
+  userId      String
+  content     String
+  visibility  String   @default("public")
+  location    String?
+  topics      String?
+  isPinned    Boolean  @default(false)
+  pinnedAt    DateTime?
+  viewCount   Int      @default(0)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  media       MomentMedia[]
+  comments    MomentComment[]
+  likes       MomentLike[]
+  @@index([userId])
+  @@index([createdAt])
+  @@index([isPinned])
+  @@index([sortOrder])
+  @@index([userId, createdAt])
+  @@index([visibility, createdAt])
+  @@index([userId, isPinned, pinnedAt])
+}
+
+model MomentMedia {
+  id        String   @id @default(cuid())
+  momentId  String
+  type      String
+  url       String
+  width     Int?
+  height    Int?
+  duration  Int?
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  moment    Moment   @relation(fields: [momentId], references: [id], onDelete: Cascade)
+  @@index([momentId])
+}
+
+model MomentComment {
+  id        String   @id @default(cuid())
+  momentId  String
+  userId    String
+  content   String
+  replyToId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  moment    Moment         @relation(fields: [momentId], references: [id], onDelete: Cascade)
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replyTo   MomentComment? @relation("CommentReplies", fields: [replyToId], references: [id])
+  replies   MomentComment[] @relation("CommentReplies")
+  @@index([momentId])
+  @@index([userId])
+}
+
+model MomentLike {
+  id        String   @id @default(cuid())
+  momentId  String
+  userId    String
+  createdAt DateTime @default(now())
+  moment    Moment   @relation(fields: [momentId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([momentId, userId])
+  @@index([momentId])
+  @@index([userId])
+}
+
+model MediaFile {
+  id        String   @id @default(cuid())
+  userId    String?
+  type      String
+  url       String
+  filename  String?
+  size      Int?
+  width     Int?
+  height    Int?
+  cosKey    String?
+  createdAt DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  @@index([userId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+model AdminAccount {
+  id        String   @id @default(cuid())
+  username  String   @unique
+  password  String
+  role      String   @default("admin")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  sessions  AdminSession[]
+  logs      AdminLog[]
+}
+
+model AdminSession {
+  id        String   @id @default(cuid())
+  adminId   String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  admin     AdminAccount @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  @@index([token])
+}
+
+model AdminLog {
+  id        String   @id @default(cuid())
+  adminId   String?
+  adminName String?
+  action    String
+  target    String?
+  detail    String?
+  ip        String?
+  createdAt DateTime @default(now())
+  admin     AdminAccount? @relation(fields: [adminId], references: [id], onDelete: SetNull)
+  @@index([adminId])
+  @@index([createdAt])
+}
+
+model LoginLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  username   String?
+  email      String?
+  phone      String?
+  ip         String?
+  userAgent  String?
+  country    String?
+  city       String?
+  success    Boolean  @default(true)
+  failReason String?
+  loginType  String?
+  createdAt  DateTime @default(now())
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  @@index([userId])
+  @@index([ip])
+  @@index([createdAt])
+}
+
+model IpBlacklist {
+  id        String   @id @default(cuid())
+  ip        String   @unique
+  reason    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([ip])
+}
+
+model IllegalRequest {
+  id         String   @id @default(cuid())
+  ip         String?
+  path       String?
+  method     String?
+  userAgent  String?
+  reason     String?
+  statusCode Int?
+  createdAt  DateTime @default(now())
+  @@index([ip])
+  @@index([createdAt])
+}
+
+model SystemConfig {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model Announcement {
+  id        String   @id @default(cuid())
+  title     String
+  content   String
+  type      String   @default("info")
+  isActive  Boolean  @default(true)
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([isActive])
+  @@index([createdAt])
+}
+
+model SensitiveWord {
+  id        String   @id @default(cuid())
+  word      String   @unique
+  category  String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  @@index([word])
+  @@index([isActive])
+}
+
+model Report {
+  id          String   @id @default(cuid())
+  reporterId  String?
+  targetType  String
+  targetId    String
+  reason      String
+  status      String   @default("pending")
+  resolvedBy  String?
+  resolvedAt  DateTime?
+  createdAt   DateTime @default(now())
+  @@index([status])
+  @@index([targetType, targetId])
+  @@index([createdAt])
+}
+
+model CustomPage {
+  id        String   @id @default(cuid())
+  title     String
+  slug      String   @unique
+  content   String
+  published Boolean  @default(false)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([slug])
+  @@index([published])
+}
+
+model FriendRequest {
+  id          String   @id @default(cuid())
+  fromId      String
+  toId        String
+  message     String?  @default("")
+  status      String   @default("pending")
+  searchMethod String  @default("id")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  @@unique([fromId, toId])
+  @@index([fromId])
+  @@index([toId])
+  @@index([status])
+}
+
+model Friendship {
+  id          String   @id @default(cuid())
+  userA       String
+  userB       String
+  createdAt   DateTime @default(now())
+  @@unique([userA, userB])
+  @@index([userA])
+  @@index([userB])
+}
+
+model Chat {
+  id            String   @id @default(cuid())
+  participantA  String
+  participantB  String
+  lastMessage   String?
+  lastMessageAt DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  messages      PrivateMessage[]
+  hiddenBy      ChatHidden[]
+  @@unique([participantA, participantB])
+  @@index([participantA])
+  @@index([participantB])
+  @@index([lastMessageAt])
+}
+
+model ChatHidden {
+  id        String   @id @default(cuid())
+  chatId     String
+  userId     String
+  hiddenAt   DateTime @default(now())
+  chat       Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([chatId, userId])
+  @@index([userId, hiddenAt])
+  @@index([chatId])
+}
+
+model PrivateMessage {
+  id            String   @id @default(cuid())
+  chatId        String
+  senderId      String
+  msgType       String   @default("text")
+  content       String
+  replyToId     String?
+  isRevoked     Boolean  @default(false)
+  status        String   @default("sent")
+  extra         String?
+  hmac          String?
+  burnAfterRead Int?
+  burnReadAt    DateTime?
+  burnExpireAt  DateTime?
+  createdAt     DateTime @default(now())
+  chat          Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  @@index([chatId, createdAt])
+  @@index([senderId])
+  @@index([chatId, isRevoked])
+  @@index([burnExpireAt])
+}
+
+model Group {
+  id            String   @id @default(cuid())
+  dialogId      String?  @unique
+  name          String
+  username      String?  @unique
+  avatar        String?
+  ownerId       String
+  type          String   @default("normal")
+  isPublic      Boolean  @default(false)
+  maxMembers    Int      @default(500)
+  memberCount   Int      @default(0)
+  lastMsgSeq    BigInt   @default(0)
+  lastMsgTime   DateTime?
+  announcement  String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  members       GroupMember[]
+  messages      GroupMessage[]
+  invites       GroupInvite[]
+  inviteLinks   InviteLink[]
+  @@index([dialogId])
+  @@index([username])
+  @@index([ownerId])
+  @@index([type])
+  @@index([isPublic])
+  @@index([id, lastMsgSeq])
+}
+
+model GroupMember {
+  id            String   @id @default(cuid())
+  groupId       String
+  userId        String
+  role          String   @default("member")
+  nickname      String?
+  lastAckSeq    BigInt   @default(0)
+  joinTime      DateTime @default(now())
+  muteUntil     DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  group         Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  @@unique([groupId, userId])
+  @@index([groupId])
+  @@index([userId])
+  @@index([groupId, userId, joinTime, lastAckSeq])
+  @@index([userId, groupId, lastAckSeq])
+}
+
+model GroupMessage {
+  id            String   @id @default(cuid())
+  groupId       String
+  seq           BigInt
+  senderId      String
+  senderName    String?
+  msgType       String   @default("text")
+  content       String
+  replyToId     String?
+  isRevoked     Boolean  @default(false)
+  extra         String?
+  mlsEncrypted  Boolean  @default(false)
+  mlsEpoch      Int?     @default(0)
+  burnAfterRead Int?
+  burnExpireAt  DateTime?
+  createdAt     DateTime @default(now())
+  group         Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  @@unique([groupId, seq])
+  @@index([groupId, seq, createdAt])
+  @@index([senderId])
+  @@index([groupId, isRevoked])
+  @@index([burnExpireAt])
+  @@index([groupId, mlsEncrypted])
+}
+
+model GroupInvite {
+  id          String   @id @default(cuid())
+  groupId     String
+  inviterId   String
+  inviteeId   String
+  message     String?  @default("")
+  status      String   @default("pending")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  group       Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  @@unique([groupId, inviteeId, status])
+  @@index([inviterId])
+  @@index([inviteeId])
+  @@index([groupId])
+  @@index([status])
+}
+
+model InviteLink {
+  id          String    @id @default(cuid())
+  hash        String    @unique
+  groupId     String
+  creatorId   String
+  name        String?
+  expireAt    DateTime?
+  maxUses     Int       @default(0)
+  usedCount   Int       @default(0)
+  isRevoked   Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  group       Group     @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  @@index([hash])
+  @@index([groupId])
+  @@index([creatorId])
+  @@index([expireAt])
+}
