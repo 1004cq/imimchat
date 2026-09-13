@@ -1,19 +1,12 @@
 # imimchat / CQIM
 
-[Chinese](./README.md) | **English**
+[Chinese](./README.md)
 
-Private messenger: Web + Node API + Go Gateway. All product code lives in **[cqim-app](./cqim-app/)**.
+Main repo for Web + Node API + Go Gateway. Code: `cqim-app/`.
+Production: https://wed.imim.chat
 
-- Production: https://wed.imim.chat
-- Admin: https://wed.imim.chat/admin
-- iOS native app is **not** in this repo — see `1004cq/imimchatios`
+Prisma **schema** is `postgresql`. Production may still run **SQLite** until `DATABASE_URL` is switched and migrations are deployed. Mongo is not the Prisma database.
 
-Transport: HTTPS JSON + WebSocket. Not MTProto.
-
-Prisma currently uses **SQLite**. Plan: migrate to **PostgreSQL**. Redis is for presence and `cqim:im:push`. TRTC SDKAppID is **1600159677**.
-
-WuKongIM is legacy only.
-
-```bash
-cd cqim-app && cp .env.example .env && docker compose up -d --build
-```
+iOS: `1004cq/imimchatios` (not this repo).
+Not MTProto.
+TRTC SDKAppID: 1600159677.

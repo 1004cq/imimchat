@@ -2,88 +2,68 @@
 
 [English](./README_en.md) | **中文**
 
-私有化即时通讯（Web + API + Go Gateway）。核心代码在 **[cqim-app](./cqim-app/)**。
+私有化 IM。**主仓只有这一个**（旧仓 `cq` 已删）。产品代码在 `cqim-app/`。
 
-|项|值|
-|---|---|
-|线上|
-https://wed.imim.chat |
-|管理后台|
-https://wed.imim.chat/admin |
-|主仓|
-本仓 `imimchat`（已停用旧仓 `cq`）|
-|iOS 原生|
-另仓 [1004cq/imimchatios](https://github.com/1004cq/imimchatios)，不在本仓|
+| 项 | 值 |
+| --- | --- |
+| 线上 Web | https://wed.imim.chat |
+| 管理后台 | https://wed.imim.chat/admin |
+| API / WS | `https://wed.imim.chat/api` · `wss://wed.imim.chat/signal` |
+| iOS 原生 | 另仓 [1004cq/imimchatios](https://github.com/1004cq/imimchatios)，**不在本仓** |
 
-不做 MTProto / TDLib / 多 DC。传输是 **HTTPS JSON + WebSocket**。
+传输：HTTPS JSON + WebSocket。**不做** MTProto / TDLib / 多 DC。
+WuKongIM 不是主路径。
 
 ---
 
-## 现状（以代码为准，不以旧文档为准）
+## 数据库（以这段为准）
 
-|层|实际|
-|---|---|
-|前端|
-TypeScript / React / Vite（`cqim-app/client`）|
-|业务|
-Node.js / Express（`cqim-app/server`）|
-|网关|
-Go Gateway（`cqim-app/go-gateway`）|
-|协议|
-`/api` JSON + `wss://wed.imim.chat/signal`|
-|主库|
-**Prisma + SQLite**（`cqim-app/prisma`）。计划迁 **PostgreSQL**。README 旧说的 Mongo 不是 Prisma provider。|
-|缓存/跨节点|
-Redis（在线、`cqim:im:push`）|
-|加密|
-私聊强制 `msgType=encrypted`（Signal 方向）；群 MLS 方向|
-|TRTC|
-SDKAppID **1600159677**（应用名 im），禁止回落 1600136830|
+两件事要分开说，之前 README 混在一起了：
 
-WuKongIM / TangSengDaoDao 仅遗留参考，**不是主路径**。
+| | 现状 |
+| --- | --- |
+| Git 里 Prisma | `cqim-app/prisma/schema.prisma` 的 `provider = "postgresql"` |
+| 线上 wed.imim.chat | **仍可能在跑 SQLite 文件**（`dev.db`），直到你改 `DATABASE_URL` 并 `migrate deploy` |
+| Mongo | **不是** Prisma 主库。compose 里可能还有 mongo 服务，不要填进 `DATABASE_URL` |
+| Redis | 在线、缓存、`cqim:im:push` |
+| Go Gateway | 仍可读 `DB_PATH` 默认 sqlite，迁库后要改 |
+
+切 PG 见 [cqim-app/docs/MIGRATE_POSTGRES.md](./cqim-app/docs/MIGRATE_POSTGRES.md)。
+仓里还**没有**可直接在空 PG 上 `deploy` 的正式 migration SQL，要在空库自己 `prisma migrate dev`。
 
 ---
 
-## 目录
+## 技术栈
 
-```text
-imimchat/
-├── cqim-app/                 #★ 全栈（只改这里）
-│   ├── client/
-│   ├── server/
-│   ├── go-gateway/
-│   ├── prisma/
-│   ├── deploy/               # 双机 Nginx / compose
-│   └── docs/
-├── docs/
-├── nginx / docker / scripts #旧部署参考
-└── README.md
-```
+- Web：React + Vite（`cqim-app/client`）
+- API：Node + Express（`cqim-app/server`）
+- 网关：Go（`cqim-app/go-gateway`）
+- 私聊：强制 `msgType=encrypted`
+- 通话：TRTC SDKAppID **1600159677**（禁止 1600136830）
 
 ---
 
-## 本地起动
+## 本地
 
 ```bash
 cd cqim-app
-cp .env.example .env
+cp .env.example .env   # DATABASE_URL 必须是 postgresql://...
+npx prisma migrate dev  # 空 PG
 docker compose up -d --build
 ```
 
-详细：[cqim-app/docs/DEPLOY.md](./cqim-app/docs/DEPLOY.md)  
-双机：[cqim-app/docs/TWO_NODES.md](./cqim-app/docs/TWO_NODES.md)  
-EdgeOne 源站只回 **第一台**，不要用源站组轮询拆 `/signal`。禁止 NFS 共享 SQLite。
+部署：[cqim-app/docs/DEPLOY.md](./cqim-app/docs/DEPLOY.md)  
+双机：[cqim-app/docs/TWO_NODES.md](./cqim-app/docs/TWO_NODES.md)
+
+EdgeOne 源站只回第一台，不要源站组轮询 WebSocket。禁止 NFS 共享 `.db`。
 
 ---
 
-## P0（仓库与现网已知问题）
+## 还没做完
 
-1. SQLite `database disk image is malformed` → 迁 PostgreSQL
-2. 后台 WS 仍在线时 skip APNs → 仅 foreground 免推
-3. TRTC UserSig 与控制台 1600159677 对齐
-4. 聊天预览 / 图片加载 / 密钥同步体验
-5. 把本 README 与现网保持一致
-
----
+1. 生产切 PostgreSQL + 提交 migrate SQL
+2. APNs：仅 foreground 免推
+3. Gateway 离开 sqlite
+4. iOS 与 Web 对齐（另仓）
 
 MIT
