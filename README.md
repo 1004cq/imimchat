@@ -66,4 +66,7 @@ EdgeOne 源站只回第一台，不要源站组轮询 WebSocket。禁止 NFS 共
 3. Gateway 离开 sqlite
 4. iOS 与 Web 对齐（另仓）
 
-MIT
+## 版权
+
+本仓为私有仓，**不开源**。保留所有权利。未经授权不得复制、发布或再授权。
+GitHub「许可」显示「无」是正确的。
