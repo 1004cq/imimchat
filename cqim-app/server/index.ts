@@ -53,6 +53,7 @@ import getuiRouter from "./getui";
 import apnsRouter from "./apns";
 import jpushRouter from "./jpush";
 import webPushRouter from "./web-push";
+import presenceRouter from "./presence";
 import { notifyPrivateMessagePush } from "./push-notify.js";
 import { publishImPush, subscribeImPush } from "./publish-im.js";
 import cookieParser from "cookie-parser";
@@ -1633,6 +1634,7 @@ app.use("/api/home", homeRouter);
   app.use('/api/apns', apnsRouter);
   app.use('/api/jpush', jpushRouter);
   app.use('/api/web-push', webPushRouter);
+  app.use('/api/presence', presenceRouter);
 
   // ============ 贴纸 API ============
   // 注册 TGS 和 WebP 的正确 MIME 类型，确保浏览器能正确处理
