@@ -86,4 +86,36 @@ describe('POST /api/presence', () => {
       skipApns: false,
     });
   });
+
+  it('rejects invalid state', async () => {
+    const res = await fetch(`${url}/api/presence`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer test-token',
+      },
+      body: JSON.stringify({ state: 'online' }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('skips APNs only after foreground report', async () => {
+    const res = await fetch(`${url}/api/presence`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer test-token',
+      },
+      body: JSON.stringify({ state: 'foreground', activeChatId: 'chat-1' }),
+    });
+    expect(res.status).toBe(200);
+    const read = await fetch(`${url}/api/presence`, {
+      headers: { Authorization: 'Bearer test-token' },
+    });
+    expect(await read.json()).toMatchObject({
+      state: 'foreground',
+      activeChatId: 'chat-1',
+      skipApns: true,
+    });
+  });
 });
