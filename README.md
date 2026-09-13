@@ -1,101 +1,89 @@
-# CQIM 全栈即时通讯系统
+# imimchat / CQIM
 
-[English Version](./README_en.md) | **中文版**
+[English](./README_en.md) | **中文**
 
-> **CQIM** 是一套高性能、高安全性的全栈即时通讯系统。本仓库的核心迭代已全面转向 **[cqim-app](./cqim-app/)**，支持强制端到端加密（Signal/MLS）、朋友圈、贴纸商店及万人群聊优化。
+私有化即时通讯（Web + API + Go Gateway）。核心代码在 **[cqim-app](./cqim-app/)**。
 
-**访问地址：** https://cq.je  
-**管理后台：** https://cq.je/admin  
-**核心目录：** `./cqim-app`  
-**部署方式：** Docker Compose + Nginx 反向代理
+|项|值|
+|---|---|
+|线上|
+https://wed.imim.chat |
+|管理后台|
+https://wed.imim.chat/admin |
+|主仓|
+本仓 `imimchat`（已停用旧仓 `cq`）|
+|iOS 原生|
+另仓 [1004cq/imimchatios](https://github.com/1004cq/imimchatios)，不在本仓|
 
----
-
-## 项目组成
-
-本仓库以自研 **CQIM** 为核心，同时保留了早期的 WuKongIM 组件作为可选/遗留参考。
-
-| 组件 | 状态 | 技术栈 | 说明 |
-|------|------|--------|------|
-| **CQIM** | **核心/主迭代** | React + Node.js + Go + MongoDB + Redis | 高性能全栈 IM，支持强制 E2EE、朋友圈等 |
-| **WuKongIM** | 可选/遗留 | WuKongIM + TangSengDaoDao | 早期采用的私有化 IM 引擎方案 |
+不做 MTProto / TDLib / 多 DC。传输是 **HTTPS JSON + WebSocket**。
 
 ---
 
-## 技术栈 (CQIM)
+## 现状（以代码为准，不以旧文档为准）
 
-- **前端**：TypeScript / React 19 / Vite / Zustand / Framer Motion / RxDB (IndexedDB)
-- **后端**：Node.js / Express / Prisma
-- **网关**：Go Gateway (高性能群聊 WebSocket 扇出)
-- **数据**：MongoDB (主存)、Redis (缓存/在线状态/Pub-Sub)、MySQL (审计/可选)
-- **安全**：Signal Protocol (私聊 E2EE)、MLS (群聊 E2EE)、AES-GCM (媒体加密)
-- **部署**：Docker Compose + Nginx
+|层|实际|
+|---|---|
+|前端|
+TypeScript / React / Vite（`cqim-app/client`）|
+|业务|
+Node.js / Express（`cqim-app/server`）|
+|网关|
+Go Gateway（`cqim-app/go-gateway`）|
+|协议|
+`/api` JSON + `wss://wed.imim.chat/signal`|
+|主库|
+**Prisma + SQLite**（`cqim-app/prisma`）。计划迁 **PostgreSQL**。README 旧说的 Mongo 不是 Prisma provider。|
+|缓存/跨节点|
+Redis（在线、`cqim:im:push`）|
+|加密|
+私聊强制 `msgType=encrypted`（Signal 方向）；群 MLS 方向|
+|TRTC|
+SDKAppID **1600159677**（应用名 im），禁止回落 1600136830|
+
+WuKongIM / TangSengDaoDao 仅遗留参考，**不是主路径**。
 
 ---
 
-## 核心功能
-
-- **基础通讯**：私聊、群聊、语音消息、图片/视频/文件传输、消息撤回。
-- **强制 E2EE**：所有私聊强制 Signal 加密，群聊强制 MLS 加密，服务器零明文存储。
-- **社交动态**：完整的朋友圈（Moments）系统，支持图文、视频、点赞与评论。
-- **扩展能力**：贴纸商店（支持 Telegram 贴纸导入）、多渠道推送（Web Push/FCM/APNs/个推）、管理后台。
-- **性能优化**：Web Worker 加解密、IndexedDB 本地持久化秒开、Redis 缓存一致性优化。
-
----
-
-## 目录结构
+## 目录
 
 ```text
 imimchat/
-├── cqim-app/                   # ★ 核心：CQIM 全栈 IM 应用
-│   ├── client/                 # 前端源码 (React + Vite)
-│   ├── server/                 # 后端源码 (Node.js + Express)
-│   ├── go-gateway/             # Go 实时消息网关
-│   ├── prisma/                 # 数据库 Schema 与迁移
-│   └── docker-compose.yml      # 生产环境编排配置
-├── docs/                       # 项目详细文档
-├── register-service/           # 注册中间件（可选）
-├── nginx/                      # Nginx 反向代理配置参考
-└── scripts/                    # 运维与备份脚本
+├── cqim-app/                 #★ 全栈（只改这里）
+│   ├── client/
+│   ├── server/
+│   ├── go-gateway/
+│   ├── prisma/
+│   ├── deploy/               # 双机 Nginx / compose
+│   └── docs/
+├── docs/
+├── nginx / docker / scripts #旧部署参考
+└── README.md
 ```
 
 ---
 
-## 开发与部署
+## 本地起动
 
-### 快速启动 (CQIM)
+```bash
+cd cqim-app
+cp .env.example .env
+docker compose up -d --build
+```
 
-1. **进入工作目录**：
-   ```bash
-   cd cqim-app
-   ```
-
-2. **配置环境变量**：
-   ```bash
-   cp .env.example .env
-   # 按需修改 .env 中的数据库连接、强密码及 CORS 白名单
-   ```
-
-3. **一键启动**：
-   ```bash
-   docker-compose up -d --build
-   ```
-
-详细部署指引请参考：**[docs/DEPLOY.md](./cqim-app/docs/DEPLOY.md)**
+详细：[cqim-app/docs/DEPLOY.md](./cqim-app/docs/DEPLOY.md)  
+双机：[cqim-app/docs/TWO_NODES.md](./cqim-app/docs/TWO_NODES.md)  
+EdgeOne 源站只回 **第一台**，不要用源站组轮询拆 `/signal`。禁止 NFS 共享 SQLite。
 
 ---
 
-## 文档导航
+## P0（仓库与现网已知问题）
 
-| 文档 | 说明 |
-|------|------|
-| [BUGFIX_VERIFY.md](./docs/BUGFIX_VERIFY.md) | 最新 BUG 修复与一致性验证说明 |
-| [DEPLOY.md](./cqim-app/docs/DEPLOY.md) | CQIM 生产环境详细部署指南 |
-| [architecture.md](./docs/architecture.md) | 系统架构说明 (已更新为 CQIM 架构) |
-| [optimization.md](./docs/optimization.md) | 性能优化方案与路线图 |
+1. SQLite `database disk image is malformed` → 迁 PostgreSQL
+2. 后台 WS 仍在线时 skip APNs → 仅 foreground 免推
+3. TRTC UserSig 与控制台 1600159677 对齐
+4. 聊天预览 / 图片加载 / 密钥同步体验
+5. 把本 README 与现网保持一致
 
 ---
 
-## 许可证
-
-本项目遵循 MIT 许可证。
+MIT
