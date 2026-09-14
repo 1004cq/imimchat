@@ -1,4 +1,9 @@
-# wed.imim.chat 节点1 生产覆盖：宿主机 Nginx 终结 TLS，应用使用 SQLite 共享数据
+# wed.imim.chat 节点1 生产覆盖：宿主机 Nginx 终结 TLS
+#
+# Prisma/API 必须用 PostgreSQL（DATABASE_URL=postgresql://...）。
+# 禁止 file:/app/data/cqim.db、禁止把 Mongo URL 填进 DATABASE_URL、禁止 NFS 共享 .db。
+# Gateway 仍是 sqlite-only：必须显式设置节点本地 DB_PATH；空值会拒绝启动。
+# 不要把 DB_PATH 指到 /app/data/cqim.db 或 cqim_shared。
 services:
   nginx:
     profiles: ["container-edge"]
@@ -19,7 +24,8 @@ services:
     ports:
       - "127.0.0.1:3011:3000"
     environment:
-      DATABASE_URL: file:/app/data/cqim.db
+      # 必须由 .env 提供 postgresql://...；无静默 sqlite/mongo 默认值
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be postgresql://... (never file: sqlite, never Mongo)}
       REDIS_URL: redis://redis:6379
       MYSQL_URL: mysql://${MYSQL_USER:-cqim}:${MYSQL_PASSWORD:-cqim}@mysql:3306/${MYSQL_DATABASE:-cqim_audit}
       MYSQL_AUDIT_ENABLED: ${MYSQL_AUDIT_ENABLED:-false}
@@ -27,6 +33,7 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-https://wed.imim.chat,http://wed.imim.chat}
       GATEWAY_ID: ${GATEWAY_ID:-gw-app-1}
     volumes:
+      # 附件等本地数据。禁止把 Prisma / Gateway 的 .db 放在 NFS 共享目录。
       - /home/ubuntu/cqim_shared/data:/app/data
 
   go-gateway:
@@ -35,10 +42,9 @@ services:
       - "127.0.0.1:8082:8081"
     environment:
       GATEWAY_ID: ${GATEWAY_ID:-gw-app-1}
-      DB_PATH: /app/data/cqim.db
+      # 空值时 Gateway 拒绝启动。禁止 /app/data/cqim.db 与 NFS 共享 sqlite。
+      DB_PATH: ${DB_PATH:-}
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       REDIS_DB: ${REDIS_DB:-0}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://wed.imim.chat,http://wed.imim.chat}
-    volumes:
-      - /home/ubuntu/cqim_shared/data:/app/data

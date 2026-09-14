@@ -3,10 +3,9 @@
 # 用法（在节点2 的部署目录，与 docker-compose.yml 一起）：
 #   docker compose -f docker-compose.yml -f docker-compose.app.yml up -d cqim go-gateway
 #
-# 前置条件：
-#   - 节点1 Redis 已对节点2 开放（默认 6380）
-#   - 共享数据目录已挂载（NFS 或同盘）：/home/ubuntu/cqim_shared/data → /app/data
-#   - 节点2 的 3011、8082 已对节点1 可达（见 docs/TWO_NODES.md）
+# Prisma/API：DATABASE_URL 必须是节点1 的 PostgreSQL，禁止 file:/app/data/cqim.db，禁止 Mongo。
+# Gateway：仍是 sqlite-only，必须显式设置节点本地 DB_PATH；禁止 NFS 共享 .db。
+# 前置条件：节点1 Redis 已对节点2 开放（默认 6380）；节点2 的 3011、8082 对节点1 可达（见 docs/TWO_NODES.md）。
 
 services:
   nginx:
@@ -29,11 +28,12 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      DATABASE_URL: ${DATABASE_URL:-file:/app/data/cqim.db}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be postgresql://... (never file: sqlite, never Mongo)}
       REDIS_URL: ${REDIS_URL:-redis://NODE1_HOST:6380}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://wed.imim.chat}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://wed.imim.chat}
     volumes:
+      # 附件等。禁止把 Prisma / Gateway 的 .db 放在 NFS 共享目录。
       - ${SHARED_DATA_DIR:-/home/ubuntu/cqim_shared/data}:/app/data
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
@@ -49,6 +49,8 @@ services:
       - "0.0.0.0:8082:8081"
     environment:
       GATEWAY_ID: ${GATEWAY_ID:-gw-app-2}
+      # 空值时 Gateway 拒绝启动。禁止与节点1 共享 cqim.db。
+      DB_PATH: ${DB_PATH:-}
       REDIS_ADDR: ${REDIS_ADDR:-NODE1_HOST:6380}
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       REDIS_DB: ${REDIS_DB:-0}

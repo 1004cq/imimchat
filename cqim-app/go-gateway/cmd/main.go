@@ -16,15 +16,16 @@ import (
 	"github.com/cqim/go-gateway/internal/msgservice"
 	"github.com/cqim/go-gateway/internal/store"
 	"github.com/redis/go-redis/v9"
-
 )
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	log.Println("[Main] cqim Go Gateway 启动中...")
 
-	// 加载配置
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("[Main] %v", err)
+	}
 
 	// 初始化上下文
 	ctx, cancel := context.WithCancel(context.Background())
@@ -47,7 +48,7 @@ func main() {
 		log.Fatalf("[Main] 数据库连接失败: %v", err)
 	}
 	defer s.Close()
-	log.Printf("[Main] SQLite 数据库连接成功: %s", cfg.DBPath)
+	log.Printf("[Main] node-local SQLite opened (must not be NFS-shared; Prisma/API is PostgreSQL, not this file): %s", cfg.DBPath)
 
 	// 初始化 Session 验证器
 	verifier, err := auth.NewVerifier(cfg.DBPath)
