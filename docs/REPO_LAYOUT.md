@@ -14,6 +14,7 @@
 | `cqim-app/docs` | CQIM 部署/双机/迁库 |
 | `.github/workflows` | CI （typecheck） |
 | `README.md` | 现行说明（以这份为准） |
+| [LIVE_VS_REPO.md](./LIVE_VS_REPO.md) | 线上扁平 `cqim-release/` ↔ 本仓 `cqim-app/` |
 
 ## 遗留（不要当主路径）
 
