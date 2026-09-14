@@ -54,7 +54,7 @@ import apnsRouter from "./apns";
 import jpushRouter from "./jpush";
 import webPushRouter from "./web-push";
 import { notifyPrivateMessagePush } from "./push-notify.js";
-import { setPresence } from "./presence";
+import { getActiveChatId, getPresence, setPresence, shouldSkipApnsFromState } from "./presence";
 import { publishImPush, subscribeImPush } from "./publish-im.js";
 import cookieParser from "cookie-parser";
 import compression from "compression";
@@ -1649,11 +1649,35 @@ app.use("/api/home", homeRouter);
       const chatId =
         typeof activeChatId === 'string' && activeChatId.length > 0
           ? activeChatId
-          : undefined;
+          : activeChatId === null || activeChatId === ''
+            ? null
+            : undefined;
       await setPresence(currentUser.id, state, chatId);
       return res.json({ success: true });
     } catch (err) {
       console.error('[presence] 设置失败:', err);
+      return res.status(500).json({ error: '服务器内部错误' });
+    }
+  });
+
+  /**
+   * GET /api/presence
+   * Current user's APNs foreground/background state (not Gateway WS online).
+   */
+  app.get('/api/presence', userAuth, async (req, res) => {
+    try {
+      const currentUser = (req as any).user;
+      const [state, activeChatId] = await Promise.all([
+        getPresence(currentUser.id),
+        getActiveChatId(currentUser.id),
+      ]);
+      return res.json({
+        state,
+        activeChatId,
+        skipApns: shouldSkipApnsFromState(state),
+      });
+    } catch (err) {
+      console.error('[presence] 读取失败:', err);
       return res.status(500).json({ error: '服务器内部错误' });
     }
   });
