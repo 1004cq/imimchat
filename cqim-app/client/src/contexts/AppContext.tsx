@@ -29,6 +29,7 @@ import {
 import { e2eeProxy } from '@/lib/e2ee/WorkerProxy';
 import { formatChatListPreview, preferLocalChatPreview, sanitizePreviewText } from '@/lib/chatPreview';
 import { messageMediaPatch } from '@/lib/mediaFields';
+import { PRESENCE_HEARTBEAT_MS, reportPresence, resolvePresenceState } from '@/lib/presence';
 
 export interface AuthUser {
   id: string;
@@ -760,6 +761,54 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // FCM 推送通知（仅在 Native App 环境中生效）
   useJPush(state.isLoggedIn);
   useFCM(state.isLoggedIn);
+
+  // APNs 前台/后台 presence：仅 foreground 跳过推送；后台 tab 即使 WS 在线也必须上报 background
+  useEffect(() => {
+    if (!state.isLoggedIn) return;
+
+    const send = (keepalive = false) => {
+      const current = stateRef.current;
+      void reportPresence(
+        resolvePresenceState(),
+        current.showChat ? current.currentChatId : null,
+        { keepalive },
+      );
+    };
+
+    const onVisibility = () => send(document.visibilityState === 'hidden');
+    const onFocus = () => send();
+    const onPageHide = () => {
+      void reportPresence('background', stateRef.current.currentChatId, { keepalive: true });
+    };
+    const onFreeze = () => {
+      void reportPresence('background', stateRef.current.currentChatId, { keepalive: true });
+    };
+
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('pagehide', onPageHide);
+    document.addEventListener('freeze', onFreeze as EventListener);
+
+    send();
+    const heartbeat = window.setInterval(() => send(), PRESENCE_HEARTBEAT_MS);
+
+    return () => {
+      window.clearInterval(heartbeat);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('pagehide', onPageHide);
+      document.removeEventListener('freeze', onFreeze as EventListener);
+      void reportPresence('offline', null, { keepalive: true });
+    };
+  }, [state.isLoggedIn]);
+
+  useEffect(() => {
+    if (!state.isLoggedIn) return;
+    void reportPresence(
+      resolvePresenceState(),
+      state.showChat ? state.currentChatId : null,
+    );
+  }, [state.isLoggedIn, state.currentChatId, state.showChat]);
 
   useEffect(() => {
     if (!state.isLoggedIn) return;

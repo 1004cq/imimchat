@@ -6,7 +6,7 @@
 
 1. 长连接只保证前台实时；后台、锁屏、杀进程走 APNs。
 2. **有 WebSocket ≠ 免推。** iOS 后台 WS 常假活，OpenIM 把 iOS background 当离线。
-3. CQIM 已有 `server/presence.ts` + `push-notify.ts`：仅 `foreground` skip。缺的是接口、客户端上报、现网部署。
+3. CQIM 已有 `server/presence.ts` + `push-notify.ts`：仅 `foreground` skip。`POST /api/presence` 已挂；Web 已上报；iOS 仍需接同一接口。
 
 ## OpenIM 怎么做
 
@@ -37,8 +37,8 @@ iOS 走 APNs（可经 FCM/JPush 转）。
 | APNs P8 | 已有 `server/apns.ts` |
 | 个推 / JPush / FCM / WebPush | 代码有，主路径用 APNs |
 | `presence.ts` | 仅 foreground skip |
-| `POST /api/presence` | **未挂好** |
-| iOS/Web 上报前后台 | **未做** |
+| `POST /api/presence` | 已挂（#31 `userAuth` + `setPresence`） |
+| iOS/Web 上报前后台 | Web 已接；iOS 另一仓库 |
 | Token 上报 | iOS 曾 TODO |
 | 免推开关 | 设置页未闭环 |
 

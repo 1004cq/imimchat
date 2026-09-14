@@ -1,17 +1,44 @@
 import { redis } from './redis.js';
+import {
+  PRESENCE_TTL_SECONDS,
+  shouldSkipApnsFromState,
+  type Presence,
+} from './presence-rules.js';
 
-export type Presence = 'foreground' | 'background' | 'offline';
+export type { Presence };
+export { PRESENCE_TTL_SECONDS, shouldSkipApnsFromState };
+
+function presenceKey(userId: string) {
+  return `user:presence:${userId}`;
+}
+
+function activeChatKey(userId: string) {
+  return `user:activeChat:${userId}`;
+}
 
 export async function getPresence(userId: string): Promise<Presence> {
-  const raw = await redis.get(`user:presence:${userId}`).catch(() => null);
+  const raw = await redis.get(presenceKey(userId)).catch(() => null);
   if (raw === 'foreground' || raw === 'background') return raw;
   return 'offline';
 }
 
-export async function setPresence(userId: string, state: Presence, activeChatId?: string) {
-  await redis.set(`user:presence:${userId}`, state, 'EX', 90).catch(() => undefined);
-  if (activeChatId) {
-    await redis.set(`user:activeChat:${userId}`, activeChatId, 'EX', 90).catch(() => undefined);
+export async function getActiveChatId(userId: string): Promise<string | null> {
+  const raw = await redis.get(activeChatKey(userId)).catch(() => null);
+  return raw || null;
+}
+
+export async function setPresence(userId: string, state: Presence, activeChatId?: string | null) {
+  if (state === 'offline') {
+    await redis.del(presenceKey(userId), activeChatKey(userId)).catch(() => undefined);
+    return;
+  }
+
+  await redis.set(presenceKey(userId), state, 'EX', PRESENCE_TTL_SECONDS).catch(() => undefined);
+
+  if (typeof activeChatId === 'string' && activeChatId.length > 0) {
+    await redis.set(activeChatKey(userId), activeChatId, 'EX', PRESENCE_TTL_SECONDS).catch(() => undefined);
+  } else if (activeChatId === null || activeChatId === '') {
+    await redis.del(activeChatKey(userId)).catch(() => undefined);
   }
 }
 
@@ -20,7 +47,6 @@ export async function shouldSkipApns(userId: string, chatId?: string): Promise<b
   const state = await getPresence(userId);
   if (state !== 'foreground') return false;
   if (!chatId) return true;
-  const active = await redis.get(`user:activeChat:${userId}`).catch(() => null);
-  if (!active) return true;
-  return active === chatId;
+  const active = await getActiveChatId(userId);
+  return shouldSkipApnsFromState(state, chatId, active);
 }
