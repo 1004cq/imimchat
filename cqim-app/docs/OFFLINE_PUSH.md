@@ -6,7 +6,7 @@
 
 1. 长连接只保证前台实时；后台、锁屏、杀进程走 APNs。
 2. **有 WebSocket ≠ 免推。** iOS 后台 WS 常假活，OpenIM 把 iOS background 当离线。
-3. CQIM 已有 `server/presence.ts` + `push-notify.ts`：仅 `foreground` skip。缺的是接口、客户端上报、现网部署。
+3. CQIM 已有 `server/presence.ts` + `push-notify.ts`：仅 `foreground` skip。**服务端 `POST /api/presence` 已在 master 挂上（#31）。** Web 客户端上报仍待 #29；现网部署另做。
 
 ## OpenIM 怎么做
 
@@ -37,8 +37,8 @@ iOS 走 APNs（可经 FCM/JPush 转）。
 | APNs P8 | 已有 `server/apns.ts` |
 | 个推 / JPush / FCM / WebPush | 代码有，主路径用 APNs |
 | `presence.ts` | 仅 foreground skip |
-| `POST /api/presence` | **未挂好** |
-| iOS/Web 上报前后台 | **未做** |
+| `POST /api/presence` | **master 已挂**（#31，`cqim-app/server/index.ts`） |
+| iOS/Web 上报前后台 | **未做**（Web 待 #29；不要和 #31 再打一架，先 rebase） |
 | Token 上报 | iOS 曾 TODO |
 | 免推开关 | 设置页未闭环 |
 
@@ -48,10 +48,10 @@ iOS 走 APNs（可经 FCM/JPush 转）。
 
 ### P0 — 和 OpenIM 判断对齐
 
-1. Express 挂 `POST /api/presence`
+1. Express 挂 `POST /api/presence` — **master 已完成（#31）**
    - body: `{ state: "foreground" \| "background", activeChatId?: string }`
    - Redis: `user:presence:{uid}` TTL 90s；可选 `user:activeChat:{uid}`
-2. Web / iOS
+2. Web / iOS（Web 仍待开放 PR #29）
    - 前台 / `visibilitychange` visible → foreground
    - 后台 / 锁屏 → **立刻** background（不要等 WS 断）
 3. `notifyPrivateMessagePush`：`shouldSkipApns` 为 true 才 return；缺 presence 当 offline → **要推**
