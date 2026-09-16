@@ -41,10 +41,29 @@ model User {
   sessions    UserSession[]
   mediaFiles  MediaFile[]
   hiddenChats ChatHidden[]
+  pushTokens  PushDeviceToken[]
   @@index([dialogId])
   @@index([username])
   @@index([email])
   @@index([phone])
+}
+
+/// APNs alert tokens are device-scoped. Do not store the P8 key in the database.
+model PushDeviceToken {
+  id          String   @id @default(cuid())
+  userId      String
+  token       String
+  platform    String
+  environment String
+  kind        String   @default("alert")
+  appVersion  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([token, kind])
+  @@index([userId, platform, environment, kind])
+  @@index([userId, kind])
 }
 
 model UserSession {
@@ -309,6 +328,8 @@ model FriendRequest {
   @@index([fromId])
   @@index([toId])
   @@index([status])
+  @@index([fromId, status, createdAt])
+  @@index([toId, status, createdAt])
 }
 
 model Friendship {
@@ -327,6 +348,12 @@ model Chat {
   participantB  String
   lastMessage   String?
   lastMessageAt DateTime?
+  /// 消失模式：新消息在接收方已读后开始倒计时
+  vanishMode    Boolean  @default(false)
+  /// 消失模式的已读后销毁秒数；关闭时为 null
+  vanishSeconds Int?
+  /// 会话级防转发；开启后客户端隐藏复制/转发/保存，服务端拒绝转发元数据
+  restrictForwarding Boolean @default(false)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   messages      PrivateMessage[]
@@ -335,6 +362,8 @@ model Chat {
   @@index([participantA])
   @@index([participantB])
   @@index([lastMessageAt])
+  @@index([participantA, lastMessageAt])
+  @@index([participantB, lastMessageAt])
 }
 
 model ChatHidden {
@@ -347,6 +376,7 @@ model ChatHidden {
   @@unique([chatId, userId])
   @@index([userId, hiddenAt])
   @@index([chatId])
+  @@index([userId, chatId])
 }
 
 model PrivateMessage {
@@ -368,6 +398,8 @@ model PrivateMessage {
   @@index([chatId, createdAt])
   @@index([senderId])
   @@index([chatId, isRevoked])
+  @@index([chatId, status, isRevoked])
+  /// 阅后即焚：定时清理索引
   @@index([burnExpireAt])
 }
 
@@ -416,6 +448,8 @@ model GroupMember {
   @@index([userId])
   @@index([groupId, userId, joinTime, lastAckSeq])
   @@index([userId, groupId, lastAckSeq])
+  @@index([userId, updatedAt])
+  @@index([groupId, role, joinTime])
 }
 
 model GroupMessage {

@@ -112,6 +112,12 @@ certbot/www/
 *.sqlite
 *.sqlite3
 
+# Prisma migration SQL is versioned schema source. Other SQL artifacts remain ignored.
+*.sql
+!prisma/migrations/
+!prisma/migrations/**/
+!prisma/migrations/**/migration.sql
+
 # Webdev artifacts (checkpoint zips, migrations, etc.)
 .webdev/
 
