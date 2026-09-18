@@ -1,7 +1,13 @@
-# wed.imim.chat 节点1 生产覆盖：宿主机 Nginx 终结 TLS，应用使用 SQLite 共享数据
+# wed.imim.chat 节点1 生产覆盖：宿主机 Nginx 终结 TLS。
+# Prisma 主库 = 腾讯云 PostgreSQL（.env 的 DATABASE_URL）。禁止 file:*.db / mongodb://。
+# Gateway DB_PATH 仍可读本机 sqlite，迁网关另做，见 MIGRATE_POSTGRES.md。
 services:
   nginx:
     profiles: ["container-edge"]
+
+  # 生产 Prisma 走腾讯云 PG，不要起 compose 里的本地 postgres 容器
+  postgres:
+    profiles: ["local-postgres"]
 
   mongo:
     container_name: cqim-release-mongo
@@ -19,7 +25,8 @@ services:
     ports:
       - "127.0.0.1:3011:3000"
     environment:
-      DATABASE_URL: file:/app/data/cqim.db
+      # Prisma 主库必须是 postgresql:// 。禁止 file:/app/data/cqim.db 与 mongodb://。
+      DATABASE_URL: ${DATABASE_URL:-postgresql://USER:PASS@TENCENT_PG_HOST:5432/cqim?schema=public}
       REDIS_URL: redis://redis:6379
       MYSQL_URL: mysql://${MYSQL_USER:-cqim}:${MYSQL_PASSWORD:-cqim}@mysql:3306/${MYSQL_DATABASE:-cqim_audit}
       MYSQL_AUDIT_ENABLED: ${MYSQL_AUDIT_ENABLED:-false}

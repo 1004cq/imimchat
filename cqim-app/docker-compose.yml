@@ -1,5 +1,8 @@
 version: '3.9'
 
+# Prisma 主库 = PostgreSQL。Mongo 不是 Prisma 主库，禁止把 mongodb:// 填进 DATABASE_URL。
+# 禁止 file:*.db / NFS 共享 SQLite。生产 wed 应把 DATABASE_URL 指腾讯云 PG 内网，见 docs/MIGRATE_POSTGRES.md。
+
 services:
   nginx:
     image: nginx:stable-alpine
@@ -17,6 +20,7 @@ services:
       - cqim
       - go-gateway
 
+  # 遗留/可选。不是 Prisma 主库。禁止 mongodb:// 写入 DATABASE_URL。
   mongo:
     image: mongo:7
     container_name: cqim-mongo
@@ -33,6 +37,26 @@ services:
       timeout: 10s
       retries: 10
       start_period: 15s
+
+  # 本地/单机 Prisma 示例。生产请用腾讯云 PostgreSQL 内网，不要把这个容器当 wed 主库。
+  postgres:
+    image: postgres:16-alpine
+    container_name: cqim-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cqim}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cqim}
+      POSTGRES_DB: ${POSTGRES_DB:-cqim}
+    expose:
+      - "5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
   redis:
     image: redis:7-alpine
@@ -86,8 +110,6 @@ services:
     env_file:
       - .env
     depends_on:
-      mongo:
-        condition: service_healthy
       redis:
         condition: service_healthy
       mysql:
@@ -95,7 +117,8 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      DATABASE_URL: ${DATABASE_URL:-mongodb://mongo:27017/cqim?replicaSet=rs0&directConnection=true}
+      # Prisma 主库必须是 postgresql:// 。禁止 mongodb:// 与 file:*.db。
+      DATABASE_URL: ${DATABASE_URL:-postgresql://cqim:cqim@postgres:5432/cqim?schema=public}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       MYSQL_URL: ${MYSQL_URL:-mysql://cqim:cqim@mysql:3306/cqim_audit}
       MYSQL_AUDIT_ENABLED: ${MYSQL_AUDIT_ENABLED:-true}
@@ -136,5 +159,6 @@ services:
 
 volumes:
   mongo_data:
+  postgres_data:
   redis_data:
   mysql_data:

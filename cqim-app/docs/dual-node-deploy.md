@@ -1,6 +1,8 @@
 # 同区域双节点部署指南
 
-本文说明如何在**同一区域**部署两台 CQIM 节点（Node API + Go Gateway），共享**一台** MongoDB / Redis / MySQL，并通过 Redis Pub/Sub 实现跨节点私聊与群消息可达。
+> **过时提醒（Mongo 时代稿）：** Prisma 主库是 **PostgreSQL**。禁止把 `mongodb://` 填进 `DATABASE_URL`。现行双机以 [TWO_NODES.md](./TWO_NODES.md) 与 [MIGRATE_POSTGRES.md](./MIGRATE_POSTGRES.md) 为准。
+
+本文说明如何在**同一区域**部署两台 CQIM 节点（Node API + Go Gateway），共享**一台** PostgreSQL / Redis / MySQL，并通过 Redis Pub/Sub 实现跨节点私聊与群消息可达。
 
 > 约束：不拆数据库、不上 K8s、不改 MTProto。
 
@@ -23,7 +25,7 @@
                                       │
                            ┌──────────▼──────────┐
                            │ 节点1 内网数据层      │
-                           │ Mongo / Redis / MySQL│
+                           │ PostgreSQL / Redis / MySQL│
                            └─────────────────────┘
 ```
 
@@ -55,7 +57,8 @@ NODE_ENV=production
 PORT=3000
 PUBLIC_BASE_URL=https://wed.imim.chat
 
-DATABASE_URL=mongodb://10.0.0.1:27017/cqim?replicaSet=rs0&directConnection=true
+# Prisma 主库 = PostgreSQL。Mongo 不是 Prisma 主库，禁止 mongodb:// 与 file:*.db
+DATABASE_URL=postgresql://USER:PASS@TENCENT_PG_HOST:5432/cqim?schema=public
 REDIS_URL=redis://10.0.0.1:6379
 MYSQL_URL=mysql://cqim:YOUR_PASSWORD@10.0.0.1:3306/cqim_audit
 
@@ -65,7 +68,7 @@ REDIS_ADDR=10.0.0.1:6379
 CORS_ORIGINS=https://wed.imim.chat,http://wed.imim.chat
 ```
 
-安全组 / 防火墙：仅允许节点2 内网 IP 访问节点1 的 `27017`、`6379`、`3306`。
+安全组 / 防火墙：仅允许节点访问腾讯云 PG 内网 `5432`，以及节点1 的 `6379`、`3306`。不要对公网开库端口。
 
 节点2 启动示例：
 

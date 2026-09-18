@@ -10,4 +10,4 @@
 1. 生产 `.env`：`TRTC_SDK_APP_ID=1600159677`，删掉代码里 `|| 1600136830`
 2. **iOS**（另一仓库）进后台必须调 `POST /api/presence` `{ state: background|foreground, activeChatId }`。Web 已接。有 WS ≠ 免推。
 3. `index.ts` UserSig 禁止默认旧 ID
-4. 空 PG migrate deploy
+4. 空 PG：Git 已有 `init_postgres`，机主 `prisma migrate deploy`（见 MIGRATE_POSTGRES.md）

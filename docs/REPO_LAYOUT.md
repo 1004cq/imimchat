@@ -10,7 +10,7 @@
 | `cqim-app/client` | 前端 |
 | `cqim-app/server` | 后端 |
 | `cqim-app/go-gateway` | WebSocket |
-| `cqim-app/prisma` | 数据库 schema |
+| `cqim-app/prisma` | 数据库 schema + PostgreSQL `migrations/`（`init_postgres`） |
 | `cqim-app/docs` | CQIM 部署/双机/迁库 |
 | `.github/workflows` | CI （typecheck） |
 | `README.md` | 现行说明（以这份为准） |
