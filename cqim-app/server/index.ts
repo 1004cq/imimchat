@@ -51,6 +51,7 @@ import qrRouter from "./qr";
 import fcmRouter from "./fcm";
 import getuiRouter from "./getui";
 import apnsRouter from "./apns";
+import devicePushRouter from "./device-push";
 import jpushRouter from "./jpush";
 import webPushRouter from "./web-push";
 import { notifyPrivateMessagePush } from "./push-notify.js";
@@ -1384,19 +1385,16 @@ async function handleMessage(client: SignalClient, raw: string) {
 
             console.log(`[PrivateChat] 消息已发送: from=${client.userId} to=${peerId} chatId=${pChatId} wsDelivered=${delivered}`);
 
-            if (!delivered) {
-              const peerOnlineElsewhere = await isUserOnline(peerId).catch(() => false)
-                || Boolean(await redis.get(`user:online:${peerId}`).catch(() => null));
-              if (!peerOnlineElsewhere) {
-                await notifyPrivateMessagePush({
-                  toUserId: peerId,
-                  senderId: client.userId,
-                  chatId: pChatId,
-                  messageId: message.id,
-                  previewText: '🔒 [加密消息]',
-                });
-              }
-            }
+            // A background iOS app may still keep its WebSocket open. Delivery to
+            // that socket must not suppress the system alert; push-notify only
+            // suppresses a foreground recipient viewing this exact chat.
+            void notifyPrivateMessagePush({
+              toUserId: peerId,
+              senderId: client.userId,
+              chatId: pChatId,
+              messageId: message.id,
+              previewText: '加密消息',
+            }).catch((error: unknown) => console.error('[APNs] private message notification failed:', error));
           } catch (err) {
             console.error('[PrivateChat] 发送失败:', err);
             failAck('发送失败，请重试');
@@ -1632,6 +1630,7 @@ app.use("/api/home", homeRouter);
   app.use('/api/fcm', fcmRouter);
   app.use('/api/getui', getuiRouter);
   app.use('/api/apns', apnsRouter);
+  app.use('/api/device', devicePushRouter);
   app.use('/api/jpush', jpushRouter);
   app.use('/api/web-push', webPushRouter);
 
