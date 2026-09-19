@@ -47,10 +47,7 @@ import privateChatRouter from "./private-chat";
 import homeRouter from "./home";
 import friendRouter from "./friend";
 import qrRouter from "./qr";
-import fcmRouter from "./fcm";
-import getuiRouter from "./getui";
 import apnsRouter from "./apns";
-import jpushRouter from "./jpush";
 import webPushRouter from "./web-push";
 import { notifyPrivateMessagePush } from "./push-notify.js";
 import { getActiveChatId, getPresence, setPresence, shouldSkipApnsFromState } from "./presence";
@@ -774,78 +771,17 @@ async function handleMessage(client: SignalClient, raw: string) {
             select: { nickname: true, username: true, avatar: true },
           });
           const callerName = msg.payload?.callerName || callerUser?.nickname || callerUser?.username || '有人';
-          const callerAvatarPath = avatarToProxy(callerUser?.avatar);
-          const callerAvatarUrl = callerAvatarPath ? publicUrl(callerAvatarPath) : '';
           const callType = msg.payload?.callType || 'audio';
           const callRoomId = msg.payload?.roomId || '';
-          const callTitle = callType === 'video' ? `${callerName} 发起了视频通话` : `${callerName} 发起了语音通话`;
-          const callBody = '点击接听';
-
-          // 查询被叫方的推送 Token
-          const calleeUser = await prisma.user.findUnique({
-            where: { id: msg.to },
-            select: { fcmToken: true },
-          });
-
-          const callPushPayload = {
-            type: 'call_invite',
-            call_id: `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-            caller_id: client.userId,
-            caller_name: callerName,
-            caller_avatar: callerAvatarUrl,
-            call_type: callType,
-            room_id: callRoomId,
-          };
-
-          // 优先使用自建 APNs VoIP Push（iOS 来电），其次个推，最后 FCM
-          const { parseAPNsToken } = await import('./apns.js');
-          if (parseAPNsToken(calleeUser?.fcmToken)) {
-            // 自建 APNs 通道：来电走 VoIP Push
-            const { sendVoIPPush } = await import('./apns.js');
-            await sendVoIPPush({
-              toUserId: msg.to,
-              callerName,
-              callId: callPushPayload.call_id,
-              callerId: client.userId,
-              callerAvatar: callerAvatarUrl,
-              callType: callType as 'audio' | 'video',
-              roomId: callRoomId,
-            }).catch((e: any) => console.error('[APNs] VoIP 来电推送异常:', e));
-          } else {
-            const { parseJPushToken, sendJPushPush } = await import('./jpush.js');
-            if (parseJPushToken(calleeUser?.fcmToken)) {
-              await sendJPushPush({
-                toUserId: msg.to,
-                title: callTitle,
-                body: callBody,
-                extras: {
-                  type: 'call_invite',
-                  chatId: callPushPayload.call_id,
-                  callerId: client.userId,
-                },
-              }).catch((e: any) => console.error('[JPush] 来电推送异常:', e));
-            } else {
-            const { parseGetuiToken } = await import('./getui.js');
-            if (parseGetuiToken(calleeUser?.fcmToken)) {
-              const { sendGetuiPush } = await import('./getui.js');
-              await sendGetuiPush({
-                toUserId: msg.to,
-                title: callTitle,
-                body: callBody,
-                senderAvatar: callerAvatarUrl,
-                payload: JSON.stringify(callPushPayload),
-              }).catch((e: any) => console.error('[个推] 来电推送异常:', e));
-            } else if (calleeUser?.fcmToken) {
-              const { sendFCMPush } = await import('./fcm.js');
-              await sendFCMPush({
-                toUserId: msg.to,
-                title: callTitle,
-                body: callBody,
-                data: callPushPayload,
-              }).catch((e: any) => console.error('[FCM] 来电推送异常:', e));
-            }
-            }
-          }
+          const { sendVoIPPush } = await import('./apns.js');
+          await sendVoIPPush({
+            toUserId: msg.to,
+            callerName,
+            callId: `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            callerId: client.userId,
+            callType: callType as 'audio' | 'video',
+            roomId: callRoomId,
+          }).catch((e: any) => console.error('[APNs] VoIP 来电推送异常:', e));
           console.log(`[CallSignal] 被叫方 ${msg.to} 离线，已发送来电推送`);
         }
       }
@@ -1626,11 +1562,7 @@ app.use("/api/home", homeRouter);
   // 二维码校验
   app.use('/api/qr', qrRouter);
 
-  // FCM 推送 Token 管理
-  app.use('/api/fcm', fcmRouter);
-  app.use('/api/getui', getuiRouter);
   app.use('/api/apns', apnsRouter);
-  app.use('/api/jpush', jpushRouter);
   app.use('/api/web-push', webPushRouter);
 
   /**

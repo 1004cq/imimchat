@@ -1,4 +1,4 @@
-# Apple APNs / 极光 JPush 密钥
+# Apple APNs 密钥
 
 ## 当前使用的 Auth Key
 
@@ -9,7 +9,7 @@
 | Team ID | `4U332QFN6D` |
 | Bundle ID | `com.imim.chat` |
 
-## 极光控制台（Token Authentication）
+## APNs Token Authentication
 
 1. 集成设置 → iOS → **Token Authentication 配置**
 2. 上传：`AuthKey_URP8X87T38.p8`

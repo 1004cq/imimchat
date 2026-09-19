@@ -15,8 +15,7 @@ import {
   triggerNotificationVibration,
   warmupNotificationAudio,
 } from '@/lib/notifications';
-import { useFCM } from '@/hooks/useFCM';
-import { useJPush } from '@/hooks/useJPush';
+import { usePush } from '@/hooks/usePush';
 import { authApi } from '@/lib/authFetch';
 import { trackE2EEFailure, trackEvent, setTelemetryUser } from '@/lib/telemetry';
 import {
@@ -758,9 +757,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const stateRef = useRef(state);
   stateRef.current = state;
 
-  // FCM 推送通知（仅在 Native App 环境中生效）
-  useJPush(state.isLoggedIn);
-  useFCM(state.isLoggedIn);
+  // 自建推送：iOS 使用 APNs，Web 使用 Web Push。
+  usePush(state.isLoggedIn);
 
   // APNs 前台/后台 presence：仅 foreground 跳过推送；后台 tab 即使 WS 在线也必须上报 background
   useEffect(() => {

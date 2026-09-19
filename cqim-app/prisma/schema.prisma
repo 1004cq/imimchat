@@ -29,8 +29,6 @@ model User {
   emailVerified Boolean @default(false)
   lastLoginAt DateTime?
   lastLoginIp String?
-  fcmToken    String?
-  voipToken   String?
   webPushSubscription String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt

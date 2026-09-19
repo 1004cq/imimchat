@@ -1,11 +1,9 @@
 /**
- * 离线推送主路径只走自建：APNs（P8 直连 Apple）+ Web Push。
- * 不走个推。JPush/FCM 仅作 token 形态兼容，不再接个推 CID。
- * 仅 presence=foreground 时跳过，不要因有 WS 就 skip。
+ * 离线推送主路径：自建 APNs（P8）与 Web Push（VAPID）。
+ * 推送 payload 只携带路由 ID，不携带消息明文。
  */
 import prisma from './db.js';
-import { avatarToProxy } from './cos-signer.js';
-import { publicUrl } from './public-url.js';
+import { sendAPNsPush } from './apns.js';
 import { sendWebPush } from './web-push.js';
 import { shouldSkipApns } from './presence.js';
 
@@ -28,99 +26,39 @@ export interface GroupPushParams {
 async function loadSender(senderId: string) {
   return prisma.user.findUnique({
     where: { id: senderId },
-    select: { nickname: true, username: true, avatar: true },
+    select: { nickname: true, username: true },
   });
-}
-
-async function loadPeerToken(userId: string) {
-  return prisma.user.findUnique({
-    where: { id: userId },
-    select: { fcmToken: true },
-  });
-}
-
-function isGetuiToken(token?: string | null): boolean {
-  if (!token) return false;
-  return token.startsWith('getui:') || token.startsWith('getui-');
 }
 
 export async function notifyPrivateMessagePush(params: PrivatePushParams): Promise<void> {
-  const { toUserId, senderId, chatId, messageId, previewText = '🔒 [加密消息]' } = params;
+  const { toUserId, senderId, chatId, messageId } = params;
+  if (await shouldSkipApns(toUserId, chatId)) return;
 
-  if (await shouldSkipApns(toUserId, chatId)) {
-    console.log('[push] skip APNs, peer foreground', toUserId);
-    return;
-  }
+  const sender = await loadSender(senderId);
+  const conversationName = sender?.nickname || sender?.username || '有人';
 
-  const [senderUser, peerUser] = await Promise.all([
-    loadSender(senderId),
-    loadPeerToken(toUserId),
-  ]);
-
-  const senderName = senderUser?.nickname || senderUser?.username || '有人';
-  const senderAvatarPath = avatarToProxy(senderUser?.avatar);
-  const senderAvatarUrl = senderAvatarPath ? publicUrl(senderAvatarPath) : '';
-  const token = peerUser?.fcmToken;
-
-  if (isGetuiToken(token)) {
-    console.warn('[push] ignore getui token, self-hosted APNs/WebPush only', toUserId);
-  } else {
-    const { parseAPNsToken, sendAPNsPush } = await import('./apns.js');
-    if (parseAPNsToken(token)) {
-      await sendAPNsPush({
-        toUserId,
-        title: senderName,
-        body: previewText,
-        senderAvatar: senderAvatarUrl,
-        customData: { chatId, senderId, sender_name: senderName },
-      }).catch((e: unknown) => console.error('[APNs] 推送异常:', e));
-    } else {
-      const { parseJPushToken, sendJPushPush } = await import('./jpush.js');
-      if (parseJPushToken(token)) {
-        await sendJPushPush({
-          toUserId,
-          title: senderName,
-          body: previewText,
-          extras: { chatId, senderId },
-        }).catch((e: unknown) => console.error('[JPush] 推送异常:', e));
-      } else if (token) {
-        const { sendFCMPush } = await import('./fcm.js');
-        await sendFCMPush({
-          toUserId,
-          title: senderName,
-          body: previewText,
-          data: { chatId, senderId, sender_avatar: senderAvatarUrl },
-        }).catch((e: unknown) => console.error('[FCM] 推送异常:', e));
-      }
-    }
-  }
-
-  await sendWebPush({
+  await sendAPNsPush({
     toUserId,
-    chatId,
-    messageId,
-    senderId,
-  }).catch((e: unknown) => console.error('[WebPush] 推送异常:', e));
+    title: '新消息',
+    body: conversationName,
+    customData: { chatId, senderId },
+  }).catch((error: unknown) => console.error('[APNs] 私聊推送异常:', error));
+
+  await sendWebPush({ toUserId, chatId, messageId, senderId })
+    .catch((error: unknown) => console.error('[WebPush] 私聊推送异常:', error));
 }
 
 export async function notifyGroupMessagePush(params: GroupPushParams): Promise<void> {
-  const { toUserId, groupId, senderId, senderName, previewText = '🔒 [群消息]' } = params;
+  const { toUserId, groupId, senderId, senderName } = params;
   if (await shouldSkipApns(toUserId)) return;
 
-  const peerUser = await loadPeerToken(toUserId);
-  if (isGetuiToken(peerUser?.fcmToken)) {
-    console.warn('[push] ignore getui token on group', toUserId);
-    return;
-  }
+  await sendAPNsPush({
+    toUserId,
+    title: '新消息',
+    body: senderName || '群聊消息',
+    customData: { groupId, senderId, type: 'group_message' },
+  }).catch((error: unknown) => console.error('[APNs] 群聊推送异常:', error));
 
-  const title = senderName || '群消息';
-  const { parseAPNsToken, sendAPNsPush } = await import('./apns.js');
-  if (parseAPNsToken(peerUser?.fcmToken)) {
-    await sendAPNsPush({
-      toUserId,
-      title,
-      body: previewText,
-      customData: { groupId, senderId, type: 'group_message' },
-    }).catch((e: unknown) => console.error('[APNs] 群推送异常:', e));
-  }
+  await sendWebPush({ toUserId, chatId: groupId, senderId })
+    .catch((error: unknown) => console.error('[WebPush] 群聊推送异常:', error));
 }

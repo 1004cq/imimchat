@@ -162,7 +162,7 @@ TDSQL-C/MySQL/PostgreSQL（业务数据）、Redis（缓存/限流）、CKafka/T
 | 接入层 | CDN | EdgeOne（已连接） | ✅ 已接入 |
 | 通信层 | IM 单聊/群聊 | cqim-app/server/private-chat.ts + group-message.ts | ✅ 生产就绪 |
 | 通信层 | TRTC 音视频 | cqim-app（TRTC SDK v5）+ register-service/trtc.py | ✅ 已集成 |
-| 通信层 | 推送 | APNs + FCM + 个推（apns.ts/fcm.ts/getui.ts） | ✅ 三通道覆盖 |
+| 通信层 | 推送 | APNs + Web Push（apns.ts/web-push.ts） | ✅ 自建双通道 |
 | 业务层 | 账号/资料 | server/auth.ts + User model | ✅ 完整 |
 | 业务层 | 好友关系 | server/friend.ts | ✅ 完整 |
 | 业务层 | 群组 | server/group-message.ts（支持万人群） | ✅ 核心功能 |

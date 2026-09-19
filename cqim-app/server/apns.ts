@@ -1,5 +1,5 @@
 /**
- * server/apns.ts - 自建 APNs 推送服务（替代个推）
+ * server/apns.ts - 自建 APNs 推送服务
  *
  * 功能：
  * 1. POST /api/apns/token       - 注册/更新用户的 APNs Device Token
@@ -17,60 +17,25 @@ import { Router, Request, Response } from 'express';
 import prisma from './db.js';
 import { userAuth } from './auth.js';
 import http2 from 'http2';
-import fs from 'fs';
-import path from 'path';
 import crypto from 'crypto';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const router = Router();
 
 // ============ 配置 ============
-
-const TEAM_ID = process.env.APPLE_TEAM_ID || '4U332QFN6D';
+const TEAM_ID = process.env.APPLE_TEAM_ID || '';
 const BUNDLE_ID = process.env.APPLE_BUNDLE_ID || 'com.imim.chat';
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
-const APNS_HOST = IS_PRODUCTION
-  ? 'api.push.apple.com'
-  : 'api.sandbox.push.apple.com';
+const APNS_HOST = IS_PRODUCTION ? 'api.push.apple.com' : 'api.sandbox.push.apple.com';
 
-// 多个 p8 证书配置（自动尝试）
 interface P8Key {
   keyId: string;
   keyData: string;
 }
 
-const p8Keys: P8Key[] = [];
-
-// 从 certs 目录加载所有 p8 证书
-function loadP8Keys(): void {
-  const certsDir = path.join(__dirname, '..', 'certs');
-  if (!fs.existsSync(certsDir)) {
-    console.warn('[APNs] certs 目录不存在，跳过 p8 加载');
-    return;
-  }
-
-  const files = fs.readdirSync(certsDir).filter(f => f.endsWith('.p8'));
-  for (const file of files) {
-    // 从文件名提取 Key ID，格式: AuthKey_XXXXXXXXXX.p8
-    const match = file.match(/AuthKey_([A-Z0-9]+)\.p8/);
-    if (match) {
-      const keyId = match[1];
-      const keyData = fs.readFileSync(path.join(certsDir, file), 'utf8');
-      p8Keys.push({ keyId, keyData });
-      console.log(`[APNs] 已加载 p8 证书: KeyID=${keyId}`);
-    }
-  }
-
-  if (p8Keys.length === 0) {
-    console.warn('[APNs] 未找到任何 p8 证书文件');
-  }
-}
-
-// 启动时加载
-loadP8Keys();
+// P8 私钥只从环境变量读取，禁止写入数据库或镜像。
+const p8Keys: P8Key[] = process.env.APNS_KEY_ID && (process.env.APNS_P8_KEY || process.env.APNS_PRIVATE_KEY)
+  ? [{ keyId: process.env.APNS_KEY_ID, keyData: (process.env.APNS_P8_KEY || process.env.APNS_PRIVATE_KEY || '').replace(/\\n/g, '\n') }]
+  : [];
 
 // ============ JWT Token 生成 ============
 
@@ -289,12 +254,14 @@ router.post('/token', async (req: Request, res: Response) => {
       return res.status(400).json({ error: '缺少 token' });
     }
 
-    // 将 APNs Device Token 存入 fcmToken 字段，添加 apns: 前缀以区分
-    await prisma.user.update({
-      where: { id: currentUser.id },
-      data: { fcmToken: `apns:${token}` },
+    const platform = req.body.platform === 'ios' ? 'ios' : String(req.body.platform || 'ios');
+    const environment = req.body.environment === 'production' ? 'production' : 'sandbox';
+    const kind = req.body.kind === 'voip' ? 'voip' : 'alert';
+    await prisma.pushDeviceToken.upsert({
+      where: { token_kind: { token, kind } },
+      create: { userId: currentUser.id, token, platform, environment, kind },
+      update: { userId: currentUser.id, platform, environment },
     });
-
     console.log(`[APNs] 用户 ${currentUser.id} 注册 Device Token`);
     return res.json({ success: true });
   } catch (err) {
@@ -317,11 +284,11 @@ router.post('/voip-token', async (req: Request, res: Response) => {
       return res.status(400).json({ error: '缺少 voipToken' });
     }
 
-    await prisma.user.update({
-      where: { id: currentUser.id },
-      data: { voipToken },
+    await prisma.pushDeviceToken.upsert({
+      where: { token_kind: { token: voipToken, kind: 'voip' } },
+      create: { userId: currentUser.id, token: voipToken, platform: 'ios', environment: IS_PRODUCTION ? 'production' : 'sandbox', kind: 'voip' },
+      update: { userId: currentUser.id, platform: 'ios', environment: IS_PRODUCTION ? 'production' : 'sandbox' },
     });
-
     console.log(`[APNs] 用户 ${currentUser.id} 注册 VoIP Token`);
     return res.json({ success: true });
   } catch (err) {
@@ -337,10 +304,7 @@ router.post('/voip-token', async (req: Request, res: Response) => {
 router.delete('/token', async (req: Request, res: Response) => {
   try {
     const currentUser = (req as any).user;
-    await prisma.user.update({
-      where: { id: currentUser.id },
-      data: { fcmToken: null, voipToken: null },
-    });
+    await prisma.pushDeviceToken.deleteMany({ where: { userId: currentUser.id, platform: 'ios' } });
     console.log(`[APNs] 用户 ${currentUser.id} 清除 Token`);
     return res.json({ success: true });
   } catch (err) {
@@ -352,81 +316,34 @@ router.delete('/token', async (req: Request, res: Response) => {
 export default router;
 
 // ============ 推送发送工具函数 ============
-
-/**
- * 解析 fcmToken 字段中的 APNs Device Token
- * 返回纯 token 字符串或 null
- */
-export function parseAPNsToken(fcmToken: string | null | undefined): string | null {
-  if (!fcmToken) return null;
-  if (fcmToken.startsWith('apns:')) {
-    return fcmToken.replace('apns:', '');
-  }
-  return null;
-}
-
 export interface APNsPushPayload {
-  /** 接收方用户 ID */
   toUserId: string;
-  /** 通知标题 */
   title: string;
-  /** 通知内容 */
   body: string;
-  /** 发送者头像 URL（可选，用于 iOS 富通知显示） */
-  senderAvatar?: string;
-  /** 附加透传数据（可选） */
-  customData?: Record<string, any>;
+  customData?: Record<string, unknown>;
 }
 
-/**
- * 向指定用户发送普通 APNs 推送通知
- * 如果用户没有注册 APNs Token，则静默跳过
- */
 export async function sendAPNsPush(payload: APNsPushPayload): Promise<boolean> {
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: payload.toUserId },
-      select: { fcmToken: true },
+    const devices = await prisma.pushDeviceToken.findMany({
+      where: { userId: payload.toUserId, platform: 'ios', kind: 'alert' },
     });
-
-    const deviceToken = parseAPNsToken(user?.fcmToken);
-    if (!deviceToken) {
-      return false;
-    }
-
-    const apnsPayload = {
-      aps: {
-        alert: {
-          title: payload.title,
-          body: payload.body,
-        },
-        'mutable-content': 1,  // 触发 Notification Service Extension
-        sound: 'default',
-        badge: 1,
-      },
-      // 业务数据放在 aps 之外
-      sender_avatar: payload.senderAvatar || '',
-      ...(payload.customData || {}),
-    };
-
-    const result = await sendToAPNs(deviceToken, apnsPayload, BUNDLE_ID, 'alert', 10);
-
-    if (result.success) {
-      console.log(`[APNs] 普通推送成功: userId=${payload.toUserId} keyId=${result.keyId}`);
-      return true;
-    } else {
-      console.error(`[APNs] 普通推送失败: userId=${payload.toUserId} reason=${result.reason}`);
-      // Token 无效时清除
-      if (result.reason === 'BadDeviceToken' || result.reason === 'Unregistered') {
-        await prisma.user.update({
-          where: { id: payload.toUserId },
-          data: { fcmToken: null },
-        }).catch(() => {});
+    if (!devices.length) return false;
+    let delivered = false;
+    for (const device of devices) {
+      const result = await sendToAPNs(device.token, {
+        aps: { alert: { title: payload.title, body: payload.body }, 'mutable-content': 1, sound: 'default', badge: 1 },
+        ...(payload.customData || {}),
+      }, BUNDLE_ID, 'alert', 10);
+      if (result.success) {
+        delivered = true;
+      } else if (result.reason === 'BadDeviceToken' || result.reason === 'Unregistered') {
+        await prisma.pushDeviceToken.delete({ where: { id: device.id } }).catch(() => {});
       }
-      return false;
     }
-  } catch (err) {
-    console.error('[APNs] 推送请求失败:', err);
+    return delivered;
+  } catch (error) {
+    console.error('[APNs] 推送请求失败:', error);
     return false;
   }
 }
@@ -456,10 +373,11 @@ export async function sendVoIPPush(payload: VoIPPushPayload): Promise<boolean> {
   try {
     const user = await prisma.user.findUnique({
       where: { id: payload.toUserId },
-      select: { voipToken: true },
+      select: { pushTokens: { where: { platform: 'ios', kind: 'voip' }, take: 1 } },
     });
 
-    if (!user?.voipToken) {
+    const device = user?.pushTokens[0];
+    if (!device) {
       return false;
     }
 
@@ -475,7 +393,7 @@ export async function sendVoIPPush(payload: VoIPPushPayload): Promise<boolean> {
 
     // VoIP 推送 topic 必须添加 .voip 后缀
     const result = await sendToAPNs(
-      user.voipToken,
+      device.token,
       voipPayload,
       `${BUNDLE_ID}.voip`,
       'voip',
@@ -488,10 +406,7 @@ export async function sendVoIPPush(payload: VoIPPushPayload): Promise<boolean> {
     } else {
       console.error(`[APNs] VoIP 推送失败: userId=${payload.toUserId} reason=${result.reason}`);
       if (result.reason === 'BadDeviceToken' || result.reason === 'Unregistered') {
-        await prisma.user.update({
-          where: { id: payload.toUserId },
-          data: { voipToken: null },
-        }).catch(() => {});
+        await prisma.pushDeviceToken.delete({ where: { id: device.id } }).catch(() => {});
       }
       return false;
     }

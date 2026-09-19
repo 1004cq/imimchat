@@ -411,7 +411,7 @@ PUT    /admin/config             # 更新配置
     |                      |                   |-- new_message ---> 在线接收者 2   |                |
     |                      |                   |                                  |                |
     |                      |                   |  对于离线接收者：                |                |
-    |                      |                   |-- APNs/FCM 推送通知 -------------> 离线接收者    |
+    |                      |                   |-- APNs/Web Push 推送通知 -------------> 离线接收者    |
     |                      |                   |   (仅当消息未在 3s 内送达时)      |                |
     |                      |                   |                                  |                |
     |  (接收者上线后)      |                   |                                  |                |
@@ -428,7 +428,7 @@ PUT    /admin/config             # 更新配置
 3. **在线推 + 离线队列 + APNs 三级保障**：
    - 在线：WebSocket 即时推送（< 100ms）
    - 离线：Redis List 暂存（最多 500 条，LRANGE + LTRIM）
-   - 兜底：3 秒内未确认送达，触发 APNs/FCM 推送通知
+   - 兜底：3 秒内未确认送达，触发 APNs/Web Push 推送通知
 4. **客户端 ACK 确认**：收到消息后发 ACK，服务端清理离线队列
 5. **消息去重**：客户端用 (chat_id, seq) 幂等去重
 
@@ -918,7 +918,7 @@ func (s *MessageService) SendMessage(ctx context.Context, senderID string, req *
             // 限制队列长度
             s.redis.LTrim(ctx, offlineKey, -500, -1)
 
-            // 3 秒后检查是否仍离线，触发 APNs/FCM 推送
+            // 3 秒后检查是否仍离线，触发 APNs/Web Push 推送
             go s.schedulePushNotification(memberID, msgID, req.ChatID, req.Type, req.Content)
         }
     }
@@ -938,7 +938,7 @@ func (s *MessageService) SendMessage(ctx context.Context, senderID string, req *
 }
 
 // schedulePushNotification 延迟推送通知
-// 如果 3 秒内消息未被确认送达，触发 APNs/FCM
+// 如果 3 秒内消息未被确认送达，触发 APNs/Web Push
 func (s *MessageService) schedulePushNotification(userID, msgID, chatID, msgType string, content json.RawMessage) {
     time.Sleep(3 * time.Second)
 
