@@ -558,7 +558,7 @@ function UsersPanel() {
 
       {/* 用户列表 */}
       {loading ? <LoadingSpinner /> : (
-        <div className="bg-white/5 rounded-xl border border-white/10 overflow-hidden">
+        <div className="bg-white/5 rounded-xl border border-white/10 overflow-hidden hidden lg:block">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -644,6 +644,44 @@ function UsersPanel() {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {/* 移动端 / 平板卡片列表：避免小屏表格压缩和横向页面滚动 */}
+      {!loading && (
+        <div className="lg:hidden space-y-3">
+          {users.length === 0 ? (
+            <div className="bg-white/5 rounded-xl border border-white/10 px-4 py-10 text-center text-slate-500">暂无用户数据</div>
+          ) : users.map(user => (
+            <article key={user.id} className="bg-white/5 rounded-2xl border border-white/10 p-4 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  {user.avatar ? <img src={user.avatar} alt="" className="w-11 h-11 rounded-full object-cover flex-shrink-0" /> : (
+                    <div className="w-11 h-11 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-400 text-base font-medium flex-shrink-0">{(user.nickname || user.username || '?')[0]}</div>
+                  )}
+                  <div className="min-w-0">
+                    <div className="text-white font-medium truncate">{user.nickname || user.username}</div>
+                    <div className="text-xs text-slate-500 font-mono truncate">@{user.username}</div>
+                  </div>
+                </div>
+                {statusBadge(user.isBanned)}
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="rounded-lg bg-black/10 px-3 py-2"><span className="text-slate-500 block">手机号</span><span className="text-slate-300 break-all">{user.phone || '-'}</span></div>
+                <div className="rounded-lg bg-black/10 px-3 py-2"><span className="text-slate-500 block">动态数</span><span className="text-slate-300">{user.postsCount || 0}</span></div>
+                <div className="rounded-lg bg-black/10 px-3 py-2 col-span-2"><span className="text-slate-500 block">邮箱</span><span className="text-slate-300 break-all">{user.email || '-'}</span></div>
+              </div>
+              <div className="flex items-center gap-2 pt-1">
+                <button onClick={() => setSelectedUser(user)} className="min-h-11 flex-1 px-3 rounded-xl bg-white/5 text-slate-300 text-sm flex items-center justify-center gap-1.5"><Eye className="w-4 h-4" />详情</button>
+                <button onClick={() => openEditModal(user)} className="min-h-11 flex-1 px-3 rounded-xl bg-blue-500/15 text-blue-300 text-sm flex items-center justify-center gap-1.5"><Edit3 className="w-4 h-4" />编辑</button>
+                {!user.isBanned ? (
+                  <button onClick={() => openBanModal(user.id, user.nickname || user.username)} className="min-h-11 min-w-11 px-3 rounded-xl bg-red-500/15 text-red-300 text-sm flex items-center justify-center gap-1.5" title="封禁"><Ban className="w-4 h-4" /><span className="hidden sm:inline">封禁</span></button>
+                ) : (
+                  <button onClick={() => handleUnban(user.id)} disabled={actionLoading === `${user.id}-unban`} className="min-h-11 min-w-11 px-3 rounded-xl bg-emerald-500/15 text-emerald-300 text-sm flex items-center justify-center gap-1.5" title="解封"><UserCheck className="w-4 h-4" /><span className="hidden sm:inline">解封</span></button>
+                )}
+              </div>
+            </article>
+          ))}
         </div>
       )}
 
@@ -749,7 +787,7 @@ function UsersPanel() {
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-slate-800 rounded-2xl border border-white/10 p-6 w-full max-w-md max-h-[90vh] overflow-y-auto"
+              className="bg-slate-800 rounded-t-2xl lg:rounded-none lg:rounded-l-2xl border border-white/10 p-6 w-full max-w-md lg:max-w-lg lg:w-[440px] max-h-[90vh] lg:h-full lg:max-h-none overflow-y-auto lg:ml-auto"
               onClick={e => e.stopPropagation()}
             >
               <div className="flex items-center justify-between mb-5">
@@ -806,14 +844,14 @@ function UsersPanel() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
+            className="fixed inset-0 z-50 bg-black/60 flex items-end lg:items-stretch justify-center p-0 lg:p-0"
             onClick={() => setShowEditModal(false)}
           >
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-slate-800 rounded-2xl border border-white/10 p-6 w-full max-w-md max-h-[90vh] overflow-y-auto"
+              className="bg-slate-800 rounded-t-2xl lg:rounded-none lg:rounded-l-2xl border border-white/10 p-6 w-full max-w-md lg:max-w-lg lg:w-[440px] max-h-[90vh] lg:h-full lg:max-h-none overflow-y-auto lg:ml-auto"
               onClick={e => e.stopPropagation()}
             >
               <div className="flex items-center justify-between mb-5">
@@ -911,14 +949,14 @@ function UsersPanel() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
+            className="fixed inset-0 z-50 bg-black/60 flex items-end lg:items-stretch justify-center p-0 lg:p-0"
             onClick={() => setShowBanModal(false)}
           >
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-slate-800 rounded-2xl border border-white/10 p-6 w-full max-w-sm"
+              className="bg-slate-800 rounded-t-2xl lg:rounded-none lg:rounded-l-2xl border border-white/10 p-6 w-full max-w-sm lg:max-w-lg lg:w-[440px] lg:h-full overflow-y-auto lg:ml-auto"
               onClick={e => e.stopPropagation()}
             >
               <div className="flex items-center justify-between mb-4">
@@ -1467,25 +1505,34 @@ function LogsPanel() {
         </select>
       </div>
 
-      {loading ? <LoadingSpinner /> : (
-        <div className="space-y-2">
-          {logs.map(log => (
-            <div key={log.id} className="bg-white/5 rounded-xl border border-white/10 px-4 py-3 flex items-center gap-4">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-0.5">
-                  <span className={`text-xs font-mono font-bold ${actionColors[log.action] || 'text-slate-400'}`}>{log.action}</span>
-                  <span className="text-xs text-slate-600">|</span>
-                  <span className="text-xs text-slate-500">{log.adminName}</span>
+      {loading ? <LoadingSpinner /> : logs.length === 0 ? (
+        <div className="bg-white/5 rounded-xl border border-white/10 text-center py-10 text-slate-500">暂无操作日志</div>
+      ) : (
+        <>
+          <div className="lg:hidden space-y-2">
+            {logs.map(log => (
+              <div key={log.id} className="bg-white/5 rounded-xl border border-white/10 px-4 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 mb-1 flex-wrap">
+                      <span className={`text-xs font-mono font-bold ${actionColors[log.action] || 'text-slate-400'}`}>{log.action}</span>
+                      <span className="text-xs text-slate-500">{log.adminName}</span>
+                    </div>
+                    <div className="text-sm text-slate-300 break-words">{log.detail || '-'}</div>
+                  </div>
+                  <span className="text-xs text-slate-500 whitespace-nowrap">{formatTime(log.timestamp)}</span>
                 </div>
-                <div className="text-sm text-slate-300 truncate">{log.detail}</div>
+                <div className="text-xs text-slate-600 font-mono mt-2">{log.ip || '-'}</div>
               </div>
-              <div className="text-right flex-shrink-0">
-                <div className="text-xs text-slate-500">{formatTime(log.timestamp)}</div>
-                <div className="text-xs text-slate-600 font-mono">{log.ip}</div>
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+          <div className="hidden lg:block bg-white/5 rounded-xl border border-white/10 overflow-x-auto">
+            <table className="w-full text-sm min-w-[680px]">
+              <thead><tr className="border-b border-white/10 text-slate-400"><th className="text-left px-4 py-3 font-medium">操作</th><th className="text-left px-4 py-3 font-medium">管理员</th><th className="text-left px-4 py-3 font-medium">详情</th><th className="text-left px-4 py-3 font-medium">IP</th><th className="text-left px-4 py-3 font-medium">时间</th></tr></thead>
+              <tbody>{logs.map(log => <tr key={log.id} className="border-b border-white/5 hover:bg-white/5"><td className={`px-4 py-3 font-mono text-xs font-bold ${actionColors[log.action] || 'text-slate-400'}`}>{log.action}</td><td className="px-4 py-3 text-slate-400 text-xs">{log.adminName || '-'}</td><td className="px-4 py-3 text-slate-300">{log.detail || '-'}</td><td className="px-4 py-3 text-slate-500 font-mono text-xs">{log.ip || '-'}</td><td className="px-4 py-3 text-slate-500 text-xs whitespace-nowrap">{formatTime(log.timestamp)}</td></tr>)}</tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );
@@ -4762,6 +4809,9 @@ function AdminDashboard({ admin, onLogout }: { admin: AdminInfo; onLogout: () =>
   const [activeNav, setActiveNav] = useState<NavItem>('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768);
+  const [isTablet, setIsTablet] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 768 && window.innerWidth < 1024);
+  const touchStartX = useRef<number | null>(null);
 
   // ★ 角色名统一：后端使用 superadmin，前端同步
   const navItems: Array<{ id: NavItem; label: string; icon: React.ElementType; color: string }> = [
@@ -4776,8 +4826,6 @@ function AdminDashboard({ admin, onLogout }: { admin: AdminInfo; onLogout: () =>
     { id: 'smtp', label: '邮箱配置', icon: Mail, color: 'text-sky-400' },
     { id: 'amap', label: '地图服务', icon: Globe, color: 'text-teal-400' },
     { id: 'pyq', label: '外链朋友圈', icon: Rss, color: 'text-emerald-400' },
-    { id: 'cos', label: '云存储 COS', icon: Database, color: 'text-cyan-400' },
-    { id: 'aliyun', label: '阿里云配置', icon: CloudCog, color: 'text-orange-400' },
     ...(admin.role === 'superadmin' ? [{ id: 'admins' as NavItem, label: '管理员', icon: Settings, color: 'text-slate-400' }] : []),
   ];
 
@@ -4810,22 +4858,42 @@ function AdminDashboard({ admin, onLogout }: { admin: AdminInfo; onLogout: () =>
     setMobileMenuOpen(false);
   };
 
-  // ★ 检测屏幕尺寸，自动切换布局
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  // 三档断点：手机抽屉、平板图标栏、桌面文字侧栏。
   useEffect(() => {
-    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    const handleResize = () => {
+      const width = window.innerWidth;
+      setIsMobile(width < 768);
+      setIsTablet(width >= 768 && width < 1024);
+      if (width >= 1024) setSidebarOpen(true);
+      if (width >= 768) setMobileMenuOpen(false);
+    };
+    handleResize();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // 桌面端默认展开侧边栏
+  // 抽屉打开时锁住页面滚动，避免移动端背景跟随滚动。
   useEffect(() => {
-    if (!isMobile) setSidebarOpen(true);
-    else setSidebarOpen(false);
-  }, [isMobile]);
+    if (!isMobile || !mobileMenuOpen) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = previous; };
+  }, [isMobile, mobileMenuOpen]);
+
+  const handleTouchStart = (event: React.TouchEvent) => {
+    touchStartX.current = event.touches[0]?.clientX ?? null;
+  };
+  const handleTouchEnd = (event: React.TouchEvent) => {
+    if (!isMobile || touchStartX.current === null) return;
+    const endX = event.changedTouches[0]?.clientX ?? touchStartX.current;
+    const delta = endX - touchStartX.current;
+    if (delta > 60) setMobileMenuOpen(true);
+    if (delta < -60) setMobileMenuOpen(false);
+    touchStartX.current = null;
+  };
 
   return (
-    <div className="h-screen bg-slate-900 flex flex-col md:flex-row overflow-hidden">
+    <div className="admin-shell h-screen bg-slate-900 flex flex-col md:flex-row overflow-hidden" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
       {/* ===== 移动端顶部导航栏 ===== */}
       {isMobile && (
         <header className="bg-slate-800/80 backdrop-blur-lg border-b border-white/5 flex items-center justify-between px-4 py-3 flex-shrink-0 z-30">
@@ -4840,7 +4908,7 @@ function AdminDashboard({ admin, onLogout }: { admin: AdminInfo; onLogout: () =>
           </div>
           <button
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="p-2 rounded-xl text-slate-400 hover:bg-white/10 hover:text-white transition-all active:scale-95"
+            className="p-2 min-w-11 min-h-11 rounded-xl text-slate-400 hover:bg-white/10 hover:text-white transition-all active:scale-95"
           >
             {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </button>
@@ -4861,18 +4929,18 @@ function AdminDashboard({ admin, onLogout }: { admin: AdminInfo; onLogout: () =>
             />
             {/* 菜单内容 */}
             <motion.div
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
+              initial={{ opacity: 0, x: '-100%' }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: '-100%' }}
               transition={{ duration: 0.2 }}
-              className="fixed top-[57px] left-0 right-0 z-50 bg-slate-800 border-b border-white/10 shadow-2xl max-h-[70vh] overflow-y-auto"
+              className="fixed top-0 bottom-0 left-0 z-50 w-[min(86vw,340px)] bg-slate-800 border-r border-white/10 shadow-2xl overflow-y-auto pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
             >
-              <nav className="p-3 space-y-1">
+              <nav className="p-3 pt-5 space-y-1">
                 {navItems.map(item => (
                   <button
                     key={item.id}
                     onClick={() => handleNavClick(item.id)}
-                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm transition-all active:scale-[0.98] ${
+                    className={`w-full min-h-11 flex items-center gap-3 px-4 py-3 rounded-xl text-sm transition-all active:scale-[0.98] ${
                       activeNav === item.id
                         ? 'bg-white/10 text-white'
                         : 'text-slate-400 hover:bg-white/5 hover:text-white'
@@ -4901,7 +4969,7 @@ function AdminDashboard({ admin, onLogout }: { admin: AdminInfo; onLogout: () =>
       {!isMobile && (
         <motion.aside
           initial={false}
-          animate={{ width: sidebarOpen ? 240 : 64 }}
+          animate={{ width: isTablet ? 64 : (sidebarOpen ? 220 : 64) }}
           transition={{ duration: 0.2, ease: 'easeInOut' }}
           className="bg-slate-800/50 border-r border-white/5 flex flex-col flex-shrink-0 overflow-hidden h-full"
         >
@@ -4910,7 +4978,7 @@ function AdminDashboard({ admin, onLogout }: { admin: AdminInfo; onLogout: () =>
             <div className="w-8 h-8 bg-emerald-500/20 rounded-lg flex items-center justify-center flex-shrink-0">
               <Shield className="w-4 h-4 text-emerald-400" />
             </div>
-            {sidebarOpen && (
+            {!isTablet && sidebarOpen && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="min-w-0">
                 <div className="text-white font-bold text-sm" style={{ fontFamily: 'var(--font-wenkai)' }}>imim Admin</div>
                 <div className="text-xs text-slate-500 truncate">{roleLabels[admin.role] || admin.role}</div>
@@ -4924,34 +4992,34 @@ function AdminDashboard({ admin, onLogout }: { admin: AdminInfo; onLogout: () =>
               <button
                 key={item.id}
                 onClick={() => setActiveNav(item.id)}
-                title={!sidebarOpen ? item.label : undefined}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all ${
+                title={isTablet || !sidebarOpen ? item.label : undefined}
+                className={`w-full min-h-11 flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all ${
                   activeNav === item.id
                     ? 'bg-white/10 text-white'
                     : 'text-slate-400 hover:bg-white/5 hover:text-white'
                 }`}
               >
                 <item.icon className={`w-4.5 h-4.5 flex-shrink-0 ${activeNav === item.id ? item.color : ''}`} />
-                {sidebarOpen && <span className="truncate">{item.label}</span>}
+                {!isTablet && sidebarOpen && <span className="truncate">{item.label}</span>}
               </button>
             ))}
           </nav>
 
           {/* 底部操作 */}
           <div className="p-2 border-t border-white/5 space-y-1">
-            <button
+            {!isTablet && <button
               onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-slate-400 hover:bg-white/5 hover:text-white transition-all"
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-slate-400 hover:bg-white/5 hover:text-white transition-all min-h-11"
             >
               <ChevronLeft className={`w-4.5 h-4.5 flex-shrink-0 transition-transform ${sidebarOpen ? '' : 'rotate-180'}`} />
-              {sidebarOpen && <span>收起侧栏</span>}
-            </button>
+              {!isTablet && sidebarOpen && <span>收起侧栏</span>}
+            </button>}
             <button
               onClick={onLogout}
-              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-red-400 hover:bg-red-500/10 transition-all"
+              className="w-full min-h-11 flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-red-400 hover:bg-red-500/10 transition-all"
             >
               <LogOut className="w-4.5 h-4.5 flex-shrink-0" />
-              {sidebarOpen && <span>退出登录</span>}
+              {!isTablet && sidebarOpen && <span>退出登录</span>}
             </button>
           </div>
         </motion.aside>
@@ -4959,7 +5027,7 @@ function AdminDashboard({ admin, onLogout }: { admin: AdminInfo; onLogout: () =>
 
       {/* ===== 主内容区 ===== */}
       <main className="flex-1 overflow-y-auto min-h-0">
-        <div className="p-4 md:p-6 max-w-6xl mx-auto pb-8">
+        <div className="p-4 md:p-5 lg:p-6 max-w-6xl mx-auto pb-8 pb-[calc(2rem+env(safe-area-inset-bottom))]">
           <AnimatePresence mode="wait">
             <motion.div
               key={activeNav}
