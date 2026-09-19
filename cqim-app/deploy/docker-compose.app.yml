@@ -12,14 +12,10 @@ services:
   nginx:
     profiles: ["disabled"]
 
-  mongo:
+
+  postgres:
     profiles: ["disabled"]
 
-  redis:
-    profiles: ["disabled"]
-
-  mysql:
-    profiles: ["disabled"]
 
   cqim:
     container_name: cqim-node2-api
@@ -29,8 +25,9 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      DATABASE_URL: ${DATABASE_URL:-file:/app/data/cqim.db}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://cqim:cqim@NODE1_HOST:5432/cqim?schema=public}
       REDIS_URL: ${REDIS_URL:-redis://NODE1_HOST:6380}
+      MEDIA_ROOT: /app/data/media
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://wed.imim.chat}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://wed.imim.chat}
     volumes:

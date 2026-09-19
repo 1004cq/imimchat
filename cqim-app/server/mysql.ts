@@ -2,7 +2,8 @@ import * as mysql from 'mysql2/promise';
 import type { Pool, RowDataPacket } from 'mysql2/promise';
 
 const MYSQL_URL = process.env.MYSQL_URL || '';
-const MYSQL_AUDIT_ENABLED = (process.env.MYSQL_AUDIT_ENABLED || 'true') !== 'false';
+// Legacy audit adapter is opt-in only; the active stack is PostgreSQL + Redis.
+const MYSQL_AUDIT_ENABLED = (process.env.MYSQL_AUDIT_ENABLED || 'false') === 'true';
 
 let pool: Pool | null = null;
 let initPromise: Promise<Pool | null> | null = null;

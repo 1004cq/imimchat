@@ -45,7 +45,7 @@ export async function saveLocalMedia(opts: {
   const absFile = path.join(absDir, id);
   await writeFile(absFile, opts.buffer);
   const sha256 = createHash('sha256').update(opts.buffer).digest('hex');
-  const publicPath = `/media/${id}`;
+  const publicPath = `/api/media/${id}`;
   const row = await prisma.mediaFile.create({
     data: {
       id,

@@ -1,41 +1,33 @@
-# wed.imim.chat 节点1 生产覆盖：宿主机 Nginx 终结 TLS，应用使用 SQLite 共享数据
+# 可选部署覆盖：Node API + Go 网关仍由现网 Node/Nginx 路径承载。
+# 不包含 C++ 服务，也不改变 Nginx 上游。
 services:
   nginx:
     profiles: ["container-edge"]
-
-  mongo:
-    container_name: cqim-release-mongo
-
+  postgres:
+    container_name: cqim-release-postgres
   redis:
     container_name: cqim-release-redis
     ports:
       - "0.0.0.0:6380:6379"
-
-  mysql:
-    container_name: cqim-release-mysql
-
   cqim:
     container_name: cqim-release-api
     ports:
       - "127.0.0.1:3011:3000"
     environment:
-      DATABASE_URL: file:/app/data/cqim.db
-      REDIS_URL: redis://redis:6379
-      MYSQL_URL: mysql://${MYSQL_USER:-cqim}:${MYSQL_PASSWORD:-cqim}@mysql:3306/${MYSQL_DATABASE:-cqim_audit}
-      MYSQL_AUDIT_ENABLED: ${MYSQL_AUDIT_ENABLED:-false}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://cqim:cqim@postgres:5432/cqim?schema=public}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      MEDIA_ROOT: /app/data/media
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://wed.imim.chat}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://wed.imim.chat,http://wed.imim.chat}
       GATEWAY_ID: ${GATEWAY_ID:-gw-app-1}
     volumes:
       - /home/ubuntu/cqim_shared/data:/app/data
-
   go-gateway:
     container_name: cqim-release-gateway
     ports:
       - "127.0.0.1:8082:8081"
     environment:
       GATEWAY_ID: ${GATEWAY_ID:-gw-app-1}
-      DB_PATH: /app/data/cqim.db
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       REDIS_DB: ${REDIS_DB:-0}

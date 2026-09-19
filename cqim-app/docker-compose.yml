@@ -75,7 +75,6 @@ services:
       MEDIA_ROOT: /app/data/media
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://wed.imim.chat}
       TRTC_SDK_APP_ID: ${TRTC_SDK_APP_ID:-1600159677}
-      MYSQL_AUDIT_ENABLED: "false"
     volumes:
       - ./data:/app/data
     healthcheck:

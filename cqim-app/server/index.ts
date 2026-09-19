@@ -40,7 +40,6 @@ import {
   errorHandler,
   getClientIP,
 } from "./security";
-import { connectMySQL } from "./mysql";
 import cryptoRouter from "./crypto";
 import mlsRouter from "./mls-group";
 import burnRouter, { startBurnCleanupCron } from "./burn-message";
@@ -72,6 +71,7 @@ import groupRouter, {
 } from "./group-message";
 import { avatarToProxy } from "./cos-signer";
 import { publicUrl } from "./public-url";
+import mediaRouter from './media-router.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1599,6 +1599,10 @@ async function startServer() {
 
   // ============ 用户认证 API ============
   app.use('/api/auth', authRouter);
+
+  // ============ 本地媒体 API（PG 元数据 + MEDIA_ROOT 文件盘） ============
+  // Must be registered before legacy COS-compatible handlers below.
+  app.use("/api/media", mediaRouter);
 
   // ============ 朋友圈 API ============
   app.use('/api/moments', momentsRouter);
@@ -4372,6 +4376,6 @@ function startReverseWsClient(handleOneBotAction: (ws: WebSocket, action: OneBot
 }
 
 initDatabase()
-  .then(() => Promise.allSettled([connectRedis(), connectMySQL()]))
+  .then(() => connectRedis())
   .then(() => startServer())
   .catch(console.error);

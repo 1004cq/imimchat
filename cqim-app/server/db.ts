@@ -1,34 +1,17 @@
 /**
  * server/db.ts
  * 统一数据库访问层 - Prisma Client 单例 + 数据库初始化
- * 兼容 SQLite / MongoDB 双 provider
+ * PostgreSQL Prisma Client 单例；生产 schema 由 prisma migrate deploy 管理
  */
 import { PrismaClient } from '@prisma/client';
-import { execFile } from 'child_process';
 import { createHash, randomBytes } from 'crypto';
-import { promisify } from 'util';
 import bcrypt from 'bcryptjs';
 
-const execFileAsync = promisify(execFile);
-
-/** 检测当前 DATABASE_URL 使用的 provider 类型 */
-function detectProvider(): 'sqlite' | 'mongodb' | 'mysql' | 'postgresql' {
+/** PostgreSQL-only datasource guard. */
+function assertPostgresUrl() {
   const url = process.env.DATABASE_URL || '';
-  if (url.startsWith('file:') || url.endsWith('.db')) return 'sqlite';
-  if (url.startsWith('mongodb')) return 'mongodb';
-  if (url.startsWith('mysql')) return 'mysql';
-  if (url.startsWith('postgresql') || url.startsWith('postgres')) return 'postgresql';
-  return 'sqlite'; // 默认 fallback
-}
-
-async function ensureDatabaseSchema() {
-  try {
-    await execFileAsync('pnpm', ['exec', 'prisma', 'db', 'push', '--skip-generate'], {
-      cwd: process.cwd(),
-      env: process.env,
-    });
-  } catch (err) {
-    console.warn('[DB] prisma db push 失败，尝试继续启动:', (err as Error).message);
+  if (!url.startsWith('postgresql://') && !url.startsWith('postgres://')) {
+    throw new Error('[DB] DATABASE_URL 必须是 PostgreSQL 连接串');
   }
 }
 
@@ -43,20 +26,12 @@ export const prisma =
 
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma;
 
-/**
- * 数据库健康检查 - 自动适配 SQLite / MongoDB / 关系型数据库
- */
+/** PostgreSQL database health check. */
 export async function checkDatabaseHealth() {
   await prisma.$connect();
-  const provider = detectProvider();
+  assertPostgresUrl();
 
-  if (provider === 'mongodb' && typeof (prisma as any).$runCommandRaw === 'function') {
-    // MongoDB: 使用原生 ping 命令
-    await (prisma as any).$runCommandRaw({ ping: 1 });
-    return;
-  }
-
-  // SQLite / MySQL / PostgreSQL: 执行一次轻量查询验证连接
+  // PostgreSQL: 执行一次轻量查询验证连接
   try {
     await prisma.user.count();
   } catch {
@@ -65,7 +40,7 @@ export async function checkDatabaseHealth() {
       await (prisma as any).$queryRawUnsafe('SELECT 1');
     } catch {
       // 连接本身可能有问题，抛出让上层处理
-      throw new Error(`[DB] 健康检查失败 (provider=${provider})`);
+      throw new Error('[DB] PostgreSQL 健康检查失败');
     }
   }
 }
@@ -122,7 +97,7 @@ export function generateToken(length = 32): string {
 /** 初始化数据库默认数据 */
 export async function initDatabase() {
   try {
-    await ensureDatabaseSchema();
+    // Schema is applied by the container entrypoint with `prisma migrate deploy`.
     await checkDatabaseHealth();
 
     const adminCount = await prisma.adminAccount.count();
@@ -199,8 +174,7 @@ export async function initDatabase() {
       });
     }
 
-    const provider = detectProvider();
-    console.log(`[DB] 数据库初始化完成 (provider=${provider})`);
+    console.log('[DB] 数据库初始化完成 (provider=postgresql)');
   } catch (err) {
     console.error('[DB] 初始化失败:', err);
   }

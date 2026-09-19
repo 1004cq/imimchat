@@ -31,6 +31,9 @@ RUN groupadd -r nodejs && useradd -r -g nodejs nodeuser && \
     chown -R nodeuser:nodejs /app
 
 COPY --from=prod-deps --chown=nodeuser:nodejs /app/node_modules ./node_modules
+# Keep the Prisma CLI and engines available for the migration entrypoint.
+COPY --from=deps --chown=nodeuser:nodejs /app/node_modules/prisma ./node_modules/prisma
+COPY --from=deps --chown=nodeuser:nodejs /app/node_modules/@prisma ./node_modules/@prisma
 COPY --from=build --chown=nodeuser:nodejs /app/dist ./dist
 COPY --from=build --chown=nodeuser:nodejs /app/prisma ./prisma
 COPY --from=build --chown=nodeuser:nodejs /app/package.json ./package.json

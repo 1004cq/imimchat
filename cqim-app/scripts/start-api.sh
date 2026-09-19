@@ -1,5 +1,5 @@
 #!/bin/sh
 set -e
 cd /app
-npx prisma migrate deploy || true
+pnpm exec prisma migrate deploy
 exec node dist/index.js
