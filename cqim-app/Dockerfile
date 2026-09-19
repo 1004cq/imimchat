@@ -27,7 +27,7 @@ ENV NODE_ENV=production
 WORKDIR /app
 
 RUN groupadd -r nodejs && useradd -r -g nodejs nodeuser && \
-    mkdir -p /app/data/media /app/prisma/data && \
+    mkdir -p /app/prisma/data && \
     chown -R nodeuser:nodejs /app
 
 COPY --from=prod-deps --chown=nodeuser:nodejs /app/node_modules ./node_modules

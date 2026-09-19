@@ -1329,7 +1329,7 @@ export default function ChatDetailPage() {
         // 3. 上传到服务器
         const uploadResp = await fetch('/api/voice/upload', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('user_token') || ''}` },
           body: JSON.stringify({
             audioBase64,
             mimeType: payload.mimeType || 'audio/webm',
@@ -1378,7 +1378,7 @@ export default function ChatDetailPage() {
         const audioBase64 = btoa(binary);
         const uploadResp = await fetch('/api/voice/upload', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('user_token') || ''}` },
           body: JSON.stringify({ audioBase64, mimeType: payload.mimeType || 'audio/webm' }),
         });
         if (uploadResp.ok) {

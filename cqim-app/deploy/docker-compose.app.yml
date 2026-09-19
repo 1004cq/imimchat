@@ -16,6 +16,9 @@ services:
   postgres:
     profiles: ["disabled"]
 
+  minio:
+    profiles: ["disabled"]
+
 
   cqim:
     container_name: cqim-node2-api
@@ -27,7 +30,13 @@ services:
       PORT: 3000
       DATABASE_URL: ${DATABASE_URL:-postgresql://cqim:cqim@NODE1_HOST:5432/cqim?schema=public}
       REDIS_URL: ${REDIS_URL:-redis://NODE1_HOST:6380}
-      MEDIA_ROOT: /app/data/media
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-NODE1_HOST}
+      MINIO_PORT: ${MINIO_PORT:-9000}
+      MINIO_USE_SSL: ${MINIO_USE_SSL:-false}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-cqimminio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-cqimio-secret-change-me}
+      MINIO_BUCKET: ${MINIO_BUCKET:-cqim-media}
+      MINIO_REGION: ${MINIO_REGION:-us-east-1}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://wed.imim.chat}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://wed.imim.chat}
     volumes:

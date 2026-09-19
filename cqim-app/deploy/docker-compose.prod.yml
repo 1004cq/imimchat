@@ -9,6 +9,8 @@ services:
     container_name: cqim-release-redis
     ports:
       - "0.0.0.0:6380:6379"
+  minio:
+    container_name: cqim-release-minio
   cqim:
     container_name: cqim-release-api
     ports:
@@ -16,7 +18,13 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://cqim:cqim@postgres:5432/cqim?schema=public}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-      MEDIA_ROOT: /app/data/media
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio}
+      MINIO_PORT: ${MINIO_PORT:-9000}
+      MINIO_USE_SSL: ${MINIO_USE_SSL:-false}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-cqimminio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-cqimio-secret-change-me}
+      MINIO_BUCKET: ${MINIO_BUCKET:-cqim-media}
+      MINIO_REGION: ${MINIO_REGION:-us-east-1}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://wed.imim.chat}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://wed.imim.chat,http://wed.imim.chat}
       GATEWAY_ID: ${GATEWAY_ID:-gw-app-1}

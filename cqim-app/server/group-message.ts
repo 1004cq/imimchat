@@ -14,71 +14,22 @@
 
 import { WebSocket } from 'ws';
 import prisma from './db';
-import fs from 'fs';
-import path from 'path';
-import crypto from 'crypto';
-import { fileURLToPath } from 'url';
+import { saveMedia } from './media-storage.js';
 import { avatarToProxy } from './cos-signer.js';
 import { publicUrl } from './public-url.js';
 import { redis } from './redis.js';
 import { publishImPush } from './publish-im.js';
 
-// ESM 环境下兼容 __dirname
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// ============ 群头像存储助手（优先腾讯云 COS，失败兜底本地） ============
-/**
- * 把群头像 buffer 持久化：优先上传到腾讯云 COS（imimchat/群头像/{groupId}/avatar_<ts>_<rand>.<ext>）,
- * 失败时回退到本地 data/media/。
- * 返回最终对外可访问的 URL（COS 直链或 /api/media/files/...）。
- */
-async function persistGroupAvatar(groupId: string, buffer: Buffer, ext: string, mimeType: string): Promise<{ url: string; storage: 'cos' | 'local' }> {
-  // 先尝试 COS
-  try {
-    const cfgRow = await prisma.systemConfig.findUnique({ where: { key: 'cos' } }).catch(() => null);
-    const cosCfg: any = cfgRow?.value ? JSON.parse(cfgRow.value) : {};
-    const secretId = cosCfg?.secretId || process.env.COS_SECRET_ID;
-    const secretKey = cosCfg?.secretKey || process.env.COS_SECRET_KEY;
-    const bucket = cosCfg?.bucket || process.env.COS_BUCKET;
-    const region = cosCfg?.region || process.env.COS_REGION || 'ap-guangzhou';
-    const enabled = cosCfg?.enabled !== false;
-    if (enabled && secretId && secretKey && bucket && region) {
-      const COSModule: any = await import('cos-nodejs-sdk-v5');
-      const COS = COSModule.default || COSModule;
-      const cos = new COS({ SecretId: secretId, SecretKey: secretKey });
-      const cleanExt = String(ext || '.jpg').replace(/^\./, '').toLowerCase() || 'jpg';
-      const fileName = `avatar_${Date.now()}_${crypto.randomBytes(3).toString('hex')}.${cleanExt}`;
-      // 优先使用群 username（如设置了）作为目录名，否则回退 groupId
-      let groupDir = groupId;
-      try {
-        const g = await prisma.group.findUnique({ where: { id: groupId }, select: { username: true } });
-        if (g?.username) groupDir = g.username;
-      } catch {}
-      // ASCII 路径，避免中文 → EdgeOne raw UTF-8 → Node 400
-      const cosKey = `imimchat/group-avatars/${groupDir}/${fileName}`;
-      await new Promise<void>((resolve, reject) => {
-        cos.putObject({ Bucket: bucket, Region: region, Key: cosKey, Body: buffer, ContentType: mimeType }, (err: any) => {
-          if (err) reject(err); else resolve();
-        });
-      });
-      const customDomain = cosCfg?.domain || process.env.COS_DOMAIN;
-      const baseUrl = customDomain ? String(customDomain).replace(/\/$/, '') : `https://${bucket}.cos.${region}.myqcloud.com`;
-      const url = `${baseUrl}/${cosKey}`;
-      console.log(`[Group] 群头像已上传到 COS: ${cosKey} (${buffer.length} bytes)`);
-      return { url, storage: 'cos' };
-    }
-  } catch (cosErr: any) {
-    console.error('[Group] 群头像 COS 上传失败，回退本地:', cosErr?.message || cosErr);
-  }
-  // 兜底：本地
-  const MEDIA_DIR = path.resolve(__dirname, '..', 'data', 'media');
-  if (!fs.existsSync(MEDIA_DIR)) fs.mkdirSync(MEDIA_DIR, { recursive: true });
-  const localExt = String(ext || '.jpg').startsWith('.') ? String(ext).toLowerCase() : `.${String(ext).toLowerCase()}`;
-  const fileName = `group_avatar_${groupId}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}${localExt}`;
-  fs.writeFileSync(path.join(MEDIA_DIR, fileName), buffer);
-  console.log(`[Group] 群头像已写入本地: ${fileName} (${buffer.length} bytes)`);
-  return { url: `/api/media/files/${fileName}`, storage: 'local' };
+// ============ 群头像存储助手（MinIO） ============
+async function persistGroupAvatar(groupId: string, buffer: Buffer, ext: string, mimeType: string): Promise<{ url: string; storage: 'minio' }> {
+  const row = await saveMedia({
+    ownerId: null,
+    kind: 'image',
+    buffer,
+    mime: mimeType || 'image/jpeg',
+    filename: `group_${groupId}_avatar${ext || '.jpg'}`,
+  });
+  return { url: row.publicPath || row.url, storage: 'minio' };
 }
 
 // ============ 类型定义 ============

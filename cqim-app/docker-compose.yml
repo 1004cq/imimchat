@@ -51,6 +51,26 @@ services:
       timeout: 5s
       retries: 10
 
+  minio:
+    image: minio/minio:latest
+    container_name: cqim-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-cqimminio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-cqimio-secret-change-me}
+    expose:
+      - "9000"
+      - "9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   cqim:
     build:
       context: .
@@ -67,12 +87,20 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio:
+        condition: service_healthy
     environment:
       NODE_ENV: production
       PORT: 3000
       DATABASE_URL: ${DATABASE_URL:-postgresql://cqim:cqim@postgres:5432/cqim?schema=public}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-      MEDIA_ROOT: /app/data/media
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio}
+      MINIO_PORT: ${MINIO_PORT:-9000}
+      MINIO_USE_SSL: ${MINIO_USE_SSL:-false}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-cqimminio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-cqimio-secret-change-me}
+      MINIO_BUCKET: ${MINIO_BUCKET:-cqim-media}
+      MINIO_REGION: ${MINIO_REGION:-us-east-1}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://wed.imim.chat}
       TRTC_SDK_APP_ID: ${TRTC_SDK_APP_ID:-1600159677}
     volumes:
@@ -106,3 +134,4 @@ services:
 volumes:
   pg_data:
   redis_data:
+  minio_data:

@@ -72,6 +72,7 @@ import groupRouter, {
 import { avatarToProxy } from "./cos-signer";
 import { publicUrl } from "./public-url";
 import mediaRouter from './media-router.js';
+import { ensureMediaBucket, saveMedia } from './media-storage.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -255,12 +256,6 @@ function segmentsToText(segments: OneBotSegment[] | string, rawMessage?: string)
   return text.trim();
 }
 
-/** 语音文件存储目录 */
-const VOICE_DIR = path.resolve(__dirname, '..', 'data', 'voice');
-if (!fs.existsSync(VOICE_DIR)) {
-  fs.mkdirSync(VOICE_DIR, { recursive: true });
-}
-
 /**
  * 从 OneBot 消息段数组中提取 record 消息段信息
  * 返回 { file, url } 或 null
@@ -285,38 +280,34 @@ function extractRecordSegment(segments: OneBotSegment[] | string): { file?: stri
 }
 
 /**
- * 下载/保存语音文件到本地，返回本地文件名
+ * 下载/保存语音文件到 MinIO，返回媒体 URL
  * 支持: URL 下载、base64 解码、本地文件路径复制
  */
 async function downloadVoiceFile(record: { file?: string; url?: string }): Promise<{ localFile: string; publicUrl: string } | null> {
   try {
-    const fileName = `voice_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.ogg`;
-    const localPath = path.join(VOICE_DIR, fileName);
-
     // 优先使用 url 字段
     const source = record.url || record.file || '';
+    let buffer: Buffer;
 
     if (source.startsWith('http://') || source.startsWith('https://')) {
       // URL 下载
       const response = await fetch(source);
       if (!response.ok) throw new Error(`下载失败: ${response.status}`);
-      const buffer = Buffer.from(await response.arrayBuffer());
-      fs.writeFileSync(localPath, buffer);
+      buffer = Buffer.from(await response.arrayBuffer());
     } else if (source.startsWith('base64://')) {
       // base64 解码
       const b64 = source.replace('base64://', '');
-      const buffer = Buffer.from(b64, 'base64');
-      fs.writeFileSync(localPath, buffer);
+      buffer = Buffer.from(b64, 'base64');
     } else if (source.startsWith('file:///') || (source.startsWith('/') && fs.existsSync(source))) {
       // 本地文件路径
       const srcPath = source.replace('file://', '');
-      fs.copyFileSync(srcPath, localPath);
+      buffer = fs.readFileSync(srcPath);
     } else if (source) {
       // 尝试作为 base64 解码
       try {
-        const buffer = Buffer.from(source, 'base64');
+        buffer = Buffer.from(source, 'base64');
         if (buffer.length > 100) {
-          fs.writeFileSync(localPath, buffer);
+          // Continue below and persist the decoded content in MinIO.
         } else {
           console.warn('[Voice] 无法识别语音文件来源:', source.slice(0, 80));
           return null;
@@ -329,9 +320,9 @@ async function downloadVoiceFile(record: { file?: string; url?: string }): Promi
       return null;
     }
 
-    const publicUrl = `/api/voice/${fileName}`;
-    console.log(`[Voice] 语音文件已保存: ${localPath} -> ${publicUrl}`);
-    return { localFile: fileName, publicUrl };
+    const row = await saveMedia({ ownerId: null, kind: 'voice', buffer, mime: 'audio/ogg', filename: `voice_${Date.now()}.ogg` });
+    console.log(`[Voice] 语音文件已保存到 MinIO: ${row.id}`);
+    return { localFile: row.id, publicUrl: row.publicPath || row.url };
   } catch (err) {
     console.error('[Voice] 下载语音文件失败:', err);
     return null;
@@ -381,14 +372,11 @@ function estimateBotVoiceDuration(text: string): number {
 function createBotVoiceFileTarget(format: string = BOT_TTS_FORMAT) {
   const ext = BOT_TTS_EXT_MAP[format] || '.mp3';
   const fileName = `bot_voice_${Date.now()}_${crypto.randomBytes(4).toString('hex')}${ext}`;
-  const localPath = path.join(VOICE_DIR, fileName);
-  if (!localPath.startsWith(VOICE_DIR)) {
-    throw new Error('invalid bot voice path');
-  }
+  const localPath = path.join('/tmp', fileName);
   return {
     fileName,
     localPath,
-    voiceUrl: `/api/voice/${fileName}`,
+    voiceUrl: `/api/media/pending-${fileName}`,
   };
 }
 
@@ -422,10 +410,12 @@ async function synthesizeBotVoiceWithOpenAI(normalized: string): Promise<{ voice
     if (!buffer.length) return null;
 
     const target = createBotVoiceFileTarget(BOT_TTS_FORMAT);
-    fs.writeFileSync(target.localPath, buffer);
+    const row = await saveMedia({ ownerId: null, kind: 'voice', buffer, mime: `audio/${BOT_TTS_FORMAT}`, filename: target.fileName });
+    fs.rmSync(target.localPath, { force: true });
     const duration = estimateBotVoiceDuration(normalized);
-    console.log(`[BOT TTS] OpenAI 机器人语音已生成: ${target.voiceUrl}`);
-    return { voiceUrl: target.voiceUrl, duration };
+    const voiceUrl = row.publicPath || row.url;
+    console.log(`[BOT TTS] OpenAI 机器人语音已生成: ${voiceUrl}`);
+    return { voiceUrl, duration };
   } catch (err) {
     console.error('[BOT TTS] OpenAI 语音合成异常:', err);
     return null;
@@ -455,9 +445,13 @@ async function synthesizeBotVoiceWithEdgeTts(normalized: string): Promise<{ voic
       return null;
     }
 
+    const buffer = fs.readFileSync(target.localPath);
+    const row = await saveMedia({ ownerId: null, kind: 'voice', buffer, mime: 'audio/mpeg', filename: target.fileName });
+    fs.rmSync(target.localPath, { force: true });
     const duration = estimateBotVoiceDuration(normalized);
-    console.log(`[BOT TTS] Edge TTS 机器人语音已生成: ${target.voiceUrl}`);
-    return { voiceUrl: target.voiceUrl, duration };
+    const voiceUrl = row.publicPath || row.url;
+    console.log(`[BOT TTS] Edge TTS 机器人语音已生成: ${voiceUrl}`);
+    return { voiceUrl, duration };
   } catch (err) {
     console.error('[BOT TTS] Edge TTS 语音合成异常:', err);
     return null;
@@ -1600,7 +1594,7 @@ async function startServer() {
   // ============ 用户认证 API ============
   app.use('/api/auth', authRouter);
 
-  // ============ 本地媒体 API（PG 元数据 + MEDIA_ROOT 文件盘） ============
+  // ============ MinIO 媒体 API（PG MediaFile 元数据 + MinIO 对象） ============
   // Must be registered before legacy COS-compatible handlers below.
   app.use("/api/media", mediaRouter);
 
@@ -2445,604 +2439,33 @@ app.use("/api/home", homeRouter);
   initGroupRegistry();
 
   // ============ 语音文件服务 ============
-
-  /**
-   * GET /api/voice/:filename
-   * 静态服务机器人语音文件
-   */
-  app.use('/api/voice', express.static(VOICE_DIR, {
-    setHeaders: (res) => {
-      res.set('Cache-Control', 'public, max-age=86400');
-      res.set('Access-Control-Allow-Origin', '*');
-    },
-  }));
-
-  /**
-   * POST /api/voice/upload
-   * 前端上传用户语音文件（用于推送给 AstrBot 进行 STT 识别）
-   * Body: { audioBase64: string, mimeType?: string }
-   * Returns: { ok: true, voiceUrl: string, fileName: string }
-   */
-  app.post('/api/voice/upload', (req, res) => {
+  // User and bot voice files are stored as MediaFile objects in MinIO.
+  app.post('/api/voice/upload', userAuth, async (req: any, res) => {
     try {
-      const { audioBase64, mimeType = 'audio/ogg' } = req.body;
-      if (!audioBase64) {
-        return res.status(400).json({ ok: false, error: '缺少 audioBase64 参数' });
+      const { audioBase64, mimeType = 'audio/ogg' } = req.body || {};
+      if (!audioBase64) return res.status(400).json({ ok: false, error: '缺少 audioBase64 参数' });
+      const buffer = Buffer.from(String(audioBase64).replace(/^data:[^,]+,/, ''), 'base64');
+      if (!buffer.length || buffer.length > 10 * 1024 * 1024) {
+        return res.status(400).json({ ok: false, error: '语音文件无效或超过 10MB' });
       }
-
-      // ★ MIME 类型白名单校验（仅允许音频格式）
-      const extMap: Record<string, string> = {
-        'audio/ogg': '.ogg',
-        'audio/webm': '.webm',
-        'audio/mp3': '.mp3',
-        'audio/mpeg': '.mp3',
-        'audio/wav': '.wav',
-        'audio/mp4': '.m4a',
-        'audio/webm;codecs=opus': '.webm',
-        'audio/ogg;codecs=opus': '.ogg',
-      };
-      const ext = extMap[mimeType];
-      if (!ext) {
-        return res.status(400).json({ ok: false, error: '不支持的音频格式' });
-      }
-
-      const buffer = Buffer.from(audioBase64, 'base64');
-
-      // ★ 文件大小限制：最大 10MB
-      const MAX_VOICE_SIZE = 10 * 1024 * 1024;
-      if (buffer.length > MAX_VOICE_SIZE) {
-        return res.status(400).json({ ok: false, error: '语音文件过大，最大 10MB' });
-      }
-
-      // ★ 安全文件名：仅使用随机字符，防止路径遍历
-      const fileName = `user_voice_${Date.now()}_${crypto.randomBytes(4).toString('hex')}${ext}`;
-      const localPath = path.join(VOICE_DIR, fileName);
-
-      // ★ 确保写入路径在 VOICE_DIR 内（防路径遍历）
-      if (!localPath.startsWith(VOICE_DIR)) {
-        return res.status(400).json({ ok: false, error: '无效的文件路径' });
-      }
-
-      fs.writeFileSync(localPath, buffer);
-
-      const voiceUrl = `/api/voice/${fileName}`;
-      console.log(`[Voice] 用户语音已上传: ${localPath} (${buffer.length} bytes)`);
-
-      return res.json({ ok: true, voiceUrl, fileName });
-    } catch (err: any) {
-      console.error('[Voice] 上传失败:', err);
-      // ★ 不暴露内部错误详情
+      const row = await saveMedia({
+        ownerId: req.user?.id || null,
+        kind: 'voice',
+        buffer,
+        mime: String(mimeType).split(';')[0] || 'audio/ogg',
+        filename: `voice_${Date.now()}.ogg`,
+      });
+      return res.json({ ok: true, voiceUrl: row.publicPath || row.url, fileName: row.id, storage: 'minio' });
+    } catch (error) {
+      console.error('[Voice] MinIO upload failed:', error);
       return res.status(500).json({ ok: false, error: '上传失败' });
     }
   });
 
-  // ===== 媒体文件上传（图片/视频） =====
-  const MEDIA_DIR = path.resolve(__dirname, '..', 'data', 'media');
-  if (!fs.existsSync(MEDIA_DIR)) {
-    fs.mkdirSync(MEDIA_DIR, { recursive: true });
-  }
-
-  // 静态文件服务
-  app.use('/api/media/files', express.static(MEDIA_DIR, {
-    setHeaders: (res) => {
-      res.set('Cache-Control', 'public, max-age=86400');
-    },
-  }));
-
-  /**
-   * GET /api/cos/sts
-   * 为前端直传 COS 生成临时密钥，上传目录按用户 ID 隔离
-   */
-  app.get('/api/cos/sts', userAuth, async (req, res) => {
-    const currentUser = (req as any).user;
-    if (!currentUser?.id) {
-      return res.status(401).json({ error: '请先登录' });
-    }
-
-    const cosConfig = await getSystemConfig<any>('cos') || {};
-    const secretId = cosConfig.secretId || process.env.COS_SECRET_ID;
-    const secretKey = cosConfig.secretKey || process.env.COS_SECRET_KEY;
-    const bucket = cosConfig.bucket || process.env.COS_BUCKET;
-    const region = cosConfig.region || process.env.COS_REGION || 'ap-guangzhou';
-    const enabled = cosConfig.enabled !== false;
-
-    if (!enabled) {
-      return res.status(503).json({ error: 'COS 上传功能已禁用' });
-    }
-    if (!secretId || !secretKey || !bucket || !region) {
-      return res.status(503).json({ error: 'COS 未配置，请先在管理后台完成配置' });
-    }
-
-    try {
-      const STSModule: any = await import('qcloud-cos-sts');
-      const STS = STSModule.default || STSModule;
-      const appId = bucket.substring(bucket.lastIndexOf('-') + 1);
-      // 按用户名分类存储（用户名为空时回退 cuid）
-      const userDir = currentUser.username || currentUser.id;
-      // 权限：ASCII 别名路径（避免中文跳过 EdgeOne 时出错） + 保留旧中文路径以兼容历史资源
-      const policy = {
-        version: '2.0',
-        statement: [
-          {
-            action: [
-              'name/cos:PutObject',
-              'name/cos:PostObject',
-              'name/cos:InitiateMultipartUpload',
-              'name/cos:ListMultipartUploads',
-              'name/cos:ListParts',
-              'name/cos:UploadPart',
-              'name/cos:CompleteMultipartUpload',
-            ],
-            effect: 'allow',
-            principal: { qcs: ['*'] },
-            resource: [
-              `qcs::cos:${region}:uid/${appId}:${bucket}/imimchat/moments/${userDir}/*`,
-              `qcs::cos:${region}:uid/${appId}:${bucket}/imimchat/avatars/${userDir}/*`,
-              `qcs::cos:${region}:uid/${appId}:${bucket}/imimchat/朋友圈/${userDir}/*`,
-              `qcs::cos:${region}:uid/${appId}:${bucket}/imimchat/头像/${userDir}/*`,
-            ],
-          },
-        ],
-      };
-
-      const credential = await new Promise<any>((resolve, reject) => {
-        STS.getCredential(
-          {
-            secretId,
-            secretKey,
-            region,
-            durationSeconds: 1800,
-            policy,
-          },
-          (err: any, cred: any) => {
-            if (err) reject(err);
-            else resolve(cred);
-          }
-        );
-      });
-
-      const customDomain = cosConfig.domain || process.env.COS_DOMAIN;
-      const baseUrl = customDomain
-        ? String(customDomain).replace(/\/$/, '')
-        : `https://${bucket}.cos.${region}.myqcloud.com`;
-
-      return res.json({
-        credentials: {
-          tmpSecretId: credential.credentials.tmpSecretId,
-          tmpSecretKey: credential.credentials.tmpSecretKey,
-          sessionToken: credential.credentials.sessionToken,
-        },
-        expiredTime: credential.expiredTime,
-        bucket,
-        region,
-        baseUrl,
-        userId: currentUser.id,
-        username: currentUser.username || null,
-        userDir,
-        // 从此新上传均使用纯 ASCII 路径，避免 EdgeOne 回源时中文路径被 raw 字节化导致 Node 400
-        momentsFolder: `imimchat/moments/${userDir}`,
-        avatarFolder: `imimchat/avatars/${userDir}`,
-      });
-    } catch (error: any) {
-      console.error('[COS] STS 获取失败:', error);
-      return res.status(500).json({ error: '获取上传凭证失败' });
-    }
-  });
-
-  /**
-   * GET /api/cos/proxy/*
-   * COS 服务端代理（优化后）：
-   *   - 图片、贴纸等小文件走 302 重定向到签名 URL（由浏览器直接从 COS 拉）
-   *   - 视频 / 音频等大文件采用"服务端流式转发 + 支持 Range"，让 Nginx 能缓存 mp4 分片，
-   *     同时避免 "302 跳转后后续需要重新 TLS 握手" 以及 项目上传后签名 URL 过期问题。
-   * 支持透传处理参数（imageMogr2 / ci-process 等）。
-   */
-  app.get('/api/cos/proxy/*', async (req, res) => {
-    try {
-      const cosKey = decodeURIComponent(req.params[0] || '');
-      if (!cosKey) {
-        return res.status(400).json({ error: '缺少 COS 文件路径' });
-      }
-      const queryString = req.url.includes('?') ? req.url.split('?').slice(1).join('?') : '';
-
-      // 检测是否为视频 / 音频类大文件（用于决定签名有效期）
-      const isStreamMedia = /\.(mp4|mov|m4v|webm|mkv|3gp|m4a|mp3|aac|wav|ogg)(\?|$)/i.test(cosKey);
-
-      const { getSignedUrl } = await import('./cos-signer.js');
-      // 视频签发 6 天有效期，避免上游缓存中的 URL 过期
-      const finalUrl = await getSignedUrl(cosKey, queryString, isStreamMedia);
-      if (!finalUrl) {
-        return res.status(503).json({ error: 'COS 未配置' });
-      }
-
-      // 统一使用服务端流式转发（避免 302 重定向被 EdgeOne CDN 拦截导致图片 400）
-      // 服务端转发，透传 Range
-      const upstreamHeaders: Record<string, string> = {};
-      const range = req.headers.range;
-      if (range) upstreamHeaders['Range'] = range;
-      const ifNoneMatch = req.headers['if-none-match'];
-      if (ifNoneMatch) upstreamHeaders['If-None-Match'] = String(ifNoneMatch);
-      const ifModifiedSince = req.headers['if-modified-since'];
-      if (ifModifiedSince) upstreamHeaders['If-Modified-Since'] = String(ifModifiedSince);
-
-      let upstream: Response | undefined;
-      try {
-        upstream = await (globalThis as any).fetch(finalUrl, { headers: upstreamHeaders });
-      } catch (e: any) {
-        console.error('[COS Proxy] upstream fetch 失败:', e?.message || e);
-        return res.status(502).json({ error: '上游拉取失败' });
-      }
-      if (!upstream) return res.status(502).json({ error: '上游无响应' });
-
-      res.status(upstream.status as any);
-      // 透传关键响应头
-      const passHeaders = [
-        'content-type', 'content-length', 'content-range', 'accept-ranges',
-        'etag', 'last-modified', 'expires',
-      ];
-      for (const h of passHeaders) {
-        const v = (upstream.headers as any).get(h);
-        if (v) res.setHeader(h, v);
-      }
-      // 仅成功响应长期缓存；404/5xx 禁止缓存，避免坏头像被 CDN 钉死
-      if (upstream.status >= 200 && upstream.status < 300) {
-        res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
-      } else {
-        res.setHeader('Cache-Control', 'no-store');
-      }
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Headers', 'Range');
-      res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
-
-      const body: any = (upstream as any).body;
-      if (!body) {
-        return res.end();
-      }
-      // Web ReadableStream → Node Readable 转换
-      try {
-        const { Readable } = await import('node:stream');
-        const nodeStream: any = (Readable as any).fromWeb(body);
-        req.on('close', () => { try { nodeStream.destroy(); } catch { /* ignore */ } });
-        nodeStream.on('error', (err: any) => {
-          console.error('[COS Proxy] stream 错误:', err?.message || err);
-          try { res.end(); } catch { /* ignore */ }
-        });
-        nodeStream.pipe(res);
-      } catch (e: any) {
-        // 降级为 buffer 一次性返回
-        const buf = Buffer.from(await (upstream as any).arrayBuffer());
-        res.end(buf);
-      }
-    } catch (err: any) {
-      if (err.statusCode === 404 || err.code === 'NoSuchKey') {
-        return res.status(404).json({ error: '文件不存在' });
-      }
-      console.error('[COS Proxy] 处理失败:', err.message || err);
-      return res.status(500).json({ error: '获取文件失败' });
-    }
-  });
-
-  /**
-   * GET /api/cos/refresh-sign?url=<原 COS URL 或代理 URL>
-   * 用于前端 video onError 时拿一条新的可访问 URL 来重新加载。
-   * 返回：{ url: string } — 优先返回站内代理 URL，避免同样问题重复发生。
-   */
-  app.get('/api/cos/refresh-sign', async (req, res) => {
-    try {
-      const raw = String(req.query.url || '');
-      if (!raw) return res.status(400).json({ error: '缺少 url 参数' });
-
-      // 情况 1：传入的已是代理 URL → 原样返回（带上 cache buster）
-      if (raw.startsWith('/api/cos/proxy/') || raw.startsWith('http') && raw.includes('/api/cos/proxy/')) {
-        const sep = raw.includes('?') ? '&' : '?';
-        return res.json({ url: `${raw}${sep}_t=${Date.now()}` });
-      }
-
-      // 情况 2：传入 COS 直链 → 转为代理 URL（优先）或重新签名
-      const { cosUrlToProxy, isCosUrl, parseCosUrl, getSignedUrl } = await import('./cos-signer.js');
-      if (isCosUrl(raw)) {
-        const proxy = cosUrlToProxy(raw);
-        if (proxy && proxy.startsWith('/api/cos/proxy/')) {
-          return res.json({ url: `${proxy}${proxy.includes('?') ? '&' : '?'}_t=${Date.now()}` });
-        }
-        const parsed = parseCosUrl(raw);
-        if (parsed) {
-          const signed = await getSignedUrl(parsed.cosKey, parsed.processQuery, true);
-          if (signed) return res.json({ url: signed });
-        }
-      }
-      return res.status(400).json({ error: '不支持的 URL' });
-    } catch (err: any) {
-      console.error('[COS Refresh] 失败:', err?.message || err);
-      return res.status(500).json({ error: '刷新失败' });
-    }
-  });
-
-  /**
-   * POST /api/media/upload
-   * 上传图片或视频文件
-   * 聊天文件始终使用本地存储，朋友圈文件走COS（imimchat/朋友圈/用户ID/照片|视频/）
-   * Body: { dataBase64: string, mimeType: string, mediaType: 'image' | 'video', userId?: string, source?: 'chat' | 'moments' | 'avatar' }
-   * Returns: { ok: true, url: string, fileName: string, storage: 'cos' | 'local' }
-   */
-  app.post('/api/media/upload', async (req, res) => {
-    try {
-      const { dataBase64, mimeType, mediaType = 'image', userId } = req.body;
-      if (!dataBase64) {
-        return res.status(400).json({ ok: false, error: '缺少 dataBase64 参数' });
-      }
-
-      // MIME 类型白名单
-      const imageExtMap: Record<string, string> = {
-        'image/jpeg': '.jpg',
-        'image/jpg': '.jpg',
-        'image/png': '.png',
-        'image/gif': '.gif',
-        'image/webp': '.webp',
-        'image/bmp': '.bmp',
-        'image/svg+xml': '.svg',
-      };
-      const videoExtMap: Record<string, string> = {
-        'video/mp4': '.mp4',
-        'video/webm': '.webm',
-        'video/quicktime': '.mov',
-        'video/x-msvideo': '.avi',
-        'video/3gpp': '.3gp',
-      };
-
-      const extMap = mediaType === 'video' ? videoExtMap : imageExtMap;
-      const ext = extMap[mimeType];
-      if (!ext) {
-        return res.status(400).json({ ok: false, error: `不支持的${mediaType === 'video' ? '视频' : '图片'}格式: ${mimeType}` });
-      }
-
-      const buffer = Buffer.from(dataBase64, 'base64');
-
-      // 文件大小限制：图片 20MB，视频 100MB
-      const MAX_SIZE = mediaType === 'video' ? 100 * 1024 * 1024 : 20 * 1024 * 1024;
-      if (buffer.length > MAX_SIZE) {
-        return res.status(400).json({ ok: false, error: `文件过大，最大 ${mediaType === 'video' ? '100MB' : '20MB'}` });
-      }
-
-      const fileName = `${mediaType}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}${ext}`;
-
-      // 根据 source 决定存储方式：朋友圈和头像走COS，聊天文件走本地
-      const { source } = req.body;
-      const cosConfig = await getSystemConfig<any>('cos') || {};
-      const cosSecretId = cosConfig.secretId || process.env.COS_SECRET_ID;
-      const cosSecretKey = cosConfig.secretKey || process.env.COS_SECRET_KEY;
-      const cosBucket = cosConfig.bucket || process.env.COS_BUCKET;
-      const cosRegion = cosConfig.region || process.env.COS_REGION || 'ap-guangzhou';
-      const cosEnabled = cosConfig.enabled !== false;
-
-      if ((source === 'moments' || source === 'avatar') && cosEnabled && cosSecretId && cosSecretKey && cosBucket && cosRegion) {
-        try {
-          const COSModule: any = await import('cos-nodejs-sdk-v5');
-          const COS = COSModule.default || COSModule;
-          const cos = new COS({ SecretId: cosSecretId, SecretKey: cosSecretKey });
-          // 优先使用用户名作为目录名，空时回退到 userId/anonymous
-          let userDir: string = 'anonymous';
-          if (userId) {
-            try {
-              const u = await prisma.user.findUnique({ where: { id: userId }, select: { username: true } });
-              userDir = u?.username || userId;
-            } catch { userDir = userId; }
-          }
-          let cosKey: string;
-          if (source === 'avatar') {
-            // 头像目录结构：imimchat/avatars/{username}/{fileName}。
-            // 使用 ASCII 路径避免 EdgeOne 回源时中文 → raw UTF-8 导致 Node 400
-            cosKey = `imimchat/avatars/${userDir}/${fileName}`;
-          } else {
-            // 朋友圈目录结构：imimchat/moments/{username}/photos|videos/{fileName}
-            const subDir = mediaType === 'video' ? 'videos' : 'photos';
-            cosKey = `imimchat/moments/${userDir}/${subDir}/${fileName}`;
-          }
-          await new Promise<void>((resolve, reject) => {
-            cos.putObject({
-              Bucket: cosBucket,
-              Region: cosRegion,
-              Key: cosKey,
-              Body: buffer,
-              ContentType: mimeType,
-            }, (err: any) => {
-              if (err) reject(err);
-              else resolve();
-            });
-          });
-          const customDomain = cosConfig.domain || process.env.COS_DOMAIN;
-          const baseUrl = customDomain
-            ? String(customDomain).replace(/\/$/, '')
-            : `https://${cosBucket}.cos.${cosRegion}.myqcloud.com`;
-          const cosUrl = `${baseUrl}/${cosKey}`;
-          console.log(`[Media] ${source}/${mediaType} 已上传到 COS: ${cosKey} (${buffer.length} bytes)`);
-          return res.json({ ok: true, url: cosUrl, fileName, storage: 'cos' });
-        } catch (cosErr: any) {
-          console.error('[Media] COS 上传失败，回退到本地存储:', cosErr.message || cosErr);
-        }
-      }
-
-      // 回退：本地存储
-      const localPath = path.join(MEDIA_DIR, fileName);
-      if (!localPath.startsWith(MEDIA_DIR)) {
-        return res.status(400).json({ ok: false, error: '无效的文件路径' });
-      }
-      fs.writeFileSync(localPath, buffer);
-      const url = `/api/media/files/${fileName}`;
-      console.log(`[Media] ${mediaType} 已上传到本地: ${localPath} (${buffer.length} bytes)`);
-      return res.json({ ok: true, url, fileName, storage: 'local' });
-    } catch (err: any) {
-      console.error('[Media] 上传失败:', err);
-      return res.status(500).json({ ok: false, error: '上传失败' });
-    }
-  });
-
-  /**
-   * POST /api/media/upload-form
-   * 使用 FormData 上传文件（避免 base64 膨胀，支持大文件上传和进度监控）
-   * FormData fields: file (File), mediaType ('image'|'video'), source ('moments'|'avatar'|'chat')
-   * Returns: { ok: true, url: string, fileName: string, storage: 'cos' | 'local' }
-   */
-  app.post('/api/media/upload-form', async (req, res) => {
-    try {
-      // 使用 busboy 解析 multipart/form-data
-      const busboy = (await import('busboy')).default;
-      const bb = busboy({ headers: req.headers, limits: { fileSize: 200 * 1024 * 1024 } }); // 200MB 限制
-
-      let fileBuffer: Buffer | null = null;
-      let fileName = '';
-      let fileMimeType = '';
-      let mediaType = 'image';
-      let source = 'moments';
-      let fileTruncated = false;
-
-      bb.on('file', (_fieldname: string, fileStream: any, info: any) => {
-        const { filename, mimeType } = info;
-        fileName = filename || 'upload';
-        fileMimeType = mimeType || 'application/octet-stream';
-        const chunks: Buffer[] = [];
-        fileStream.on('data', (chunk: Buffer) => {
-          chunks.push(chunk);
-        });
-        fileStream.on('end', () => {
-          fileBuffer = Buffer.concat(chunks);
-        });
-        fileStream.on('limit', () => {
-          fileTruncated = true;
-        });
-      });
-
-      bb.on('field', (fieldname: string, val: string) => {
-        if (fieldname === 'mediaType') mediaType = val;
-        if (fieldname === 'source') source = val;
-      });
-
-      bb.on('finish', async () => {
-        try {
-          if (fileTruncated) {
-            return res.status(400).json({ ok: false, error: '文件过大，最大 200MB' });
-          }
-          if (!fileBuffer || fileBuffer.length === 0) {
-            return res.status(400).json({ ok: false, error: '缺少文件' });
-          }
-
-          // MIME 类型白名单
-          const imageExtMap: Record<string, string> = {
-            'image/jpeg': '.jpg', 'image/jpg': '.jpg', 'image/png': '.png',
-            'image/gif': '.gif', 'image/webp': '.webp', 'image/bmp': '.bmp',
-            'image/svg+xml': '.svg', 'image/heic': '.heic', 'image/heif': '.heif',
-          };
-          const videoExtMap: Record<string, string> = {
-            'video/mp4': '.mp4', 'video/webm': '.webm', 'video/quicktime': '.mov',
-            'video/x-msvideo': '.avi', 'video/3gpp': '.3gp', 'video/x-matroska': '.mkv',
-            'video/mp2t': '.ts', 'video/x-m4v': '.m4v',
-          };
-
-          const extMap = mediaType === 'video' ? videoExtMap : imageExtMap;
-          let ext = extMap[fileMimeType];
-          // 如果 MIME 不在白名单，尝试从文件名提取扩展名
-          if (!ext) {
-            const fileExt = fileName.split('.').pop()?.toLowerCase();
-            if (fileExt && (mediaType === 'video'
-              ? ['mp4', 'webm', 'mov', 'avi', '3gp', 'mkv', 'ts', 'm4v'].includes(fileExt)
-              : ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'heic', 'heif'].includes(fileExt))) {
-              ext = '.' + fileExt;
-            } else {
-              return res.status(400).json({ ok: false, error: `不支持的${mediaType === 'video' ? '视频' : '图片'}格式: ${fileMimeType}` });
-            }
-          }
-
-          const MAX_SIZE = mediaType === 'video' ? 200 * 1024 * 1024 : 20 * 1024 * 1024;
-          if (fileBuffer.length > MAX_SIZE) {
-            return res.status(400).json({ ok: false, error: `文件过大，最大 ${mediaType === 'video' ? '200MB' : '20MB'}` });
-          }
-
-          const savedFileName = `${mediaType}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}${ext}`;
-
-          // 根据 source 决定存储方式
-          const cosConfig = await getSystemConfig<any>('cos') || {};
-          const cosSecretId = cosConfig.secretId || process.env.COS_SECRET_ID;
-          const cosSecretKey = cosConfig.secretKey || process.env.COS_SECRET_KEY;
-          const cosBucket = cosConfig.bucket || process.env.COS_BUCKET;
-          const cosRegion = cosConfig.region || process.env.COS_REGION || 'ap-guangzhou';
-          const cosEnabled = cosConfig.enabled !== false;
-
-          // 从认证头获取用户 ID 与用户名
-          let userId = 'anonymous';
-          let userDir: string = 'anonymous';
-          const token = req.headers['authorization']?.replace('Bearer ', '');
-          if (token) {
-            try {
-              const session = await prisma.userSession.findUnique({ where: { token }, include: { user: true } });
-              if (session?.user?.id) {
-                userId = session.user.id;
-                userDir = session.user.username || session.user.id;
-              }
-            } catch {}
-          }
-
-          if ((source === 'moments' || source === 'avatar') && cosEnabled && cosSecretId && cosSecretKey && cosBucket && cosRegion) {
-            try {
-              const COSModule: any = await import('cos-nodejs-sdk-v5');
-              const COS = COSModule.default || COSModule;
-              const cos = new COS({ SecretId: cosSecretId, SecretKey: cosSecretKey });
-              let cosKey: string;
-              if (source === 'avatar') {
-                // ASCII 路径，避免中文 → EdgeOne raw UTF-8 → Node 400
-                cosKey = `imimchat/avatars/${userDir}/${savedFileName}`;
-              } else {
-                const subDir = mediaType === 'video' ? 'videos' : 'photos';
-                cosKey = `imimchat/moments/${userDir}/${subDir}/${savedFileName}`;
-              }
-              await new Promise<void>((resolve, reject) => {
-                cos.putObject({
-                  Bucket: cosBucket,
-                  Region: cosRegion,
-                  Key: cosKey,
-                  Body: fileBuffer!,
-                  ContentType: fileMimeType,
-                }, (err: any) => {
-                  if (err) reject(err);
-                  else resolve();
-                });
-              });
-              const customDomain = cosConfig.domain || process.env.COS_DOMAIN;
-              const baseUrl = customDomain
-                ? String(customDomain).replace(/\/$/, '')
-                : `https://${cosBucket}.cos.${cosRegion}.myqcloud.com`;
-              const cosUrl = `${baseUrl}/${cosKey}`;
-              console.log(`[Media-Form] ${source}/${mediaType} 已上传到 COS: ${cosKey} (${fileBuffer!.length} bytes)`);
-              return res.json({ ok: true, url: cosUrl, fileName: savedFileName, storage: 'cos' });
-            } catch (cosErr: any) {
-              console.error('[Media-Form] COS 上传失败，回退到本地存储:', cosErr.message || cosErr);
-            }
-          }
-
-          // 回退：本地存储
-          const localPath = path.join(MEDIA_DIR, savedFileName);
-          if (!localPath.startsWith(MEDIA_DIR)) {
-            return res.status(400).json({ ok: false, error: '无效的文件路径' });
-          }
-          fs.writeFileSync(localPath, fileBuffer!);
-          const url = `/api/media/files/${savedFileName}`;
-          console.log(`[Media-Form] ${mediaType} 已上传到本地: ${localPath} (${fileBuffer!.length} bytes)`);
-          return res.json({ ok: true, url, fileName: savedFileName, storage: 'local' });
-        } catch (err: any) {
-          console.error('[Media-Form] 处理上传失败:', err);
-          return res.status(500).json({ ok: false, error: '上传失败' });
-        }
-      });
-
-      bb.on('error', (err: any) => {
-        console.error('[Media-Form] busboy 解析错误:', err);
-        return res.status(400).json({ ok: false, error: '文件解析失败' });
-      });
-
-      req.pipe(bb);
-    } catch (err: any) {
-      console.error('[Media-Form] 上传失败:', err);
-      return res.status(500).json({ ok: false, error: '上传失败' });
-    }
+  // MinIO is the only active media backend.
+  // Legacy COS/STL and filesystem upload handlers were removed; clients use mediaRouter above.
+  app.get('/api/cos/sts', userAuth, (_req, res) => {
+    return res.status(503).json({ error: 'COS 已停用，请使用 MinIO 媒体接口' });
   });
 
   /**
@@ -4377,5 +3800,6 @@ function startReverseWsClient(handleOneBotAction: (ws: WebSocket, action: OneBot
 
 initDatabase()
   .then(() => connectRedis())
+  .then(() => ensureMediaBucket())
   .then(() => startServer())
   .catch(console.error);

@@ -4,9 +4,7 @@
  */
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
-import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import prisma from './db.js';
 import {
   getCachedConversationList,
@@ -22,14 +20,10 @@ import { userAuth } from './auth.js';
 import { avatarToProxy } from './cos-signer.js';
 import { notifyPrivateMessagePush } from './push-notify.js';
 import { publishImPush } from './publish-im.js';
+import { saveMedia, type MediaKind } from './media-storage.js';
 
 const router = Router();
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const CHAT_MEDIA_DIR = path.resolve(__dirname, '..', 'data', 'media');
-if (!fs.existsSync(CHAT_MEDIA_DIR)) {
-  fs.mkdirSync(CHAT_MEDIA_DIR, { recursive: true });
-}
+type AuthenticatedRequest = Request & { user?: { id: string } };
 
 // ============ 辅助函数 ============
 
@@ -254,7 +248,7 @@ router.post('/create', async (req: Request, res: Response) => {
  * iOS/移动端统一发送入口，支持文本、语音、图片、视频、文件 multipart/form-data
  * FormData: chatId, type, content?, file?, duration?, replyTo?
  */
-router.post('/send', async (req: Request, res: Response) => {
+router.post('/send', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const contentType = String(req.headers['content-type'] || '');
 
@@ -270,8 +264,9 @@ router.post('/send', async (req: Request, res: Response) => {
       return await createPrivateMessageAndNotify(req, res, chatId, 'encrypted', String(content), replyTo || null);
     }
 
-    const busboy = (await import('busboy')).default;
-    const bb = busboy({ headers: req.headers, limits: { fileSize: 200 * 1024 * 1024, files: 1 } });
+    const busboyModule: any = require('busboy');
+    const createBusboy = busboyModule.default || busboyModule;
+    const bb = createBusboy({ headers: req.headers, limits: { fileSize: 200 * 1024 * 1024, files: 1 } });
     const fields: Record<string, string> = {};
     let fileBuffer: Buffer | null = null;
     let originalName = '';
@@ -299,15 +294,15 @@ router.post('/send', async (req: Request, res: Response) => {
       try {
         if (truncated) return res.status(400).json({ error: '文件过大，最大 200MB' });
         const chatId = fields.chatId;
-        const msgType = fields.type || fields.msgType || 'text';
+        const requestedType = fields.type || 'text';
         const replyToId = fields.replyTo || fields.replyToId || null;
         if (!chatId) return res.status(400).json({ error: '缺少 chatId' });
 
-        if (msgType !== 'encrypted') {
+        if (fields.msgType !== 'encrypted') {
           return res.status(400).json({ error: '私聊强制要求端到端加密，请发送加密消息 (msgType=encrypted)' });
         }
 
-        let content = fields.content || messagePreview(msgType, '');
+        let content = fields.content || messagePreview(requestedType, '');
         const extra: Record<string, any> = {};
 
         if (fileBuffer && fileBuffer.length > 0) {
@@ -317,19 +312,22 @@ router.post('/send', async (req: Request, res: Response) => {
             return res.status(400).json({ error: `不支持的文件类型: ${mimeType}` });
           }
 
-          const safeName = safeChatFileName(msgType, originalName, mimeType);
-          const localPath = path.join(CHAT_MEDIA_DIR, safeName);
-          if (!localPath.startsWith(CHAT_MEDIA_DIR)) {
-            return res.status(400).json({ error: '无效的文件路径' });
-          }
-          fs.writeFileSync(localPath, fileBuffer);
-          const mediaUrl = `/api/media/files/${safeName}`;
+          const mediaKind: MediaKind = requestedType === 'image' ? 'image' : requestedType === 'video' ? 'video' : requestedType === 'voice' ? 'voice' : 'file';
+          const media = await saveMedia({
+            ownerId: req.user!.id,
+            kind: mediaKind,
+            buffer: fileBuffer,
+            mime: mimeType,
+            filename: originalName,
+            durationMs: fields.duration ? Number(fields.duration) : undefined,
+          });
+          const mediaUrl = media.publicPath || media.url;
           extra.mediaUrl = mediaUrl;
           extra.fileName = originalName;
           extra.fileSize = fileBuffer.length;
           extra.mimeType = mimeType;
 
-          if (msgType === 'voice') {
+          if (requestedType === 'voice') {
             extra.voiceUrl = mediaUrl;
             extra.duration = Number(fields.duration || 0);
             if (fields.waveform) {
@@ -337,18 +335,18 @@ router.post('/send', async (req: Request, res: Response) => {
             }
             extra.audioMimeType = mimeType;
             content = '[语音消息]';
-          } else if (msgType === 'image') {
+          } else if (requestedType === 'image') {
             content = '[图片]';
-          } else if (msgType === 'video') {
+          } else if (requestedType === 'video') {
             content = '[视频]';
-          } else if (msgType === 'file') {
+          } else if (requestedType === 'file') {
             content = originalName || '[文件]';
           }
-        } else if (msgType !== 'text') {
+        } else if (requestedType !== 'text') {
           return res.status(400).json({ error: '缺少文件' });
         }
 
-        return await createPrivateMessageAndNotify(req, res, chatId, msgType, content, replyToId, Object.keys(extra).length ? extra : undefined);
+        return await createPrivateMessageAndNotify(req, res, chatId, 'encrypted', content, replyToId, Object.keys(extra).length ? extra : undefined);
       } catch (err) {
         console.error('[PrivateChat] 统一发送失败:', err);
         return res.status(500).json({ error: '发送消息失败' });
