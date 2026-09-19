@@ -12,7 +12,6 @@
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import prisma from './db.js';
-import { logIllegalRequestMySQL } from './mysql.js';
 
 // ============================================================
 // 1. 安全响应头中间件
@@ -382,28 +381,18 @@ async function recordIllegalRequest(ip: string, path: string, type: string, deta
     const reason = normalizedDetail ? `${type}: ${normalizedDetail}` : type;
     const userAgent = looksLikeUserAgent ? normalizedDetail : undefined;
 
-    await Promise.allSettled([
-      prisma.illegalRequest.create({
-        data: {
-          ip,
-          path,
-          reason,
-          userAgent,
-          createdAt: new Date(),
-        },
-      }),
-      logIllegalRequestMySQL({
+    await prisma.illegalRequest.create({
+      data: {
         ip,
         path,
-        method: undefined,
-        userAgent,
         reason,
+        userAgent,
         statusCode: 429,
         createdAt: new Date(),
-      }),
-    ]);
-  } catch {
-    // 静默失败，不影响正常流程
+      },
+    });
+  } catch (error) {
+    console.error('[Security] 非法请求日志写入 PG 失败:', error);
   }
 }
 

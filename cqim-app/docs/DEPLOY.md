@@ -10,6 +10,10 @@
 
 `MINIO_ROOT_USER` 和 `MINIO_ROOT_PASSWORD` 必须写入部署机的 `.env`，不能使用仓库里的示例值。
 
+## 管理员后台存储
+
+管理员后台只依赖 **PostgreSQL + Redis**：用户、仪表盘统计、管理员操作日志、登录日志和非法请求日志均通过 Prisma 写入 PostgreSQL；在线用户数从 Redis 的 presence key 实时统计。后台不连接 MySQL，`server/mysql.ts` 仅保留废弃占位，避免旧部署脚本引用路径失效。
+
 ## 启动顺序
 
 ```text

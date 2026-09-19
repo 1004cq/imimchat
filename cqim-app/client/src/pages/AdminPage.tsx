@@ -208,16 +208,20 @@ function AdminLoginPage({ onLogin }: { onLogin: (admin: AdminInfo) => void }) {
 function DashboardPanel() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    api('/dashboard').then(setData).catch(console.error).finally(() => setLoading(false));
+    api('/dashboard')
+      .then(setData)
+      .catch((err: any) => setError(err.message || '仪表盘加载失败'))
+      .finally(() => setLoading(false));
   }, []);
 
   if (loading) return <LoadingSpinner />;
-  if (!data) return <div className="text-slate-400 text-center py-20">加载失败</div>;
+  if (!data) return <div className="text-red-400 text-center py-20">{error || '仪表盘加载失败'}</div>;
 
   const { overview, dailyStats, messageTypes } = data;
-  const maxMsg = Math.max(...dailyStats.map(d => d.messages));
+  const maxMsg = Math.max(1, ...dailyStats.map(d => d.messages));
 
   const statCards = [
     { label: '总用户数', value: overview.totalUsers, icon: Users, color: 'bg-blue-500/10 text-blue-400', iconBg: 'bg-blue-500/20' },
@@ -262,7 +266,9 @@ function DashboardPanel() {
           <TrendingUp className="w-4 h-4 text-emerald-400" />
           近7天消息趋势
         </h3>
-        <div className="flex items-end gap-2 h-40">
+        {dailyStats.length === 0 ? (
+          <div className="h-40 flex items-center justify-center text-sm text-slate-500">暂无近 7 天消息数据</div>
+        ) : <div className="flex items-end gap-2 h-40">
           {dailyStats.map((d, i) => (
             <div key={i} className="flex-1 flex flex-col items-center gap-1">
               <span className="text-xs text-slate-500">{d.messages}</span>
@@ -277,7 +283,7 @@ function DashboardPanel() {
               <span className="text-xs text-slate-500">{d.date}</span>
             </div>
           ))}
-        </div>
+        </div>}
       </div>
 
       {/* 消息类型分布 + 活跃用户 */}
@@ -287,10 +293,12 @@ function DashboardPanel() {
             <PieChart className="w-4 h-4 text-purple-400" />
             消息类型分布
           </h3>
-          <div className="space-y-3">
+          {messageTypes.length === 0 ? (
+            <div className="py-8 text-center text-sm text-slate-500">暂无消息类型数据</div>
+          ) : <div className="space-y-3">
             {messageTypes.map((mt, i) => {
               const total = messageTypes.reduce((s, m) => s + m.count, 0);
-              const pct = ((mt.count / total) * 100).toFixed(1);
+              const pct = total > 0 ? ((mt.count / total) * 100).toFixed(1) : '0.0';
               const colors = ['bg-emerald-500', 'bg-blue-500', 'bg-purple-500', 'bg-amber-500', 'bg-slate-500'];
               return (
                 <div key={mt.type} className="flex items-center gap-3">
@@ -307,7 +315,7 @@ function DashboardPanel() {
                 </div>
               );
             })}
-          </div>
+          </div>}
         </div>
 
         <div className="bg-white/5 rounded-xl border border-white/10 p-5">
@@ -317,7 +325,7 @@ function DashboardPanel() {
           </h3>
           <div className="flex items-end gap-2 h-32">
             {dailyStats.map((d, i) => {
-              const maxActive = Math.max(...dailyStats.map(s => s.activeUsers));
+              const maxActive = Math.max(1, ...dailyStats.map(s => s.activeUsers));
               return (
                 <div key={i} className="flex-1 flex flex-col items-center gap-1">
                   <span className="text-xs text-slate-500">{d.activeUsers}</span>
@@ -2355,7 +2363,7 @@ function OneBotPanel() {
   const [autoReplies, setAutoReplies] = useState<AutoReplyRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [saveMsg, setSaveMsg] = useState('');
+  const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   // 新增自动回复表单
   const [showAddRule, setShowAddRule] = useState(false);
@@ -2388,9 +2396,11 @@ function OneBotPanel() {
     setSaving(true);
     try {
       await api('/onebot/config', { method: 'PUT', body: JSON.stringify(config) });
-      setSaveMsg('配置已保存');
-      setTimeout(() => setSaveMsg(''), 2000);
-    } catch (err: any) { alert(err.message); }
+      setSaveMsg({ ok: true, text: '配置已保存' });
+      setTimeout(() => setSaveMsg(null), 2000);
+    } catch (err: any) {
+      setSaveMsg({ ok: false, text: err.message || '配置保存失败' });
+    }
     finally { setSaving(false); }
   };
 
@@ -2399,9 +2409,11 @@ function OneBotPanel() {
     setSaving(true);
     try {
       await api('/onebot/ai-config', { method: 'PUT', body: JSON.stringify(aiConfig) });
-      setSaveMsg('AI 配置已保存');
-      setTimeout(() => setSaveMsg(''), 2000);
-    } catch (err: any) { alert(err.message); }
+      setSaveMsg({ ok: true, text: 'AI 配置已保存' });
+      setTimeout(() => setSaveMsg(null), 2000);
+    } catch (err: any) {
+      setSaveMsg({ ok: false, text: err.message || 'AI 配置保存失败' });
+    }
     finally { setSaving(false); }
   };
 
@@ -2469,9 +2481,9 @@ function OneBotPanel() {
               initial={{ opacity: 0, x: 10 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0 }}
-              className="text-emerald-400 text-sm flex items-center gap-1"
+              className={`${saveMsg.ok ? 'text-emerald-400' : 'text-red-400'} text-sm flex items-center gap-1`}
             >
-              <Check className="w-3.5 h-3.5" /> {saveMsg}
+              {saveMsg.ok ? <Check className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />} {saveMsg.text}
             </motion.span>
           )}
           <button onClick={fetchAll} className="p-2 rounded-xl text-slate-400 hover:bg-white/5 hover:text-white transition-all">
@@ -3850,7 +3862,7 @@ function PyqCosTab() {
             type="text"
             value={config.secretId || ''}
             onChange={e => setConfig({ ...config, secretId: e.target.value })}
-            placeholder="AKIDxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            placeholder="请输入 SecretId"
             className="w-full bg-slate-700/50 border border-white/10 rounded-xl px-3 py-2 text-sm text-white font-mono placeholder-slate-500 focus:outline-none focus:border-emerald-500/50"
           />
         </div>
@@ -4562,7 +4574,7 @@ function CosConfigPanel() {
               type={showSecretId ? 'text' : 'password'}
               value={config.secretId || ''}
               onChange={e => setConfig({ ...config, secretId: e.target.value })}
-              placeholder="AKIDxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+              placeholder="请输入 SecretId"
               className="w-full bg-slate-700/50 border border-white/10 rounded-xl px-3 py-2 pr-10 text-sm text-white font-mono placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
             />
             <button

@@ -1,20 +1,10 @@
 /**
- * server/admin.ts - 管理后台 API（Prisma SQLite 版）
+ * server/admin.ts - 管理后台 API（PostgreSQL + Redis）
  */
 import { Router, Request, Response, NextFunction } from 'express';
 import prisma, { hashPassword, verifyPassword, generateToken, isLegacyHash } from './db.js';
 import { adminLoginRateLimit, resetAdminLoginLimits, sanitizeInput, containsDangerousInput } from './security.js';
-import {
-  getAdminLogsMySQL,
-  getAuditCountsMySQL,
-  getIllegalRequestsMySQL,
-  getLoginLogsMySQL,
-  clearIllegalRequestsMySQL,
-  clearLoginLogsMySQL,
-  logAdminActionMySQL,
-  logIllegalRequestMySQL,
-  logLoginMySQL,
-} from './mysql.js';
+import { getOnlineUsers } from './redis.js';
 
 const router = Router();
 
@@ -23,16 +13,15 @@ function getClientIP(req: Request): string {
 }
 
 async function addLog(adminId: string, adminName: string, action: string, target: string, detail: string, ip: string) {
-  await Promise.allSettled([
-    prisma.adminLog.create({ data: { adminId, adminName, action, target, detail, ip } }),
-    logAdminActionMySQL({ adminId, adminName, action, target, detail, ip }),
-  ]);
+  await prisma.adminLog.create({ data: { adminId, adminName, action, target, detail, ip } });
 }
 
 async function addFailedLoginLog(adminName: string, detail: string, ip: string) {
-  await Promise.allSettled([
-    logAdminActionMySQL({ adminId: null, adminName, action: '登录失败', target: 'system', detail, ip }),
-  ]);
+  try {
+    await prisma.adminLog.create({ data: { adminId: null, adminName, action: '登录失败', target: 'system', detail, ip } });
+  } catch (error) {
+    console.error('[Admin] 登录失败日志写入 PG 失败:', error);
+  }
 }
 
 async function authMiddleware(req: Request, res: Response, next: NextFunction) {
@@ -139,55 +128,83 @@ router.get('/me', authMiddleware, (req: Request, res: Response) => {
 
 // ===== 仪表盘 =====
 router.get('/dashboard', authMiddleware, async (_req: Request, res: Response) => {
-  const auditCountsPromise = getAuditCountsMySQL();
-  const recentLoginLogsPromise = getLoginLogsMySQL(1, 5, 'all');
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfWindow = new Date(startOfToday);
+  startOfWindow.setDate(startOfWindow.getDate() - 6);
 
   const [totalUsers, bannedUsers, totalMoments, totalComments, totalMedia, totalIpBlacklist,
-    recentUsers, recentMoments,
-    totalMessages, pendingReports, totalSensitiveWords,
-    auditCounts, recentLoginLogs] = await Promise.all([
-    prisma.user.count(), prisma.user.count({ where: { isBanned: true } }),
-    prisma.moment.count(), prisma.momentComment.count(), prisma.mediaFile.count(),
+    recentUsers, recentMoments, totalAnnouncements, onlineUserIds, pendingReports,
+    totalSensitiveWords, totalLoginLogs, totalIllegalRequests, recentLoginLogs] = await Promise.all([
+    prisma.user.count(),
+    prisma.user.count({ where: { isBanned: true } }),
+    prisma.moment.count(),
+    prisma.momentComment.count(),
+    prisma.mediaFile.count(),
     prisma.ipBlacklist.count(),
     prisma.user.findMany({ orderBy: { createdAt: 'desc' }, take: 5, select: { id: true, username: true, nickname: true, email: true, isBanned: true, createdAt: true } }),
     prisma.moment.findMany({ orderBy: { createdAt: 'desc' }, take: 5, include: { user: { select: { username: true, nickname: true } } } }),
-    (prisma as any).message ? (prisma as any).message.count().catch(() => 0) : Promise.resolve(0),
-    (prisma as any).report ? (prisma as any).report.count({ where: { status: 'pending' } }).catch(() => 0) : Promise.resolve(0),
-    (prisma as any).sensitiveWord ? (prisma as any).sensitiveWord.count().catch(() => 0) : Promise.resolve(0),
-    auditCountsPromise,
-    recentLoginLogsPromise,
+    prisma.announcement.count(),
+    getOnlineUsers(),
+    prisma.report.count({ where: { status: 'pending' } }),
+    prisma.sensitiveWord.count({ where: { isActive: true } }),
+    prisma.loginLog.count(),
+    prisma.illegalRequest.count(),
+    prisma.loginLog.findMany({ orderBy: { createdAt: 'desc' }, take: 5 }),
   ]);
 
-  const totalLoginLogs = auditCounts?.totalLoginLogs ?? await prisma.loginLog.count();
-  const totalIllegalRequests = auditCounts?.totalIllegalRequests ?? await prisma.illegalRequest.count();
-  const recentLogins = recentLoginLogs?.list ?? await prisma.loginLog.findMany({ orderBy: { createdAt: 'desc' }, take: 5 });
+  const dailyStats = await Promise.all(Array.from({ length: 7 }, async (_, i) => {
+    const dayStart = new Date(startOfWindow);
+    dayStart.setDate(startOfWindow.getDate() + i);
+    const dayEnd = new Date(dayStart);
+    dayEnd.setDate(dayEnd.getDate() + 1);
+    const where = { createdAt: { gte: dayStart, lt: dayEnd } };
 
-  // 生成过去 7 天的日期数据（cqim 仪表盘格式）
-  const dailyStats = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() - (6 - i));
-    return { date: `${d.getMonth() + 1}/${d.getDate()}`, newUsers: 0, activeUsers: 0, messages: 0 };
-  });
+    const [newUsers, privateMessages, groupMessages, privateSenders, groupSenders] = await Promise.all([
+      prisma.user.count({ where }),
+      prisma.privateMessage.count({ where }),
+      prisma.groupMessage.count({ where }),
+      prisma.privateMessage.findMany({ where, distinct: ['senderId'], select: { senderId: true } }),
+      prisma.groupMessage.findMany({ where, distinct: ['senderId'], select: { senderId: true } }),
+    ]);
+    const date = `${dayStart.getMonth() + 1}/${dayStart.getDate()}`;
+    return {
+      date,
+      newUsers,
+      activeUsers: new Set([...privateSenders, ...groupSenders].map(row => row.senderId)).size,
+      messages: privateMessages + groupMessages,
+    };
+  }));
 
-  const msgTotal = Number(totalMessages) || 1;
-  const messageTypes = [
-    { type: '文字', count: Math.max(1, Math.floor(msgTotal * 0.6)) },
-    { type: '图片', count: Math.max(1, Math.floor(msgTotal * 0.2)) },
-    { type: '语音', count: Math.max(1, Math.floor(msgTotal * 0.1)) },
-    { type: '视频', count: Math.max(1, Math.floor(msgTotal * 0.05)) },
-    { type: '其他', count: Math.max(1, Math.floor(msgTotal * 0.05)) },
-  ];
+  const [privateTypeRows, groupTypeRows] = await Promise.all([
+    prisma.privateMessage.groupBy({ by: ['msgType'], _count: { _all: true } }),
+    prisma.groupMessage.groupBy({ by: ['msgType'], _count: { _all: true } }),
+  ]);
+  const typeCounts = new Map<string, number>();
+  for (const row of [...privateTypeRows, ...groupTypeRows]) {
+    typeCounts.set(row.msgType, (typeCounts.get(row.msgType) || 0) + row._count._all);
+  }
+  const messageTypes = [...typeCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([type, count]) => ({ type, count }));
+  const totalMessages = messageTypes.reduce((sum, row) => sum + row.count, 0);
 
   res.json({
-    // cqim 仪表盘格式
-    overview: { totalUsers, onlineUsers: 0, bannedUsers, totalMessages: msgTotal, pendingReports: Number(pendingReports) || 0, totalSensitiveWords: Number(totalSensitiveWords) || 0, totalAnnouncements: 0 },
+    overview: {
+      totalUsers,
+      onlineUsers: onlineUserIds.length,
+      bannedUsers,
+      totalMessages,
+      pendingReports,
+      totalSensitiveWords,
+      totalAnnouncements,
+    },
     dailyStats,
     messageTypes,
-    // pyq 仪表盘格式
     stats: { totalUsers, bannedUsers, totalMoments, totalComments, totalMedia, totalLoginLogs, totalIpBlacklist, totalIllegalRequests },
     recentUsers,
     recentMoments,
-    recentLogins,
+    recentLogins: recentLoginLogs,
   });
 });
 
@@ -526,15 +543,11 @@ router.delete('/ip-blacklist/:id', authMiddleware, requireRole('superadmin', 'ad
 // ===== 非法请求日志 =====
 router.get('/illegal-requests', authMiddleware, async (req: Request, res: Response) => {
   const page = Math.max(1, parseInt(req.query.page as string) || 1);
-  const mysqlResult = await getIllegalRequestsMySQL(page, 20);
-  if (mysqlResult) {
-    return res.json({ list: mysqlResult.list, total: mysqlResult.total, page });
-  }
   const [list, total] = await Promise.all([prisma.illegalRequest.findMany({ skip: (page-1)*20, take: 20, orderBy: { createdAt: 'desc' } }), prisma.illegalRequest.count()]);
   res.json({ list, total, page });
 });
 router.delete('/illegal-requests', authMiddleware, requireRole('superadmin', 'admin'), async (_req: Request, res: Response) => {
-  await Promise.allSettled([prisma.illegalRequest.deleteMany(), clearIllegalRequestsMySQL()]);
+  await prisma.illegalRequest.deleteMany();
   res.json({ success: true });
 });
 
@@ -542,16 +555,12 @@ router.delete('/illegal-requests', authMiddleware, requireRole('superadmin', 'ad
 router.get('/login-logs', authMiddleware, async (req: Request, res: Response) => {
   const filter = ((req.query.filter as string) || 'all') as 'all' | 'success' | 'fail';
   const page = Math.max(1, parseInt(req.query.page as string) || 1);
-  const mysqlResult = await getLoginLogsMySQL(page, 20, filter);
-  if (mysqlResult) {
-    return res.json({ list: mysqlResult.list, total: mysqlResult.total, page });
-  }
   const where = filter === 'success' ? { success: true } : filter === 'fail' ? { success: false } : {};
   const [list, total] = await Promise.all([prisma.loginLog.findMany({ where, skip: (page-1)*20, take: 20, orderBy: { createdAt: 'desc' } }), prisma.loginLog.count({ where })]);
   res.json({ list, total, page });
 });
 router.delete('/login-logs', authMiddleware, requireRole('superadmin', 'admin'), async (_req: Request, res: Response) => {
-  await Promise.allSettled([prisma.loginLog.deleteMany(), clearLoginLogsMySQL()]);
+  await prisma.loginLog.deleteMany();
   res.json({ success: true });
 });
 
@@ -576,10 +585,6 @@ router.delete('/announcements/:id', authMiddleware, requireRole('superadmin', 'a
 // ===== 操作日志 =====
 router.get('/logs', authMiddleware, async (req: Request, res: Response) => {
   const page = Math.max(1, parseInt(req.query.page as string) || 1);
-  const mysqlResult = await getAdminLogsMySQL(page, 20);
-  if (mysqlResult) {
-    return res.json({ logs: mysqlResult.logs, total: mysqlResult.total, page });
-  }
   const [logs, total] = await Promise.all([prisma.adminLog.findMany({ skip: (page-1)*20, take: 20, orderBy: { createdAt: 'desc' } }), prisma.adminLog.count()]);
   res.json({ logs, total, page });
 });
@@ -1116,16 +1121,10 @@ router.put('/txmap-config', authMiddleware, requireRole('superadmin', 'admin'), 
 export { getConfig as getAdminConfig };
 
 export async function logLogin(data: { userId?: string; username?: string; email?: string; phone?: string; ip?: string; userAgent?: string; success: boolean; failReason?: string; loginType?: string }) {
-  await Promise.allSettled([
-    prisma.loginLog.create({ data }),
-    logLoginMySQL(data),
-  ]);
+  await prisma.loginLog.create({ data });
 }
 export async function logIllegalRequest(ip: string, path: string, method: string, userAgent: string, reason: string, statusCode: number) {
-  await Promise.allSettled([
-    prisma.illegalRequest.create({ data: { ip, path, method, userAgent, reason, statusCode } }),
-    logIllegalRequestMySQL({ ip, path, method, userAgent, reason, statusCode }),
-  ]);
+  await prisma.illegalRequest.create({ data: { ip, path, method, userAgent, reason, statusCode } });
 }
 
 export default router;
