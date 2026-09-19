@@ -83,7 +83,7 @@ Compose 使用的最终探针是：
 test: ["CMD", "/usr/local/bin/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9000/minio/health/live"]
 ```
 
-官方 `minio/minio` 镜像提供 `/minio/health/live` 未授权存活接口，但近期官方镜像不保证包含 `mc`、`curl` 或 `wget`。仓库中的 `minio-healthcheck.Dockerfile` 仍以官方 MinIO 镜像为基础，只从官方 BusyBox 镜像复制一个静态 `busybox` 二进制，因此探针不依赖 `mc`，并且确实请求 MinIO 官方健康路径。HTTP 200 才会使 `minio` 变为 healthy，`cqim` 的 `depends_on` 才会继续。
+官方 MinIO 镜像（`quay.io/minio/minio`，Docker Hub 的 `minio/minio` 已下线）提供 `/minio/health/live` 未授权存活接口，但近期官方镜像不保证包含 `mc`、`curl` 或 `wget`。仓库中的 `minio-healthcheck.Dockerfile` 仍以官方 MinIO 镜像为基础，只从官方 BusyBox 镜像复制一个静态 `busybox` 二进制，因此探针不依赖 `mc`，并且确实请求 MinIO 官方健康路径。HTTP 200 才会使 `minio` 变为 healthy，`cqim` 的 `depends_on` 才会继续。
 
 默认 Compose **不**把 MinIO `9000` 映射到宿主机。手工检查：
 
