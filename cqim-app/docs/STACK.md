@@ -58,11 +58,13 @@ POST /api/voice/upload       用户语音写入 MinIO
 ```bash
 cd cqim-app
 cp .env.example .env
-# 修改 MINIO_ROOT_PASSWORD 等敏感配置
-docker compose up -d --build
-curl http://127.0.0.1/api/health
-docker compose exec cqim pnpm exec prisma migrate deploy
+# 修改 MINIO_ROOT_USER / MINIO_ROOT_PASSWORD 等敏感配置
+./scripts/deploy.sh
+# 或：docker compose up -d --build
+curl -fsS http://127.0.0.1/api/health
 ```
+
+`cqim` 容器启动时已经执行 `prisma migrate deploy`，不必再手工跑一遍。
 
 应确认以下服务均健康：
 
