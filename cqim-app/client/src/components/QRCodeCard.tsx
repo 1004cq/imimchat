@@ -782,7 +782,8 @@ export const QRCardModal: React.FC<{
         const canvas = canvasRef.current;
         if (cancelled || !canvas) return;
 
-        const userId = CURRENT_USER.id;
+        // 以 /api/profile 返回的当前用户 ID 为准，避免旧的 CURRENT_USER 快照生成错误二维码。
+        const userId = profile.id || CURRENT_USER.id;
         if (!userId || userId === 'me') {
           setQrError('请先登录后再查看二维码');
           setPayload(null);
@@ -847,7 +848,7 @@ export const QRCardModal: React.FC<{
       cancelled = true;
       if (fallbackTimer) clearTimeout(fallbackTimer);
     };
-  }, [e2ee.isReady, e2ee.isInitializing, e2ee.status, refreshKey, accountUsername, accountPhone]);
+  }, [e2ee.isReady, e2ee.isInitializing, e2ee.status, refreshKey, accountUsername, accountPhone, profile.id]);
 
   // 扫码成功处理（先调服务端校验，再展示确认弹窗）
   const handleScan = useCallback(async (p: QRPayload) => {

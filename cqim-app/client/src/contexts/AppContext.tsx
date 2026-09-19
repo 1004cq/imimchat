@@ -16,7 +16,7 @@ import {
   warmupNotificationAudio,
 } from '@/lib/notifications';
 import { usePush } from '@/hooks/usePush';
-import { authApi } from '@/lib/authFetch';
+import { authApi, authFetch } from '@/lib/authFetch';
 import { trackE2EEFailure, trackEvent, setTelemetryUser } from '@/lib/telemetry';
 import {
   loadChatsFromLocalDb,
@@ -756,10 +756,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const botWsRef = useRef<WebSocket | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
-
   // 自建推送：iOS 使用 APNs，Web 使用 Web Push。
   usePush(state.isLoggedIn);
-
+  // 刷新后验证当前 session；只有明确 401 才清理凭证，避免网络故障导致误登出。
+  useEffect(() => {
+    if (!state.isLoggedIn || !localStorage.getItem('user_token')) return;
+    let cancelled = false;
+    authFetch('/api/auth/me')
+      .then((response) => {
+        if (cancelled || response.ok) return;
+        if (response.status === 401) {
+          for (const key of ['user_token', 'user_id', 'user_nickname', 'user_username', 'user_avatar', 'user_bio']) {
+            localStorage.removeItem(key);
+          }
+          dispatch({ type: 'LOGOUT' });
+          return;
+        }
+        console.warn(`[AppContext] 会话校验暂时失败: HTTP ${response.status}`);
+      })
+      .catch((error) => console.warn('[AppContext] 会话校验网络失败，保留当前登录态:', error));
+    return () => { cancelled = true; };
+  }, [state.isLoggedIn]);
   // APNs 前台/后台 presence：仅 foreground 跳过推送；后台 tab 即使 WS 在线也必须上报 background
   useEffect(() => {
     if (!state.isLoggedIn) return;
