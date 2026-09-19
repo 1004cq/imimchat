@@ -57,6 +57,16 @@ export async function connectRedis() {
   }
 }
 
+export async function checkRedisHealth(): Promise<boolean> {
+  try {
+    await redis.ping();
+    return true;
+  } catch (error) {
+    console.error('[Redis] PING 健康检查失败:', error);
+    return false;
+  }
+}
+
 // ============ 1. 在线状态策略 (SET EX 90) ============
 
 const ONLINE_PREFIX = 'online:';

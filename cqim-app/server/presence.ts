@@ -17,28 +17,38 @@ function activeChatKey(userId: string) {
 }
 
 export async function getPresence(userId: string): Promise<Presence> {
-  const raw = await redis.get(presenceKey(userId)).catch(() => null);
-  if (raw === 'foreground' || raw === 'background') return raw;
-  return 'offline';
+  try {
+    const raw = await redis.get(presenceKey(userId));
+    if (raw === 'foreground' || raw === 'background') return raw;
+    return 'offline';
+  } catch (error) {
+    console.error(`[presence] Redis 读取状态失败 userId=${userId}，保守按 offline 处理:`, error);
+    return 'offline';
+  }
 }
 
 export async function getActiveChatId(userId: string): Promise<string | null> {
-  const raw = await redis.get(activeChatKey(userId)).catch(() => null);
-  return raw || null;
+  try {
+    const raw = await redis.get(activeChatKey(userId));
+    return raw || null;
+  } catch (error) {
+    console.error(`[presence] Redis 读取 activeChatId 失败 userId=${userId}:`, error);
+    return null;
+  }
 }
 
 export async function setPresence(userId: string, state: Presence, activeChatId?: string | null) {
   if (state === 'offline') {
-    await redis.del(presenceKey(userId), activeChatKey(userId)).catch(() => undefined);
+    await redis.del(presenceKey(userId), activeChatKey(userId));
     return;
   }
 
-  await redis.set(presenceKey(userId), state, 'EX', PRESENCE_TTL_SECONDS).catch(() => undefined);
+  await redis.set(presenceKey(userId), state, 'EX', PRESENCE_TTL_SECONDS);
 
   if (typeof activeChatId === 'string' && activeChatId.length > 0) {
-    await redis.set(activeChatKey(userId), activeChatId, 'EX', PRESENCE_TTL_SECONDS).catch(() => undefined);
+    await redis.set(activeChatKey(userId), activeChatId, 'EX', PRESENCE_TTL_SECONDS);
   } else if (activeChatId === null || activeChatId === '') {
-    await redis.del(activeChatKey(userId)).catch(() => undefined);
+    await redis.del(activeChatKey(userId));
   }
 }
 

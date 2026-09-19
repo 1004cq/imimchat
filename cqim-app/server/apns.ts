@@ -24,8 +24,20 @@ const router = Router();
 // ============ 配置 ============
 const TEAM_ID = process.env.APPLE_TEAM_ID || '';
 const BUNDLE_ID = process.env.APPLE_BUNDLE_ID || 'com.imim.chat';
-const IS_PRODUCTION = process.env.NODE_ENV === 'production';
-const APNS_HOST = IS_PRODUCTION ? 'api.push.apple.com' : 'api.sandbox.push.apple.com';
+type APNsEnvironment = 'sandbox' | 'production';
+
+function defaultAPNsEnvironment(): APNsEnvironment {
+  return String(process.env.APNS_PRODUCTION || '').toLowerCase() === 'true' ? 'production' : 'sandbox';
+}
+
+function normalizeAPNsEnvironment(value: unknown): APNsEnvironment {
+  if (value === 'production' || value === 'sandbox') return value;
+  return defaultAPNsEnvironment();
+}
+
+function apnsHost(environment: APNsEnvironment): string {
+  return environment === 'production' ? 'api.push.apple.com' : 'api.sandbox.push.apple.com';
+}
 
 interface P8Key {
   keyId: string;
@@ -127,7 +139,8 @@ async function sendToAPNs(
   payload: object,
   topic: string,
   pushType: 'alert' | 'voip' = 'alert',
-  priority: number = 10
+  priority: number = 10,
+  environment: APNsEnvironment = defaultAPNsEnvironment(),
 ): Promise<APNsResult> {
   if (p8Keys.length === 0) {
     console.error('[APNs] 没有可用的 p8 证书');
@@ -137,7 +150,7 @@ async function sendToAPNs(
   // 依次尝试每个 p8 证书
   for (const key of p8Keys) {
     try {
-      const result = await sendWithKey(key, deviceToken, payload, topic, pushType, priority);
+      const result = await sendWithKey(key, deviceToken, payload, topic, pushType, priority, environment);
       if (result.success) {
         return result;
       }
@@ -165,13 +178,14 @@ function sendWithKey(
   payload: object,
   topic: string,
   pushType: 'alert' | 'voip',
-  priority: number
+  priority: number,
+  environment: APNsEnvironment,
 ): Promise<APNsResult> {
   return new Promise((resolve) => {
     const jwt = generateJWT(key.keyId, key.keyData);
     const payloadStr = JSON.stringify(payload);
 
-    const client = http2.connect(`https://${APNS_HOST}`);
+    const client = http2.connect(`https://${apnsHost(environment)}`);
 
     client.on('error', (err) => {
       console.error(`[APNs] HTTP/2 连接错误 (KeyID=${key.keyId}):`, err);
@@ -255,7 +269,7 @@ router.post('/token', async (req: Request, res: Response) => {
     }
 
     const platform = req.body.platform === 'ios' ? 'ios' : String(req.body.platform || 'ios');
-    const environment = req.body.environment === 'production' ? 'production' : 'sandbox';
+    const environment = normalizeAPNsEnvironment(req.body.environment);
     const kind = req.body.kind === 'voip' ? 'voip' : 'alert';
     await prisma.pushDeviceToken.upsert({
       where: { token_kind: { token, kind } },
@@ -286,8 +300,8 @@ router.post('/voip-token', async (req: Request, res: Response) => {
 
     await prisma.pushDeviceToken.upsert({
       where: { token_kind: { token: voipToken, kind: 'voip' } },
-      create: { userId: currentUser.id, token: voipToken, platform: 'ios', environment: IS_PRODUCTION ? 'production' : 'sandbox', kind: 'voip' },
-      update: { userId: currentUser.id, platform: 'ios', environment: IS_PRODUCTION ? 'production' : 'sandbox' },
+      create: { userId: currentUser.id, token: voipToken, platform: 'ios', environment: normalizeAPNsEnvironment(req.body.environment), kind: 'voip' },
+      update: { userId: currentUser.id, platform: 'ios', environment: normalizeAPNsEnvironment(req.body.environment) },
     });
     console.log(`[APNs] 用户 ${currentUser.id} 注册 VoIP Token`);
     return res.json({ success: true });
@@ -304,9 +318,22 @@ router.post('/voip-token', async (req: Request, res: Response) => {
 router.delete('/token', async (req: Request, res: Response) => {
   try {
     const currentUser = (req as any).user;
-    await prisma.pushDeviceToken.deleteMany({ where: { userId: currentUser.id, platform: 'ios' } });
-    console.log(`[APNs] 用户 ${currentUser.id} 清除 Token`);
-    return res.json({ success: true });
+    const token = typeof req.body?.token === 'string' && req.body.token.length > 0 ? req.body.token : undefined;
+    const kind = req.body?.kind === 'voip' ? 'voip' : 'alert';
+    const environment = normalizeAPNsEnvironment(req.body?.environment);
+    const where = token
+      ? { userId: currentUser.id, token, platform: 'ios' }
+      : { userId: currentUser.id, platform: 'ios', kind, environment };
+    const device = await prisma.pushDeviceToken.findFirst({
+      where,
+      orderBy: { updatedAt: 'desc' },
+      select: { id: true },
+    });
+    if (device) {
+      await prisma.pushDeviceToken.delete({ where: { id: device.id } });
+    }
+    console.log(`[APNs] 用户 ${currentUser.id} 清除当前设备 Token token=${token ? 'provided' : 'inferred'}`);
+    return res.json({ success: true, deleted: Boolean(device) });
   } catch (err) {
     console.error('[APNs] Token 清除失败:', err);
     return res.status(500).json({ error: '服务器内部错误' });
@@ -323,6 +350,18 @@ export interface APNsPushPayload {
   customData?: Record<string, unknown>;
 }
 
+function isInvalidDeviceToken(result: APNsResult): boolean {
+  return result.statusCode === 410 || result.reason === 'BadDeviceToken' || result.reason === 'Unregistered';
+}
+
+async function deleteInvalidToken(id: string, context: string): Promise<void> {
+  try {
+    await prisma.pushDeviceToken.delete({ where: { id } });
+  } catch (error) {
+    console.error(`[APNs] 删除失效 Token 失败 (${context}, id=${id}):`, error);
+  }
+}
+
 export async function sendAPNsPush(payload: APNsPushPayload): Promise<boolean> {
   try {
     const devices = await prisma.pushDeviceToken.findMany({
@@ -334,11 +373,11 @@ export async function sendAPNsPush(payload: APNsPushPayload): Promise<boolean> {
       const result = await sendToAPNs(device.token, {
         aps: { alert: { title: payload.title, body: payload.body }, 'mutable-content': 1, sound: 'default', badge: 1 },
         ...(payload.customData || {}),
-      }, BUNDLE_ID, 'alert', 10);
+      }, BUNDLE_ID, 'alert', 10, normalizeAPNsEnvironment(device.environment));
       if (result.success) {
         delivered = true;
-      } else if (result.reason === 'BadDeviceToken' || result.reason === 'Unregistered') {
-        await prisma.pushDeviceToken.delete({ where: { id: device.id } }).catch(() => {});
+      } else if (isInvalidDeviceToken(result)) {
+        await deleteInvalidToken(device.id, 'alert');
       }
     }
     return delivered;
@@ -371,13 +410,10 @@ export interface VoIPPushPayload {
  */
 export async function sendVoIPPush(payload: VoIPPushPayload): Promise<boolean> {
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: payload.toUserId },
-      select: { pushTokens: { where: { platform: 'ios', kind: 'voip' }, take: 1 } },
+    const devices = await prisma.pushDeviceToken.findMany({
+      where: { userId: payload.toUserId, platform: 'ios', kind: 'voip' },
     });
-
-    const device = user?.pushTokens[0];
-    if (!device) {
+    if (!devices.length) {
       return false;
     }
 
@@ -392,24 +428,27 @@ export async function sendVoIPPush(payload: VoIPPushPayload): Promise<boolean> {
     };
 
     // VoIP 推送 topic 必须添加 .voip 后缀
-    const result = await sendToAPNs(
-      device.token,
-      voipPayload,
-      `${BUNDLE_ID}.voip`,
-      'voip',
-      10
-    );
-
-    if (result.success) {
-      console.log(`[APNs] VoIP 推送成功: userId=${payload.toUserId} keyId=${result.keyId}`);
-      return true;
-    } else {
-      console.error(`[APNs] VoIP 推送失败: userId=${payload.toUserId} reason=${result.reason}`);
-      if (result.reason === 'BadDeviceToken' || result.reason === 'Unregistered') {
-        await prisma.pushDeviceToken.delete({ where: { id: device.id } }).catch(() => {});
+    let delivered = false;
+    for (const device of devices) {
+      const result = await sendToAPNs(
+        device.token,
+        voipPayload,
+        `${BUNDLE_ID}.voip`,
+        'voip',
+        10,
+        normalizeAPNsEnvironment(device.environment),
+      );
+      if (result.success) {
+        delivered = true;
+        console.log(`[APNs] VoIP 推送成功: userId=${payload.toUserId} keyId=${result.keyId}`);
+      } else {
+        console.error(`[APNs] VoIP 推送失败: userId=${payload.toUserId} tokenId=${device.id} reason=${result.reason}`);
+        if (isInvalidDeviceToken(result)) {
+          await deleteInvalidToken(device.id, 'voip');
+        }
       }
-      return false;
     }
+    return delivered;
   } catch (err) {
     console.error('[APNs] VoIP 推送请求失败:', err);
     return false;

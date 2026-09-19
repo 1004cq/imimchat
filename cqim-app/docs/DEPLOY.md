@@ -36,6 +36,16 @@ docker compose ps
 
 Node 容器的启动脚本会在启动服务前执行 `pnpm exec prisma migrate deploy`。如果迁移失败，Node 不会启动，先查看 `docker compose logs cqim`。
 
+## APNs 环境与 Token 生命周期
+
+`PushDeviceToken.environment` 是 APNs 网关选择的第一依据：`sandbox` Token 发送到 `api.sandbox.push.apple.com`，`production` Token 发送到 `api.push.apple.com`。因此 Xcode Debug 包和 TestFlight/正式包可以同时注册、同时存在。只有旧客户端没有提交 environment 时，服务端才读取 `.env` 中的 `APNS_PRODUCTION=true|false`。
+
+`DELETE /api/apns/token` 带 `token` 时只删除当前用户的这一行；不带 `token` 时按当前用户、iOS、`kind` 和 environment 删除最近更新的一行，不会清空用户的全部 iOS Token。APNs 返回 410、`BadDeviceToken` 或 `Unregistered` 时，发送路径只删除对应失效行。VoIP 发送会遍历该用户全部 `kind=voip` Token，并按各行 environment 分网关发送。
+
+## Redis 故障语义
+
+`GET /api/health` 的 `checks.redis` 和 `redisAvailable` 来自真实 Redis `PING`；Redis 不可用时健康接口返回 503。`GET /api/presence` 同样返回 `redisAvailable`。presence 读取失败会记录错误并保守按 `offline` 处理，让离线推送继续尝试；presence 写入失败会记录错误并让 `POST /api/presence` 返回 500，不再伪装成成功。
+
 ## MinIO 健康检查
 
 Compose 使用的最终探针是：

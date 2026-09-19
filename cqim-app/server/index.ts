@@ -27,6 +27,7 @@ import {
   removeUserDevice,
   getUserDevices,
   getUserLastSeen,
+  checkRedisHealth,
 } from "./redis";
 import {
   securityHeaders,
@@ -1593,7 +1594,7 @@ app.use("/api/home", homeRouter);
             ? null
             : undefined;
       await setPresence(currentUser.id, state, chatId);
-      return res.json({ success: true });
+      return res.json({ success: true, redisAvailable: true });
     } catch (err) {
       console.error('[presence] 设置失败:', err);
       return res.status(500).json({ error: '服务器内部错误' });
@@ -1607,14 +1608,16 @@ app.use("/api/home", homeRouter);
   app.get('/api/presence', userAuth, async (req, res) => {
     try {
       const currentUser = (req as any).user;
-      const [state, activeChatId] = await Promise.all([
+      const [state, activeChatId, redisAvailable] = await Promise.all([
         getPresence(currentUser.id),
         getActiveChatId(currentUser.id),
+        checkRedisHealth(),
       ]);
       return res.json({
         state,
         activeChatId,
         skipApns: shouldSkipApnsFromState(state),
+        redisAvailable,
       });
     } catch (err) {
       console.error('[presence] 读取失败:', err);
@@ -3404,23 +3407,33 @@ app.use("/api/home", homeRouter);
 
   // ============ 健康检查 ============
   app.get('/api/health', async (_req, res) => {
+    let databaseAvailable = true;
+    let redisAvailable = false;
     try {
       await checkDatabaseHealth();
-      res.json({
+    } catch (error) {
+      databaseAvailable = false;
+      console.error('[health] PostgreSQL 检查失败:', error);
+    }
+    redisAvailable = await checkRedisHealth();
+    const ok = databaseAvailable && redisAvailable;
+    if (ok) {
+      return res.json({
         ok: true,
         service: 'cqim',
+        checks: { database: true, redis: true },
         env: process.env.NODE_ENV || 'development',
         uptime: Math.round(process.uptime()),
         timestamp: new Date().toISOString(),
       });
-    } catch (error) {
-      res.status(500).json({
-        ok: false,
-        service: 'cqim',
-        error: 'database_unavailable',
-        timestamp: new Date().toISOString(),
-      });
     }
+    return res.status(503).json({
+      ok: false,
+      service: 'cqim',
+      checks: { database: databaseAvailable, redis: redisAvailable },
+      error: !databaseAvailable ? 'database_unavailable' : 'redis_unavailable',
+      timestamp: new Date().toISOString(),
+    });
   });
 
   // ============ 静态文件服务 ============
