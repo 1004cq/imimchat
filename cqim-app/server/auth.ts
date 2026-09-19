@@ -30,39 +30,6 @@ import { avatarToProxy } from './cos-signer.js';
 
 const router = Router();
 
-async function ensureUserCosFolder(userId: string, username?: string): Promise<void> {
-  const config = await getAdminConfig('cos') || {};
-  const secretId = config.secretId || process.env.COS_SECRET_ID;
-  const secretKey = config.secretKey || process.env.COS_SECRET_KEY;
-  const bucket = config.bucket || process.env.COS_BUCKET;
-  const region = config.region || process.env.COS_REGION || 'ap-guangzhou';
-  const enabled = config.enabled !== false;
-  if (!enabled || !secretId || !secretKey || !bucket || !region || !userId) return;
-
-  try {
-    const COSModule: any = await import('cos-nodejs-sdk-v5');
-    const COS = COSModule.default || COSModule;
-    const cos = new COS({ SecretId: secretId, SecretKey: secretKey });
-    const userDir = username || userId;
-    // 创建用户目录结构：ASCII 路径主使用（避免 EdgeOne 中文路径问题）
-    const dirs = [
-      `imimchat/moments/${userDir}/photos/.init`,
-      `imimchat/moments/${userDir}/videos/.init`,
-      `imimchat/avatars/${userDir}/.init`,
-    ];
-    await Promise.allSettled(dirs.map(key =>
-      new Promise<void>((resolve, reject) => {
-        cos.putObject({ Bucket: bucket, Region: region, Key: key, Body: '' }, (err: any) => {
-          if (err) reject(err);
-          else resolve();
-        });
-      })
-    ));
-  } catch (error) {
-    console.error('[auth] 初始化 COS 用户目录失败:', error);
-  }
-}
-
 // ============ 阿里云 SDK 动态导入 ============
 
 async function getAliyunConfig() {
@@ -835,7 +802,6 @@ router.post('/register', async (req: Request, res: Response) => {
     },
   });
 
-  await ensureUserCosFolder(user.id, user.username);
 
   // 创建会话
   const token = await createSession(user.id, req);

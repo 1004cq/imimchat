@@ -66,13 +66,23 @@ import groupRouter, {
   ackGroupMessages,
   fanoutGroupSignal,
 } from "./group-message";
-import { avatarToProxy } from "./cos-signer";
 import { publicUrl } from "./public-url";
 import mediaRouter from './media-router.js';
 import { ensureMediaBucket, saveMedia } from './media-storage.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+/**
+ * 新媒体统一由 MinIO 的 /api/media 路由提供。历史 COS 头像不再触发签名请求；
+ * COS 配置缺失时返回空值，让客户端使用头像占位而不是让资料接口失败。
+ */
+function safeAvatarUrl(rawUrl: string | null | undefined): string {
+  if (!rawUrl) return '';
+  if (rawUrl.startsWith('/api/media/') || rawUrl.startsWith('/')) return rawUrl;
+  if (rawUrl.startsWith('https://') && !rawUrl.includes('.cos.') && !rawUrl.includes('.myqcloud.com')) return rawUrl;
+  return '';
+}
 
 async function getSystemConfig<T = any>(key: string): Promise<T | null> {
   const cfg = await prisma.systemConfig.findUnique({ where: { key } }).catch(() => null);
@@ -838,7 +848,7 @@ async function handleMessage(client: SignalClient, raw: string) {
           groupId,
           senderId: client.userId,
           senderName: senderName || senderUser?.nickname || senderUser?.username || userRegistry.get(client.userId) || client.userId,
-          senderAvatar: avatarToProxy(senderUser?.avatar),
+          senderAvatar: safeAvatarUrl(senderUser?.avatar),
           msgType: effectiveMsgType,
           content,
           replyToId,
@@ -924,7 +934,7 @@ async function handleMessage(client: SignalClient, raw: string) {
           groupId: channelId,
           senderId: client.userId,
           senderName: senderName || senderUser?.nickname || senderUser?.username || client.userId,
-          senderAvatar: avatarToProxy(senderUser?.avatar),
+          senderAvatar: safeAvatarUrl(senderUser?.avatar),
           msgType: msgType || 'text',
           content,
           replyToId,
@@ -1650,7 +1660,10 @@ app.use("/api/home", homeRouter);
         return res.status(401).json({ error: '未登录' });
       }
 
-      const TRTC_SDK_APPID = Number(process.env.TRTC_SDK_APP_ID) || 1600136830;
+      const TRTC_SDK_APPID = Number(process.env.TRTC_SDK_APP_ID);
+      if (!Number.isInteger(TRTC_SDK_APPID) || TRTC_SDK_APPID !== 1600159677) {
+        return res.status(500).json({ error: 'TRTC SDK AppID 未配置或不匹配' });
+      }
       const TRTC_SECRET_KEY = process.env.TRTC_SECRET_KEY || '';
       if (!TRTC_SECRET_KEY) {
         return res.status(500).json({ error: 'TRTC 未配置' });
@@ -2827,7 +2840,7 @@ app.use("/api/home", homeRouter);
       email: dbUser?.email || (memProfile as any).email || '',
       wechatId: dbUser?.username || (memProfile as any).wechatId || userId,
       bio: dbUser?.bio ?? (memProfile as any).bio ?? '',
-      avatar: avatarToProxy(dbUser?.avatar || (memProfile as any).avatar || ''),
+      avatar: safeAvatarUrl(dbUser?.avatar || (memProfile as any).avatar || ''),
       backgroundUrl: dbUser?.backgroundUrl || (memProfile as any).backgroundUrl || '',
       birthday: dbUser?.birthday || (memProfile as any).birthday || '',
     };
@@ -2886,7 +2899,7 @@ app.use("/api/home", homeRouter);
       phone: phone ?? existing.phone ?? '',
       wechatId: nextUsername || existing.wechatId || currentUsername,
       bio: bio ?? existing.bio ?? '',
-      avatar: avatarToProxy(avatar ?? existing.avatar ?? ''),
+      avatar: safeAvatarUrl(avatar ?? existing.avatar ?? ''),
       backgroundUrl: backgroundUrl ?? existing.backgroundUrl ?? '',
       birthday: birthday ?? existing.birthday ?? '',
     };
@@ -2988,7 +3001,7 @@ app.use("/api/home", homeRouter);
           id: u.id,
           username: u.username,
           nickname: u.nickname || u.username,
-          avatar: avatarToProxy(u.avatar),
+          avatar: safeAvatarUrl(u.avatar),
           bio: u.bio || '',
         })),
       });
@@ -3041,7 +3054,7 @@ app.use("/api/home", homeRouter);
         id: user.id,
         username: user.username,
         nickname: user.nickname || user.username,
-        avatar: avatarToProxy(user.avatar),
+        avatar: safeAvatarUrl(user.avatar),
         bio: user.bio || '',
         backgroundUrl: user.backgroundUrl || '',
         online,
@@ -3218,7 +3231,7 @@ app.use("/api/home", homeRouter);
         select: { id: true, username: true, nickname: true, avatar: true, backgroundUrl: true, bio: true, _count: { select: { moments: true } } },
       });
       if (!user) return res.status(404).json({ error: '用户不存在' });
-      res.json({ profile: { id: user.id, name: user.nickname || user.username, avatar: avatarToProxy(user.avatar), backgroundUrl: user.backgroundUrl, bio: user.bio, momentCount: user._count.moments } });
+      res.json({ profile: { id: user.id, name: user.nickname || user.username, avatar: safeAvatarUrl(user.avatar), backgroundUrl: user.backgroundUrl, bio: user.bio, momentCount: user._count.moments } });
     } catch (e) {
       res.status(500).json({ error: '服务器错误' });
     }
@@ -3277,7 +3290,7 @@ app.use("/api/home", homeRouter);
             groupId: link.group.id,
             groupName: link.group.name,
             groupUsername: link.group.username || null,
-            groupAvatar: avatarToProxy(link.group.avatar),
+            groupAvatar: safeAvatarUrl(link.group.avatar),
             memberCount: link.group.memberCount,
             groupType: link.group.type,
           },
@@ -3296,7 +3309,7 @@ app.use("/api/home", homeRouter);
             id: user.id,
             username: user.username,
             nickname: user.nickname || user.username,
-            avatar: avatarToProxy(user.avatar),
+            avatar: safeAvatarUrl(user.avatar),
             bio: user.bio || '',
             backgroundUrl: user.backgroundUrl || '',
             isBot: user.isBot || false,
@@ -3316,7 +3329,7 @@ app.use("/api/home", homeRouter);
             id: groupByUsername.id,
             username: groupByUsername.username,
             name: groupByUsername.name,
-            avatar: avatarToProxy(groupByUsername.avatar),
+            avatar: safeAvatarUrl(groupByUsername.avatar),
             memberCount: groupByUsername.memberCount,
             groupType: groupByUsername.type,
             isPublic: groupByUsername.isPublic,
@@ -3336,7 +3349,7 @@ app.use("/api/home", homeRouter);
             id: group.id,
             username: group.username || null,
             name: group.name,
-            avatar: avatarToProxy(group.avatar),
+            avatar: safeAvatarUrl(group.avatar),
             memberCount: group.memberCount,
             groupType: group.type,
             isPublic: group.isPublic,
@@ -3356,7 +3369,7 @@ app.use("/api/home", homeRouter);
             id: userByDialog.id,
             username: userByDialog.username,
             nickname: userByDialog.nickname || userByDialog.username,
-            avatar: avatarToProxy(userByDialog.avatar),
+            avatar: safeAvatarUrl(userByDialog.avatar),
             bio: userByDialog.bio || '',
             isBot: userByDialog.isBot || false,
           },
@@ -3374,7 +3387,7 @@ app.use("/api/home", homeRouter);
             id: groupByDialog.id,
             username: groupByDialog.username || null,
             name: groupByDialog.name,
-            avatar: avatarToProxy(groupByDialog.avatar),
+            avatar: safeAvatarUrl(groupByDialog.avatar),
             memberCount: groupByDialog.memberCount,
             groupType: groupByDialog.type,
             isPublic: groupByDialog.isPublic,
@@ -3479,7 +3492,7 @@ app.use("/api/home", homeRouter);
         if (link && !link.isRevoked) {
           ogTitle = `加入群组「${escHtml(link.group.name)}」— ${siteName}`;
           ogDescription = `${link.group.memberCount} 名成员 · 通过邀请链接加入群聊`;
-          ogImage = avatarToProxy(link.group.avatar);
+          ogImage = safeAvatarUrl(link.group.avatar);
         }
       } else {
         // 优先查用户
@@ -3491,7 +3504,7 @@ app.use("/api/home", homeRouter);
           const displayName = user.nickname || user.username;
           ogTitle = `添加 ${escHtml(displayName)} 为好友 — ${siteName}`;
           ogDescription = user.bio ? escHtml(user.bio) : `点击添加 ${escHtml(displayName)} 为好友`;
-          ogImage = avatarToProxy(user.avatar);
+          ogImage = safeAvatarUrl(user.avatar);
           ogType = 'profile';
         } else {
           // 查群组（按 username 或 id）
@@ -3505,7 +3518,7 @@ app.use("/api/home", homeRouter);
           if (group) {
             ogTitle = `加入群组「${escHtml(group.name)}」— ${siteName}`;
             ogDescription = `${group.memberCount} 名成员 · 点击加入群聊`;
-            ogImage = avatarToProxy(group.avatar);
+            ogImage = safeAvatarUrl(group.avatar);
             ogType = 'website';
           }
         }
@@ -3568,7 +3581,7 @@ app.use("/api/home", homeRouter);
       const displayName = user ? (user.nickname || user.username) : '朋友圈';
       const bio = (user?.bio || '').replace(/[<>"'&]/g, c => ({ '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '&': '&amp;' }[c] || c));
       const safeDisplayName = displayName.replace(/[<>"'&]/g, c => ({ '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '&': '&amp;' }[c] || c));
-      const avatarUrl = avatarToProxy(user?.avatar);
+      const avatarUrl = safeAvatarUrl(user?.avatar);
       const momentCount = user ? user._count.moments : 0;
       const pageUrl = `${req.protocol}://${req.get('host')}/pyq/${userId}`;
       const siteName = '灵鸽 IM';

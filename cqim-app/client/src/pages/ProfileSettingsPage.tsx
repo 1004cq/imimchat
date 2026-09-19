@@ -12,68 +12,11 @@ import {
 import { toast } from 'sonner';
 import { CURRENT_USER, syncCurrentUserProfile } from '@/lib/store';
 import RegionPicker from '@/components/RegionPicker';
-import { authApi, authFetch } from '@/lib/authFetch';
+import { authFetch } from '@/lib/authFetch';
+import { uploadFileToMinio } from '@/components/moments/mediaUpload';
 import { DoveAvatar } from '@/components/DoveAvatar';
 import { QRCardModal } from '@/components/QRCodeCard';
 import { publicUrl } from '@/lib/publicUrl';
-async function uploadFileToLocal(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = async () => {
-      try {
-        const base64 = (reader.result as string).split(',')[1];
-        const mediaType = file.type.startsWith('video/') ? 'video' : 'image';
-        const res = await authFetch('/api/media/upload', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ dataBase64: base64, mimeType: file.type, mediaType, source: 'avatar' }),
-        });
-        const data = await res.json();
-        if (!res.ok || !data.ok) throw new Error(data.error || '上传失败');
-        resolve(data.url);
-      } catch (e) { reject(e); }
-    };
-    reader.onerror = () => reject(new Error('文件读取失败'));
-    reader.readAsDataURL(file);
-  });
-}
-
-async function uploadFileToCos(file: File, prefix: string): Promise<string> {
-  try {
-    const stsData = await authApi('/api/cos/sts', undefined, 'GET');
-    const { credentials, bucket, region, baseUrl, avatarFolder, expiredTime } = stsData || {};
-    if (credentials?.tmpSecretId && credentials?.tmpSecretKey && credentials?.sessionToken && bucket && region && baseUrl && avatarFolder) {
-      const COS = (await import('cos-js-sdk-v5')).default;
-      const cos = new COS({
-        getAuthorization: (_options: any, callback: any) => {
-          callback({
-            TmpSecretId: credentials.tmpSecretId,
-            TmpSecretKey: credentials.tmpSecretKey,
-            SecurityToken: credentials.sessionToken,
-            ExpiredTime: expiredTime,
-          });
-        },
-      });
-      const rawExt = file.name.split('.').pop() || file.type.split('/').pop() || 'jpg';
-      const safeExt = rawExt.toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
-      // 头像目录结构：imimchat/头像/用户ID/{fileName}
-      const key = `${avatarFolder}/${prefix}_${Date.now()}.${safeExt}`;
-      return await new Promise<string>((resolve, reject) => {
-        cos.uploadFile(
-          { Bucket: bucket, Region: region, Key: key, Body: file },
-          (err: any) => {
-            if (err) reject(new Error(err.message || 'COS上传失败'));
-            else resolve(`${String(baseUrl).replace(/\/$/, '')}/${key}`);
-          }
-        );
-      });
-    }
-  } catch (cosErr) {
-    console.warn('[profile] COS 上传不可用，回退本地上传:', cosErr);
-  }
-  return uploadFileToLocal(file);
-}
-
 // ============ 类型 ============
 
 interface UserProfile {
@@ -254,7 +197,7 @@ const AvatarPicker: React.FC<{
       return;
     }
     try {
-      const url = await uploadFileToCos(file, 'avatar');
+      const url = await uploadFileToMinio(file);
       onSelect(url);
       onClose();
     } catch (error: any) {

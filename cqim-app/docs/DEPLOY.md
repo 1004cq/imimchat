@@ -1,26 +1,96 @@
-# CQIM 部署
+# CQIM main 部署与验收
 
-与 [README](../../README.md) 一致。Prisma 主库不是 Mongo。
+## 分支边界
 
-## 组件
+生产部署只使用 GitHub `main`。不要合并 `codex/wed-cpp-migration`、`cursor/mtproto-*`、`cursor/neomsg-*`、`cursor/jpush-*` 或 `cursor/tg-architecture-*`。默认 Nginx 仍然把 `/api` 和 WebSocket 流量转发到 Node/Go 现网服务，不指向 C++。
 
-- Nginx：TLS、`/api`、`/signal`
-- Node API + Go Gateway
-- **PostgreSQL**（`DATABASE_URL=postgresql://...`）
-- Redis
-- MySQL 仅审计（可选）
+## 存储方案
 
-线上若仍指 `file:./dev.db`，运行的仍是 SQLite，见 MIGRATE_POSTGRES.md。
+默认媒体存储是 **MinIO**，不是本地盘。图片、语音、视频、贴纸和文档写入 MinIO，PostgreSQL 只保存 `MediaFile` 元数据；客户端新上传统一调用 `/api/media/upload` 或 `/api/media/upload-form`。旧 COS 只作为历史 URL 的兼容读取路径，COS 配置失败不会让头像接口抛 500；无效历史头像返回空值，由客户端显示占位图。`/api/cos/sts` 已废弃，无密钥时固定返回 503。
 
-## 起动
+`MINIO_ROOT_USER` 和 `MINIO_ROOT_PASSWORD` 必须写入部署机的 `.env`，不能使用仓库里的示例值。
+
+## 启动顺序
+
+```text
+PostgreSQL healthy
+Redis healthy
+MinIO healthy (/minio/health/live)
+    ↓
+cqim 容器执行 prisma migrate deploy
+    ↓
+Node cqim 与 Go gateway 提供服务
+    ↓
+Nginx 对外提供 HTTP/HTTPS/WSS
+```
+
+首次部署：
 
 ```bash
 cd cqim-app
 cp .env.example .env
-# 填强密码、postgresql DATABASE_URL、PUBLIC_BASE_URL=https://wed.imim.chat
+# 编辑 .env：至少修改 MINIO_ROOT_USER、MINIO_ROOT_PASSWORD、TRTC_SECRET_KEY、APNS_P8_KEY 等密钥
 docker compose up -d --build
+docker compose ps
 ```
 
-验证：`https://wed.imim.chat/api/health` 与 `wss://wed.imim.chat/signal`。
+Node 容器的启动脚本会在启动服务前执行 `pnpm exec prisma migrate deploy`。如果迁移失败，Node 不会启动，先查看 `docker compose logs cqim`。
 
-库端口不要对公网。双机见 TWO_NODES.md。
+## MinIO 健康检查
+
+Compose 使用的最终探针是：
+
+```yaml
+test: ["CMD", "/usr/local/bin/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9000/minio/health/live"]
+```
+
+官方 `minio/minio` 镜像提供 `/minio/health/live` 未授权存活接口，但近期官方镜像不保证包含 `mc`、`curl` 或 `wget`。仓库中的 `minio-healthcheck.Dockerfile` 仍以官方 MinIO 镜像为基础，只从官方 BusyBox 镜像复制一个静态 `busybox` 二进制，因此探针不依赖 `mc`，并且确实请求 MinIO 官方健康路径。HTTP 200 才会使 `minio` 变为 healthy，`cqim` 的 `depends_on` 才会继续。
+
+手工检查：
+
+```bash
+docker compose exec minio /usr/local/bin/busybox wget -q -O /dev/null http://127.0.0.1:9000/minio/health/live
+echo $?  # 0 表示 live
+```
+
+## 探活
+
+```bash
+# Node API
+curl -fsS http://127.0.0.1/api/health
+
+# Redis
+docker compose exec redis redis-cli ping  # PONG
+
+# MinIO
+curl -fsSI http://127.0.0.1:9000/minio/health/live
+
+# WebSocket /signal（需要按现网 Nginx 域名和认证参数替换）
+curl --http1.1 -i -N \
+  -H 'Connection: Upgrade' \
+  -H 'Upgrade: websocket' \
+  -H 'Sec-WebSocket-Version: 13' \
+  -H 'Sec-WebSocket-Key: SGVsbG9XZWJTb2NrZXQ=' \
+  https://your-domain.example/signal
+# 预期 HTTP/1.1 101 Switching Protocols；若需要 token，追加现网认证参数。
+```
+
+## 八条发布后冒烟
+
+1. 使用密码、短信或邮箱完成登录，并确认刷新页面后会话仍有效。
+2. 注册或加载端到端密钥，建立加密私聊，确认双方能发送和解密消息。
+3. 在接收端杀掉 App/浏览器进程，发送一条消息，确认后台路径仅调用 APNs 或 Web Push；不把它描述为已通过真机 APNs 验证，除非实际装包测试。
+4. 在聊天中分别发送图片和语音，确认文件进入 MinIO、`MediaFile` 只保存元数据，读取 `/api/media/:id` 成功。
+5. 打开音视频通话，确认使用环境变量中的 TRTC SDKAppID `1600159677`，未配置或不匹配时接口明确报错。
+6. 打开二维码页面，完成二维码生成、扫描或邀请链接解析。
+7. 从通知、二维码或联系人进入聊天，确认能定位到正确的会话。
+8. 发送多条未读消息后退出并重新进入，确认未读数、已读状态和清零行为一致。
+
+## 常用故障定位
+
+```bash
+docker compose ps
+docker compose logs --tail=200 postgres redis minio cqim go-gateway nginx
+docker inspect --format '{{json .State.Health}}' cqim-minio
+docker compose exec cqim pnpm exec prisma migrate status
+```

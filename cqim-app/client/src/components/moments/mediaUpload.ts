@@ -1,11 +1,17 @@
 export type UploadProgressCallback = (progress: number) => void;
 
-async function uploadFileToMinio(file: File, onProgress?: UploadProgressCallback): Promise<string> {
+async function uploadFileToMinio(
+  file: File,
+  sourceOrProgress?: string | UploadProgressCallback,
+  onProgress?: UploadProgressCallback,
+): Promise<string> {
+  const progressCallback = typeof sourceOrProgress === 'function' ? sourceOrProgress : onProgress;
+  const source = typeof sourceOrProgress === 'string' ? sourceOrProgress : 'moments';
   return new Promise((resolve, reject) => {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('mediaType', file.type.startsWith('video/') ? 'video' : 'image');
-    formData.append('source', 'moments');
+    formData.append('source', source);
 
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/media/upload-form');
@@ -13,7 +19,7 @@ async function uploadFileToMinio(file: File, onProgress?: UploadProgressCallback
     if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
 
     xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
+      if (e.lengthComputable && progressCallback) progressCallback(Math.round((e.loaded / e.total) * 100));
     };
     xhr.onload = () => {
       try {
@@ -31,7 +37,4 @@ async function uploadFileToMinio(file: File, onProgress?: UploadProgressCallback
   });
 }
 
-// Keep the old function name as a source-compatible alias for existing callers.
-const uploadFileToCos = uploadFileToMinio;
-
-export { uploadFileToCos, uploadFileToMinio, uploadFileToMinio as uploadFileToLocal };
+export { uploadFileToMinio };

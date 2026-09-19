@@ -108,10 +108,10 @@ export default function MomentsPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const { uploadFileToCos } = await import('@/components/moments/mediaUpload');
+      const { uploadFileToMinio } = await import('@/components/moments/mediaUpload');
       const objectUrl = URL.createObjectURL(file);
       setCoverImage(objectUrl);
-      const uploadedUrl = await uploadFileToCos(file, 'background');
+      const uploadedUrl = await uploadFileToMinio(file, 'background');
       setCoverImage(uploadedUrl);
       if (typeof window !== 'undefined') window.localStorage.setItem(MOMENTS_COVER_STORAGE_KEY, uploadedUrl);
       await authApi('/api/profile', { userId: 'me', backgroundUrl: uploadedUrl }, 'PUT');

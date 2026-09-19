@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { uploadFileToCos } from './mediaUpload';
+import { uploadFileToMinio } from './mediaUpload';
 import type { VisibilityType } from './types';
 
 const PostComposer: React.FC<{
@@ -92,8 +92,8 @@ const PostComposer: React.FC<{
     setUploadStatusText('准备上传...');
     // 用一个统一的 loading toast 跟踪整个流程，避免界面被多个 toast 挤满
     const loadingToastId = toast.loading('准备上传...');
-    // 节流：仅在进度崑超 5% 或 距上次 ≥1s 才更新一次 toast / state，
-    // 避免 cos-js-sdk 分片上传 onProgress 高频回调导致渲染风暴，以及看上去“一直在加载”
+    // 节流：仅在进度超过 5% 或距上次 ≥1s 才更新一次 toast / state，
+    // 避免上传进度高频回调导致渲染风暴
     let lastShownPercent = -1;
     let lastShownAt = 0;
     const shouldShow = (p: number) => {
@@ -112,7 +112,7 @@ const PostComposer: React.FC<{
         const fileSizeMB = (selectedVideo.size / 1024 / 1024).toFixed(1);
         setUploadStatusText(`正在上传视频 (${fileSizeMB}MB)...`);
         toast.loading(`正在上传视频 (${fileSizeMB}MB)...`, { id: loadingToastId });
-        const videoUrl = await uploadFileToCos(selectedVideo, 'moment_video', (p) => {
+        const videoUrl = await uploadFileToMinio(selectedVideo, 'moment_video', (p) => {
           if (!shouldShow(p)) return;
           setUploadProgress(p);
           setUploadStatusText(`正在上传视频 ${p}%`);
@@ -131,7 +131,7 @@ const PostComposer: React.FC<{
           // 每张图片重置节流
           lastShownPercent = -1;
           lastShownAt = 0;
-          const url = await uploadFileToCos(file, `moment_${i + 1}`, (p) => {
+          const url = await uploadFileToMinio(file, `moment_${i + 1}`, (p) => {
             if (!shouldShow(p)) return;
             const overallProgress = Math.round(((completedFiles + p / 100) / totalFiles) * 100);
             setUploadProgress(overallProgress);
