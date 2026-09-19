@@ -1,4 +1,7 @@
-version: '3.9'
+version: "3.9"
+
+# 默认栈：PostgreSQL + Redis + 本地盘媒体 + API + Go 网关 + Nginx
+# 旧 Mongo/MySQL：docker compose --profile legacy up -d
 
 services:
   nginx:
@@ -17,29 +20,30 @@ services:
       - cqim
       - go-gateway
 
-  mongo:
-    image: mongo:7
-    container_name: cqim-mongo
+  postgres:
+    image: postgres:16-alpine
+    container_name: cqim-postgres
     restart: unless-stopped
-    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
-    # Removed public ports for security
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cqim}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cqim}
+      POSTGRES_DB: ${POSTGRES_DB:-cqim}
     expose:
-      - "27017"
+      - "5432"
     volumes:
-      - mongo_data:/data/db
+      - pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "mongosh --quiet --eval \"try { rs.status().ok } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'127.0.0.1:27017'}]}).ok }\" | grep 1"]
-      interval: 15s
-      timeout: 10s
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-cqim} -d $${POSTGRES_DB:-cqim}"]
+      interval: 10s
+      timeout: 5s
       retries: 10
-      start_period: 15s
+      start_period: 20s
 
   redis:
     image: redis:7-alpine
     container_name: cqim-redis
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
-    # Removed public ports for security
     expose:
       - "6379"
     volumes:
@@ -51,28 +55,6 @@ services:
       retries: 10
       start_period: 10s
 
-  mysql:
-    image: mysql:8.4
-    container_name: cqim-mysql
-    restart: unless-stopped
-    command: ["mysqld", "--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change_this_root_password}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-cqim_audit}
-      MYSQL_USER: ${MYSQL_USER:-cqim}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-cqim}
-    # Removed public ports for security
-    expose:
-      - "3306"
-    volumes:
-      - mysql_data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
-      interval: 15s
-      timeout: 10s
-      retries: 15
-      start_period: 30s
-
   cqim:
     build:
       context: .
@@ -80,32 +62,24 @@ services:
     image: cqim:latest
     container_name: cqim
     restart: unless-stopped
-    # Removed public ports, access via nginx
     expose:
       - "3000"
     env_file:
       - .env
     depends_on:
-      mongo:
+      postgres:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      mysql:
         condition: service_healthy
     environment:
       NODE_ENV: production
       PORT: 3000
-      DATABASE_URL: ${DATABASE_URL:-mongodb://mongo:27017/cqim?replicaSet=rs0&directConnection=true}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://cqim:cqim@postgres:5432/cqim?schema=public}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-      MYSQL_URL: ${MYSQL_URL:-mysql://cqim:cqim@mysql:3306/cqim_audit}
-      MYSQL_AUDIT_ENABLED: ${MYSQL_AUDIT_ENABLED:-true}
+      MEDIA_ROOT: /app/data/media
+      MEDIA_PUBLIC_PREFIX: /api/media
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://wed.imim.chat}
-    deploy:
-      resources:
-        limits:
-          memory: 1024M
-        reservations:
-          memory: 512M
+      TRTC_SDK_APP_ID: ${TRTC_SDK_APP_ID:-1600159677}
     volumes:
       - ./data:/app/data
     healthcheck:
@@ -113,7 +87,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 5
-      start_period: 20s
+      start_period: 40s
 
   go-gateway:
     build:
@@ -134,7 +108,34 @@ services:
       redis:
         condition: service_healthy
 
+  mongo:
+    profiles: ["legacy"]
+    image: mongo:7
+    container_name: cqim-mongo
+    restart: unless-stopped
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    expose:
+      - "27017"
+    volumes:
+      - mongo_data:/data/db
+
+  mysql:
+    profiles: ["legacy"]
+    image: mysql:8.4
+    container_name: cqim-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change_this_root_password}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-cqim_audit}
+      MYSQL_USER: ${MYSQL_USER:-cqim}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-cqim}
+    expose:
+      - "3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+
 volumes:
-  mongo_data:
+  pg_data:
   redis_data:
+  mongo_data:
   mysql_data:
