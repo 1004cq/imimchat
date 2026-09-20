@@ -126,15 +126,7 @@ Node `cqim-app/server` 保持可部署。默认 Nginx 未切流；生产流量�
 
 只改本机 Compose 挂载的 `nginx/default.conf`，不会部署到生产。
 
-切到已实现的 Go 路由（部分切流）：
-
-```bash
-cd cqim-app
-cp nginx/default.go-api-cutover.conf nginx/default.conf
-docker compose up -d --build go-api nginx
-```
-
-切到全部 `/api` → `go-api`（`/signal` → go-gateway）：
+启用全部 `/api` 切流（`default.go-api-all.conf`；`/signal` → go-gateway）：
 
 ```bash
 cd cqim-app
@@ -142,7 +134,7 @@ cp nginx/default.go-api-all.conf nginx/default.conf
 docker compose up -d --build go-api nginx
 ```
 
-改回 Node（`node-all-api`，全部 `/api` 再走 `cqim:3000`）：
+改回 Node（`node-all-api`）：
 
 ```bash
 cd cqim-app
@@ -150,22 +142,7 @@ cp nginx/default.node-all-api.conf nginx/default.conf
 docker compose up -d nginx
 ```
 
-可选停掉 Go 进程：`docker compose stop go-api`。若当前 `default.conf` 已是 HTTPS 版，部分切流改用 `https.go-api-cutover.conf`，改回用 `https.conf`。
-
-### Nginx location 清单（部分切流 `default.go-api-cutover.conf`）
-
-| location | 上游 |
-| --- | --- |
-| `/api/health`、`/api/me`、`/api/presence`、`/api/friend`、`/api/apns` | `go-api:8089` |
-| `/api/chat/create`、`/api/chat/list`、`/api/chat/send` | `go-api:8089` |
-| `/api/chat/{chatId}/messages` | `go-api:8089` |
-| `GET /api/chat/{chatId}` | `go-api:8089` |
-| `DELETE /api/chat/{chatId}` 以及 `/api/chat/{chatId}/read`、`/recall` | `cqim:3000` |
-| 其余 `/api` | `cqim:3000` |
-| `/signal` | **不变**，仍 `cqim:3000` |
-| `/ws` | **不变**，仍 `go-gateway:8081` |
-
-部分切流只改上表列出的前缀；路径是 `/api/friend`，不是 `/api/friends`。`/api/me` 使用边界匹配，不会把 `/api/media` 切走。
+可选停掉 Go 进程：`docker compose stop go-api`。
 
 ### 全部切流 `default.go-api-all.conf`
 
