@@ -37,6 +37,7 @@ func (s *Server) registerLegacyRoutes(mux *http.ServeMux) {
     mux.HandleFunc("GET /api/media/{id}", s.mediaDownload)
     s.registerGroupRoutes(mux)
     s.registerMomentsRoutes(mux)
+    s.registerAdminRoutes(mux)
     mux.HandleFunc("/api/admin/", s.notMigrated)
 }
 func (s *Server) notMigrated(w http.ResponseWriter,_ *http.Request){writeJSON(w,http.StatusNotImplemented,map[string]string{"error":"该路由尚未迁移到 go-api"})}

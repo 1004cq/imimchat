@@ -102,6 +102,11 @@ curl -i "$GO_API_BASE/api/health"
 | PUT | `/api/moments/:id`, `/api/moments/reorder` | 编辑可见性/内容/位置、排序 |
 | DELETE | `/api/moments/:id`, `/api/moments/:momentId/comments/:commentId` | 删除动态或评论 |
 | GET | `/api/moments/topics/hot` | 热门话题 |
+| POST/GET | `/api/admin/login`, `/api/admin/logout`, `/api/admin/me` | AdminSession 登录、登出、当前管理员；Bearer 与 `admin_token` Cookie 兼容 |
+| GET | `/api/admin/dashboard` | PostgreSQL 实际指标与 Redis `online:*` 在线人数；不可用指标返回 0 并列入 `unavailableMetrics` |
+| GET | `/api/admin/users`, `/api/admin/users/:id` | 用户列表、搜索、分页与详情 |
+| POST | `/api/admin/users/:id/ban` | 管理员封禁/解封用户并撤销被封禁用户会话 |
+| GET | `/api/admin/logs` | 管理员操作日志分页 |
 
 私聊发送仅接受 `msgType=encrypted`。成功写入后会更新 `Chat.lastMessageAt`、将会话预览固定为 `🔒 [加密消息]`，并向 Redis `cqim:im:push` 发布与 Node 相同的 `{ userId, payload }` 信封，供仍在运行的网关投递。
 
@@ -109,6 +114,6 @@ curl -i "$GO_API_BASE/api/health"
 
 ## 未迁移
 
-验证码发送/校验、密码重置与绑定资料的完整认证流程，`/api/admin` 全部管理业务，二维码业务校验，以及未列出的 `/api/*` 仍未迁移；这些路径会返回 JSON `501`，不会伪装成已完成。
+验证码发送/校验、密码重置与绑定资料的完整认证流程，未列出的 `/api/admin/*` 管理子路由、二维码业务校验，以及未列出的 `/api/*` 仍未迁移；这些路径会返回 JSON `501`，不会伪装成已完成。
 
 Nginx 未切流；Node `cqim-app/server` 保持可部署，生产流量仍由 Node 处理默认 `/api`。
