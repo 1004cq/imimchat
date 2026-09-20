@@ -40,10 +40,12 @@ COPY --from=build --chown=nodeuser:nodejs /app/package.json ./package.json
 COPY --from=build --chown=nodeuser:nodejs /app/.env.example ./.env.example
 COPY --from=build --chown=nodeuser:nodejs /app/scripts/start-api.sh ./scripts/start-api.sh
 
-# pnpm does not hoist node_modules/.prisma; generate in the runner image.
+# pnpm does not hoist node_modules/.prisma; generate with the copied CLI.
+# Do not use `pnpm exec prisma` here: prisma is a devDependency and is not on PATH.
 RUN node -e "const p=require('./package.json'); delete p.type; require('fs').writeFileSync('./package.json', JSON.stringify(p, null, 2))" && \
     chmod +x /app/scripts/start-api.sh && \
-    DATABASE_URL="postgresql://cqim:cqim@postgres:5432/cqim?schema=public" pnpm exec prisma generate && \
+    DATABASE_URL="postgresql://cqim:cqim@postgres:5432/cqim?schema=public" \
+      node /app/node_modules/prisma/build/index.js generate && \
     chown -R nodeuser:nodejs /app
 
 USER nodeuser
