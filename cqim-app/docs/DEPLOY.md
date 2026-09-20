@@ -34,6 +34,7 @@ Nginx 对外提供 HTTP（默认 default.conf）/ HTTPS（切换 https.conf 后�
 cd cqim-app
 cp .env.example .env
 # 编辑 .env：至少修改 MINIO_ROOT_USER、MINIO_ROOT_PASSWORD
+# PUBLIC_BASE_URL 示例为 https://im.cq.je；CORS_ORIGINS 须包含 https://im.cq.je
 # 生产再填 TRTC_SECRET_KEY、APNS_*、WEB_PUSH_*（不要把 APNs P8 提交进 Git）
 ./scripts/deploy.sh
 # 等价于：docker compose up -d --build && docker compose ps
@@ -51,19 +52,19 @@ Compose 只挂载这些路径，必须和 `nginx/*.conf` 一致：
 |--------|--------|------|
 | `nginx/default.conf` | `/etc/nginx/conf.d/default.conf` | 当前生效配置 |
 | `certbot/www` | `/var/www/certbot` | ACME webroot |
-| `certbot/conf` | `/etc/letsencrypt` | Let's Encrypt 证书（`https.conf` 读 `live/cq.je/`） |
+| `certbot/conf` | `/etc/letsencrypt` | Let's Encrypt 证书（`https.conf` 读 `live/im.cq.je/`） |
 
 `cqim-app/certs/` 是 APNs 密钥目录，不是 Nginx TLS 目录，不要挂进 Nginx。
 
-默认 `nginx/default.conf` 只监听 80，因此单机 `curl http://127.0.0.1/api/health` 可直接用，不需要先有证书。签发证书后：
+默认 `nginx/default.conf` 的 `server_name` 是 `im.cq.je`（以及 `localhost`），只监听 80，因此不需要先有证书。签发证书后：
 
 ```bash
-# scripts/bind-cq-je-domain.sh 会先用 http-bootstrap.conf，成功后再切 https.conf
+# scripts/bind-cq-je-domain.sh 为 im.cq.je 申请证书，成功后再切 https.conf
 cp nginx/https.conf nginx/default.conf
 docker compose up -d nginx
 ```
 
-`https.conf` 的证书路径是 `/etc/letsencrypt/live/cq.je/fullchain.pem` 与 `privkey.pem`，对应宿主机 `certbot/conf/live/cq.je/`。
+`https.conf` 的证书路径是 `/etc/letsencrypt/live/im.cq.je/fullchain.pem` 与 `privkey.pem`，对应宿主机 `certbot/conf/live/im.cq.je/`。把 Let's Encrypt 或其它证书放到该目录，文件名保持 `fullchain.pem` / `privkey.pem`。
 
 ## APNs 环境与 Token 生命周期
 
@@ -95,8 +96,13 @@ echo $?  # 0 表示 live
 ## 探活
 
 ```bash
-# Node API（经 Nginx :80 → cqim:3000，不是 C++ 8088）
-curl -fsS http://127.0.0.1/api/health
+# Node API（经 Nginx → cqim:3000，不是 C++ 8088）
+# HTTP 默认配置：
+curl -fsS http://im.cq.je/api/health
+# 本机尚未解析域名时：
+curl -fsS -H 'Host: im.cq.je' http://127.0.0.1/api/health
+# 切换 https.conf 之后：
+curl -fsS https://im.cq.je/api/health
 
 # Redis
 docker compose exec redis redis-cli ping  # PONG
@@ -104,15 +110,15 @@ docker compose exec redis redis-cli ping  # PONG
 # MinIO（容器内，不是宿主机 :9000）
 docker compose exec minio /usr/local/bin/busybox wget -q -O /dev/null http://127.0.0.1:9000/minio/health/live
 
-# WebSocket /signal（Node；需要按现网域名和认证参数替换）
+# WebSocket /signal（Node；HTTP 默认 / HTTPS 生产）
 curl --http1.1 -i -N \
   -H 'Connection: Upgrade' \
   -H 'Upgrade: websocket' \
   -H 'Sec-WebSocket-Version: 13' \
   -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
-  http://127.0.0.1/signal
+  http://im.cq.je/signal
 # 预期 HTTP/1.1 101 Switching Protocols；若需要 token，追加现网认证参数。
-# 生产 HTTPS：把 URL 换成 https://your-domain.example/signal
+# HTTPS：https://im.cq.je/signal
 ```
 
 ## 八条发布后冒烟

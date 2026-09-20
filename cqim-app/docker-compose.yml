@@ -104,7 +104,8 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
       MINIO_BUCKET: ${MINIO_BUCKET:-cqim-media}
       MINIO_REGION: ${MINIO_REGION:-us-east-1}
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://wed.imim.chat}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://im.cq.je}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://im.cq.je,http://im.cq.je}
       TRTC_SDK_APP_ID: ${TRTC_SDK_APP_ID:-1600159677}
     volumes:
       - ./data:/app/data
@@ -129,7 +130,7 @@ services:
       - REDIS_ADDR=redis:6379
       - REDIS_PASSWORD=
       - REDIS_DB=0
-      - CORS_ORIGINS=${CORS_ORIGINS:-https://wed.imim.chat,http://wed.imim.chat}
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://im.cq.je,http://im.cq.je}
       - DB_PATH=/tmp/cqim-gateway.db
     depends_on:
       redis:

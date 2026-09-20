@@ -64,7 +64,8 @@ docker compose ps
 cat <<'EOF'
 
 When nginx and cqim are up, probe the Node API through Nginx:
-  curl -fsS http://127.0.0.1/api/health
+  curl -fsS http://im.cq.je/api/health
+  curl -fsS -H 'Host: im.cq.je' http://127.0.0.1/api/health
 
 MinIO is not published on the host. Probe inside the container:
   docker compose exec minio /usr/local/bin/busybox wget -q -O /dev/null http://127.0.0.1:9000/minio/health/live && echo minio-live
