@@ -92,11 +92,7 @@ const MomentCard = memo<{
       {/* 左侧头像 */}
       <div style={{ width: 48, flexShrink: 0, paddingTop: 0 }}>
         <div style={{ width: 40, height: 40, borderRadius: 4, overflow: "hidden", background: "#e5e7eb" }}>
-          {post.authorAvatar ? (
-            <img src={post.authorAvatar} alt={post.authorName} style={{ width: "100%", height: "100%", objectFit: "cover" }} loading="lazy" />
-          ) : (
-            <DoveAvatar name={post.authorName} id={post.authorId} size={40} />
-          )}
+          <DoveAvatar name={post.authorName} id={post.authorId} avatar={post.authorAvatar || ''} size={40} className="!rounded-none" />
         </div>
       </div>
 

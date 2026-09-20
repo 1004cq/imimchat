@@ -38,7 +38,7 @@ export function convertApiMoment(m: any): MomentItem {
     id: m.id,
     authorId: m.authorId,
     authorName: m.authorName || '',
-    authorAvatar: m.authorAvatar || '',
+    authorAvatar: m.authorAvatar || m.user?.avatar || '',
     content: m.content || '',
     media: (m.media || []).map((item: any) => ({
       type: (item.type === 'video' ? 'video' : 'image') as 'image' | 'video',

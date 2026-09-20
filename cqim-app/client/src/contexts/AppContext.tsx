@@ -5,7 +5,7 @@ import React, { createContext, useContext, useReducer, useCallback, useEffect, u
 import { createStore, useStore } from 'zustand';
 import {
   type Chat, type Message, type MomentPost, type CallState, type BurnAfterReadTimer,
-  MOCK_CHATS, MOCK_MESSAGES, MOCK_MOMENTS, CURRENT_USER,
+  applyAuthMeUser, MOCK_CHATS, MOCK_MESSAGES, MOCK_MOMENTS, CURRENT_USER,
 } from '@/lib/store';
 import {
   formatMessagePreview,
@@ -763,8 +763,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!state.isLoggedIn || !localStorage.getItem('user_token')) return;
     let cancelled = false;
     authFetch('/api/auth/me')
-      .then((response) => {
-        if (cancelled || response.ok) return;
+      .then(async (response) => {
+        if (cancelled) return;
+        if (response.ok) {
+          const data = await response.json().catch(() => null);
+          const user = applyAuthMeUser(data);
+          if (user) dispatch({ type: 'LOGIN', user });
+          return;
+        }
         if (response.status === 401) {
           for (const key of ['user_token', 'user_id', 'user_nickname', 'user_username', 'user_avatar', 'user_bio']) {
             localStorage.removeItem(key);
