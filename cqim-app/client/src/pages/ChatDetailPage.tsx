@@ -43,8 +43,15 @@ import ChatHeader from '@/components/chat/ChatHeader';
 import MessageListContainer from '@/components/chat/MessageListContainer';
 import Composer from '@/components/chat/Composer';
 import { ChatSkeleton, MemoizedChatBubble, shouldShowTimeGroup } from '@/components/chat/ChatBubble';
-import MessageListErrorBoundary from '@/components/chat/MessageListErrorBoundary';
-import { sanitizeMessages } from '@/lib/messageListUtils';
+import MessageListErrorBoundary, { MessageItemErrorBoundary } from '@/components/chat/MessageListErrorBoundary';
+import {
+  sanitizeMessages,
+  resolvePrivateWireMessage,
+  failedDecryptResults,
+  coerceTimestamp,
+  coerceDisplayMessageType,
+  HISTORY_DECRYPT_PLACEHOLDER,
+} from '@/lib/messageListUtils';
 import { formatChatListPreview, isOpaquePreview } from '@/lib/chatPreview';
 import { messageMediaPatch } from '@/lib/mediaFields';
 import { authFetch } from '@/lib/authFetch';
@@ -221,8 +228,8 @@ export default function ChatDetailPage() {
       chatId,
       senderId: gm.senderId,
       content: gm.isRevoked ? '消息已撤回' : gm.content,
-      type: (gm.msgType || 'text') as Message['type'],
-      timestamp: gm.timestamp,
+      type: coerceDisplayMessageType(gm.msgType),
+      timestamp: coerceTimestamp(gm.timestamp),
       isEncrypted: gm.mlsEncrypted || false,
       encryptedEnvelope: gm.mlsEncrypted ? 'mls' : undefined,
       reactions: {},
@@ -361,55 +368,43 @@ export default function ChatDetailPage() {
         }
 
         for (const [senderId, encryptedMessages] of bySender) {
-          const results = e2eeProxy.isReady
-            ? await e2eeProxy.signalBatchDecrypt(senderId, encryptedMessages)
-            : await (async () => {
-                const fallbackResults: Array<{ id: string; plaintext?: string; error?: string; success: boolean }> = [];
-                for (const item of encryptedMessages) {
-                  try {
-                    fallbackResults.push({ id: item.id, plaintext: await e2ee.decrypt(senderId, item.envelope), success: true });
-                  } catch (error) {
-                    fallbackResults.push({ id: item.id, error: error instanceof Error ? error.message : String(error), success: false });
+          let results: Array<{ id: string; plaintext?: string; error?: string; success: boolean }>;
+          try {
+            results = e2eeProxy.isReady
+              ? await e2eeProxy.signalBatchDecrypt(senderId, encryptedMessages)
+              : await (async () => {
+                  const fallbackResults: Array<{ id: string; plaintext?: string; error?: string; success: boolean }> = [];
+                  for (const item of encryptedMessages) {
+                    try {
+                      fallbackResults.push({ id: item.id, plaintext: await e2ee.decrypt(senderId, item.envelope), success: true });
+                    } catch (error) {
+                      fallbackResults.push({ id: item.id, error: error instanceof Error ? error.message : String(error), success: false });
+                    }
                   }
-                }
-                return fallbackResults;
-              })();
-          for (const result of results) decryptResults.set(result.id, result);
+                  return fallbackResults;
+                })();
+          } catch (error) {
+            console.error('[E2EE] 历史消息批量解密失败:', error);
+            trackE2EEFailure('decrypt', { chatId, msgType: 'encrypted', error, direction: 'inbound' });
+            results = failedDecryptResults(encryptedMessages, error);
+          }
+          for (const result of results || []) decryptResults.set(result.id, result);
         }
 
         const msgs: Message[] = serverMessages
           .filter((m: any) => !!m?.id)
           .map((m: any) => {
-          let decryptedContent = m.isRevoked ? '消息已撤回' : (m.content || '');
-          let finalMsgType = m.msgType || 'text';
-          let finalExtra = typeof m.extra === 'string' ? (() => { try { return JSON.parse(m.extra); } catch { return {}; } })() : (m.extra || {});
-          let decryptionFailed = false;
-          let decryptionStatus: Message['decryptionStatus'] = 'decrypted';
-
-          if (m.msgType === 'encrypted' && m.content && !m.isRevoked) {
-            if (m.senderId === currentUserId) {
-              decryptedContent = '🔒 [本地加密消息]';
-              decryptionStatus = 'ciphertext';
-            } else {
-              const result = decryptResults.get(m.id);
-              try {
-                if (!result?.success || !result.plaintext) throw new Error(result?.error || 'decrypt_failed');
-                const decrypted = JSON.parse(result.plaintext);
-                decryptedContent = decrypted.content;
-                finalMsgType = decrypted.msgType || 'text';
-                finalExtra = { ...finalExtra, ...decrypted.extra };
-              } catch (err) {
-                console.error('[E2EE] 历史消息解密失败:', err);
-                trackE2EEFailure('decrypt', { chatId, msgType: m.msgType, error: err, direction: 'inbound' });
-                decryptedContent = '🔒 无法解密历史消息，请重新验证安全会话';
-                decryptionFailed = true;
-                decryptionStatus = 'failed';
-              }
-            }
-          } else if (m.msgType !== 'encrypted' && !m.isRevoked) {
-            decryptedContent = '⚠️ [不支持的旧明文消息]';
-            decryptionFailed = true;
-            decryptionStatus = 'legacy';
+          const resolved = resolvePrivateWireMessage({
+            msgType: m.msgType,
+            content: m.content,
+            isRevoked: m.isRevoked,
+            isOwn: m.senderId === currentUserId,
+            extra: m.extra,
+            decryptResult: decryptResults.get(m.id),
+            failedPlaceholder: HISTORY_DECRYPT_PLACEHOLDER,
+          });
+          if (resolved.decryptionFailed && m.msgType === 'encrypted' && m.senderId !== currentUserId) {
+            trackE2EEFailure('decrypt', { chatId, msgType: m.msgType, error: decryptResults.get(m.id)?.error || 'decrypt_failed', direction: 'inbound' });
           }
 
           return {
@@ -417,18 +412,18 @@ export default function ChatDetailPage() {
             chatId: m.chatId,
             cursor: m.id,
             senderId: m.senderId,
-            content: decryptedContent,
-            type: finalMsgType as any,
-            timestamp: m.createdAt || Date.now(),
-            isEncrypted: m.msgType === 'encrypted',
-            decryptionFailed,
-            decryptionStatus,
+            content: resolved.content,
+            type: resolved.type,
+            timestamp: coerceTimestamp(m.createdAt),
+            isEncrypted: resolved.isEncrypted,
+            decryptionFailed: resolved.decryptionFailed,
+            decryptionStatus: resolved.decryptionStatus,
             direction: m.senderId === currentUserId ? 'outbound' as const : 'inbound' as const,
             reactions: {},
             status: m.status || 'sent',
             isRecalled: m.isRevoked || false,
             replyTo: m.replyToId || undefined,
-            ...messageMediaPatch(finalExtra),
+            ...messageMediaPatch(resolved.extra),
             ...(m.hmac ? { hmac: m.hmac, integrityStatus: 'unverified' as const } : {}),
           };
         });
@@ -1551,8 +1546,8 @@ export default function ChatDetailPage() {
     })();
 
     return (
+      <MessageItemErrorBoundary key={msg.id || `${msg.senderId}-${index}`}>
       <MemoizedChatBubble
-        key={msg.id || `${msg.senderId}-${index}`}
         message={msg}
         showAvatar={showAvatar}
         showTimeGroup={showTimeGroup}
@@ -1582,6 +1577,7 @@ export default function ChatDetailPage() {
         onReply={handleReplyToMessage}
         onShowProfile={showProfile}
       />
+      </MessageItemErrorBoundary>
     );
   }, [addReaction, chat, chatId, currentUserId, groupMembers, groupSync, handleBurn, handleMarkRead, handlePlayVoice, handleReplyToMessage, handleStopVoice, handleVerifyIntegrity, isGroupChat, otherMember, otherUser, recallMessage, showProfile, signalWs, state.currentUser, voice.playbackStates]);
 
@@ -1755,7 +1751,7 @@ export default function ChatDetailPage() {
         </motion.div>
       )}
 
-      <MessageListErrorBoundary>
+      <MessageListErrorBoundary key={chatId}>
         <MessageListContainer
           listRef={messageListRef}
           chatId={chatId}

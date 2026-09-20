@@ -28,6 +28,7 @@ import {
 import { e2eeProxy } from '@/lib/e2ee/WorkerProxy';
 import { formatChatListPreview, preferLocalChatPreview, sanitizePreviewText } from '@/lib/chatPreview';
 import { messageMediaPatch } from '@/lib/mediaFields';
+import { resolvePrivateWireMessage, coerceTimestamp, LIVE_DECRYPT_PLACEHOLDER } from '@/lib/messageListUtils';
 import { PRESENCE_HEARTBEAT_MS, reportPresence, resolvePresenceState } from '@/lib/presence';
 
 export interface AuthUser {
@@ -1115,10 +1116,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             } else if (senderId !== currentUserId) {
               // 收到对方消息
               (async () => {
-                let decryptedContent = isRevoked ? '消息已撤回' : (content || '');
-                let finalMsgType = msgType || 'text';
-                let finalExtra = extra;
-                let decryptionFailed = false;
+                let decryptResult: { plaintext?: string; error?: string; success: boolean } | undefined;
 
                 // P0: 强制 E2EE 解密，拒绝旧明文投递
                 if (msgType === 'encrypted' && content && !isRevoked) {
@@ -1130,40 +1128,41 @@ export function AppProvider({ children }: { children: ReactNode }) {
                     const decryptedStr = e2eeProxy.isReady
                       ? await e2eeProxy.signalDecrypt(senderId, envelope)
                       : await e2ee.decrypt(senderId, envelope);
-                      
-                    const decrypted = JSON.parse(decryptedStr);
-                    
-                    decryptedContent = decrypted.content;
-                    finalMsgType = decrypted.msgType || 'text';
-                    finalExtra = { ...extra, ...decrypted.extra };
+                    decryptResult = { plaintext: decryptedStr, success: true };
                   } catch (err) {
                     console.error('[E2EE] 解密失败:', err);
                     trackE2EEFailure('decrypt', { chatId, msgType, error: err, direction: 'inbound' });
-                    decryptedContent = '🔒 无法解密消息，请重置安全会话';
-                    decryptionFailed = true;
+                    decryptResult = { success: false, error: err instanceof Error ? err.message : String(err) };
                   }
-                } else if (msgType !== 'encrypted' && !isRevoked) {
-                  decryptedContent = '⚠️ [不支持的旧明文消息]';
-                  decryptionFailed = true;
                 }
+
+                const resolved = resolvePrivateWireMessage({
+                  msgType,
+                  content,
+                  isRevoked,
+                  isOwn: false,
+                  extra,
+                  decryptResult,
+                  failedPlaceholder: LIVE_DECRYPT_PLACEHOLDER,
+                });
 
                 const newMsg: Message = {
                   id,
                   chatId,
                   cursor: id,
                   senderId,
-                  content: decryptedContent,
-                  type: finalMsgType as any,
-                  timestamp: createdAt || Date.now(),
-                  isEncrypted: true,
+                  content: resolved.content,
+                  type: resolved.type,
+                  timestamp: coerceTimestamp(createdAt),
+                  isEncrypted: resolved.isEncrypted,
                   reactions: {},
                   status: 'delivered',
                   isRecalled: isRevoked || false,
                   replyTo: replyToId || undefined,
-                  decryptionFailed,
-                  decryptionStatus: decryptionFailed ? 'failed' : 'decrypted',
+                  decryptionFailed: resolved.decryptionFailed,
+                  decryptionStatus: resolved.decryptionStatus,
                   direction: 'inbound',
-                  ...messageMediaPatch(finalExtra),
+                  ...messageMediaPatch(resolved.extra),
                   ...(burnAfterRead ? { burnAfterRead } : {}),
                   ...(hmac ? { hmac, integrityStatus: 'unverified' as const } : {}),
                 };

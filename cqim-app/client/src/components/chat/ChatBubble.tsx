@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Phone, Video, Mic, Loader2, Copy, CornerUpRight, Trash2, Star, X, Shield, Ban, Camera, Clock, Check, CheckCheck } from 'lucide-react';
+import { Phone, Video, Mic, Loader2, Copy, CornerUpRight, Trash2, Star, X, Shield, ShieldCheck, Ban, Camera, Clock, Check, CheckCheck, Lock, Flame } from 'lucide-react';
 import { toast } from 'sonner';
 import { DoveAvatar } from '@/components/DoveAvatar';
 import { VoiceMessageBubble } from '@/components/VoiceMessageBubble';
@@ -10,6 +10,7 @@ import LocationMessageBubble from '@/components/LocationMessageBubble';
 import { LinkPreviewCard, extractUrl, renderTextWithLinks } from '@/components/LinkPreviewCard';
 import LottieSticker from '@/components/LottieSticker';
 import { formatChatTime, getUserById, type Message, type BurnAfterReadTimer, BURN_TIMER_OPTIONS, formatBurnTimer } from '@/lib/store';
+import { coerceDisplayMessageType, coerceTimestamp } from '@/lib/messageListUtils';
 import { bubbleAnimations, springBubble, tgEaseOut } from '@/lib/animations';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { authFetch } from '@/lib/authFetch';
@@ -112,12 +113,12 @@ function getTimeGroupLabel(timestamp: number): string {
 // 判断是否需要显示时间分组
 export function shouldShowTimeGroup(current: Message, previous?: Message): boolean {
   if (!previous) return true;
-  return current.timestamp - previous.timestamp > 300000; // 5分钟
+  return coerceTimestamp(current.timestamp, 0) - coerceTimestamp(previous.timestamp, 0) > 300000; // 5分钟
 }
 
 function getMessagePreviewText(message?: Message): string {
   if (!message) return '原消息不可用';
-  switch (message.type) {
+  switch (coerceDisplayMessageType(message.type)) {
     case 'image':
       return '[图片]';
     case 'video':
@@ -513,6 +514,8 @@ const ChatBubble: React.FC<{
   const _currentUserId = currentUser.id || localStorage.getItem('user_id') || 'me';
   const isSelf = message.senderId === 'me' || message.senderId === _currentUserId;
   const sender = getUserById(message.senderId);
+  const displayType = coerceDisplayMessageType(message.type);
+  const contentText = typeof message.content === 'string' ? message.content : '';
 
   // 实时解析发送者名称
   const resolvedSenderName = isSelf 
@@ -637,12 +640,12 @@ const ChatBubble: React.FC<{
 
   // 官方账号消息：特殊蓝色卡片样式
   const isOfficialMsg = message.senderId === 'official';
-  const isLoginAlert = isOfficialMsg && message.content.includes('登录安全提醒');
+  const isLoginAlert = isOfficialMsg && contentText.includes('登录安全提醒');
 
   // AI 机器人消息：紫色渐变卡片样式（支持文字+语音同时显示）
   if (isBotMsg) {
-    const hasVoice = message.voiceUrl || (message.type === 'voice' && message.voiceUrl);
-    const hasText = !!message.content;
+    const hasVoice = message.voiceUrl || (displayType === 'voice' && message.voiceUrl);
+    const hasText = !!contentText;
 
     return (
       <>
@@ -680,7 +683,7 @@ const ChatBubble: React.FC<{
               <div className="rounded-2xl rounded-tl-sm overflow-hidden border border-purple-100 bg-white shadow-sm">
                 <div className="px-3 py-2.5">
                   <p className="text-sm text-dove-ink leading-relaxed whitespace-pre-line">
-                    {message.content}
+                    {contentText}
                   </p>
                 </div>
               </div>
@@ -711,7 +714,7 @@ const ChatBubble: React.FC<{
     );
   }
 
-  if (isOfficialMsg && message.type === 'text') {
+  if (isOfficialMsg && displayType === 'text') {
     return (
       <>
         {showTimeGroup && (
@@ -757,8 +760,8 @@ const ChatBubble: React.FC<{
               <div className="px-3 py-2.5">
                 <p className="text-sm text-dove-ink leading-relaxed whitespace-pre-line">
                   {isLoginAlert
-                    ? message.content.replace('🔐 登录安全提醒\n\n', '')
-                    : message.content
+                    ? contentText.replace('🔐 登录安全提醒\n\n', '')
+                    : contentText
                   }
                 </p>
                 {isLoginAlert && (
@@ -814,12 +817,12 @@ const ChatBubble: React.FC<{
   }
 
   // 系统消息（含截屏通知、入群通知、群管理通知等）
-  if (message.type === 'system') {
-    const isScreenshot = message.content.includes('截取了屏幕');
-    const isJoinNotice = message.content.includes('加入了群聊') || message.content.includes('邀请');
-    const isLeaveNotice = message.content.includes('退出群聊') || message.content.includes('移出群聊');
-    const isAdminNotice = message.content.includes('管理员') || message.content.includes('群主');
-    const isGroupUpdate = message.content.includes('群名') || message.content.includes('群公告') || message.content.includes('群头像') || message.content.includes('群 ID');
+  if (displayType === 'system') {
+    const isScreenshot = contentText.includes('截取了屏幕');
+    const isJoinNotice = contentText.includes('加入了群聊') || contentText.includes('邀请');
+    const isLeaveNotice = contentText.includes('退出群聊') || contentText.includes('移出群聊');
+    const isAdminNotice = contentText.includes('管理员') || contentText.includes('群主');
+    const isGroupUpdate = contentText.includes('群名') || contentText.includes('群公告') || contentText.includes('群头像') || contentText.includes('群 ID');
     return (
       <div className="flex justify-center py-2">
         <span className={`text-[10px] px-3 py-1 rounded-full flex items-center gap-1 max-w-[85%] text-center leading-relaxed ${
@@ -836,16 +839,16 @@ const ChatBubble: React.FC<{
             : 'text-muted-foreground bg-dove-warm-gray/60'
         }`}>
           {isScreenshot && <Camera size={10} />}
-          {message.content}
+          {contentText}
         </span>
       </div>
     );
   }
 
   // 通话记录消息
-  if (message.type === 'call') {
-    const isAudio = message.content.includes('📞');
-    const isMissed = message.content.includes('未接') || message.content.includes('已拒绝');
+  if (displayType === 'call') {
+    const isAudio = contentText.includes('📞');
+    const isMissed = contentText.includes('未接') || contentText.includes('已拒绝');
     return (
       <div className="flex justify-center py-2">
         <span className={`text-[10px] px-3 py-1.5 rounded-full flex items-center gap-1.5 border ${
@@ -854,14 +857,14 @@ const ChatBubble: React.FC<{
             : 'text-dove-green bg-dove-green/5 border-dove-green/20'
         }`}>
           {isAudio ? <Phone size={10} /> : <Video size={10} />}
-          {message.content}
+          {contentText}
         </span>
       </div>
     );
   }
 
   // 贴纸消息：无气泡背景，直接显示 Lottie 动画
-  if (message.type === 'sticker' && message.stickerUrl) {
+  if (displayType === 'sticker' && message.stickerUrl) {
     return (
       <>
         {showTimeGroup && (
@@ -949,10 +952,12 @@ const ChatBubble: React.FC<{
   const mediaIv = message.iv || extraMedia.iv;
   const imageUrl = message.imageUrl || extraMedia.imageUrl;
   const videoUrl = message.videoUrl || extraMedia.videoUrl;
-  const rawDisplay = message.decryptedContent || message.content;
+  const rawDisplay = (typeof message.decryptedContent === 'string' && message.decryptedContent)
+    ? message.decryptedContent
+    : contentText;
   const displayContent = looksLikeCiphertext(rawDisplay) ? '🔒 [加密消息]' : (rawDisplay || '');
   const isRestricted = message.forwardRestricted;
-  const useInlineMeta = message.type === 'text' || !message.type;
+  const useInlineMeta = displayType === 'text';
   const shouldPinEncryptionBadge = message.isEncrypted && useInlineMeta;
   const showBelowMetaRow = !useInlineMeta || !!message.burnAfterRead || message.integrityStatus === 'verified' || message.integrityStatus === 'tampered';
 
@@ -1016,25 +1021,25 @@ const ChatBubble: React.FC<{
               </div>
             )}
 
-            {message.type === 'image' && fileKey && mediaIv && imageUrl ? (
+            {displayType === 'image' && fileKey && mediaIv && imageUrl ? (
               <EncryptedMediaLoader
                 url={imageUrl}
                 fileKey={fileKey}
                 iv={mediaIv}
                 type="image"
               />
-            ) : message.type === 'image' && imageUrl ? (
+            ) : displayType === 'image' && imageUrl ? (
               <RemoteChatMedia src={imageUrl} type="image" />
-            ) : message.type === 'video' && fileKey && mediaIv && videoUrl ? (
+            ) : displayType === 'video' && fileKey && mediaIv && videoUrl ? (
               <EncryptedMediaLoader
                 url={videoUrl}
                 fileKey={fileKey}
                 iv={mediaIv}
                 type="video"
               />
-            ) : message.type === 'video' && videoUrl ? (
+            ) : displayType === 'video' && videoUrl ? (
               <RemoteChatMedia src={videoUrl} type="video" />
-            ) : message.type === 'voice' && message.voiceCiphertext ? (
+            ) : displayType === 'voice' && message.voiceCiphertext ? (
               <VoiceMessageBubble
                 messageId={message.id}
                 payload={{
@@ -1050,7 +1055,7 @@ const ChatBubble: React.FC<{
                 onPlay={onPlayVoice || (() => {})}
                 onStop={onStopVoice || (() => {})}
               />
-            ) : message.type === 'voice' ? (
+            ) : displayType === 'voice' ? (
               // 旧式模拟语音消息展示（历史数据兼容）
               <div className="flex items-center gap-2 min-w-[80px]">
                 <Mic size={14} className={isSelf ? 'text-dove-green' : 'text-muted-foreground'} />
@@ -1062,7 +1067,7 @@ const ChatBubble: React.FC<{
                 </div>
                 <span className="text-[10px] text-muted-foreground">{message.duration || 3}″</span>
               </div>
-            ) : (message.type === 'location' || message.type === 'location_share') && message.locationData ? (
+            ) : (displayType === 'location' || displayType === 'location_share') && message.locationData ? (
               // 位置/实时位置共享消息气泡
               <LocationMessageBubble
                 data={message.locationData as any}

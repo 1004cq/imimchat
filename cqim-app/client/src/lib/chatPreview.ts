@@ -16,7 +16,8 @@ const OPAQUE_PREVIEWS = new Set([
 ]);
 
 export function looksLikeCiphertext(text?: string | null): boolean {
-  const value = (text || '').trim();
+  if (typeof text !== 'string') return false;
+  const value = text.trim();
   if (!value) return false;
   if (value.startsWith('{') && (
     value.includes('"ct"')
