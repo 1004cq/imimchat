@@ -1,6 +1,6 @@
 # Go API
 
-独立 Go 1.22+ HTTP 服务，使用标准库 `net/http`、`pgx` 和 `go-redis`。它与现有 Node 服务共用 PostgreSQL、Redis 与 `UserSession`。没有修改 Node、Nginx 或 Prisma，默认 `/api` 仍由 Node 处理。
+独立 Go 1.22+ HTTP 服务，使用标准库 `net/http`、`pgx` 和 `go-redis`。它与现有 Node 服务共用 PostgreSQL、Redis 与 `UserSession`。没有修改 Node 或 Prisma。Compose 会启动 `go-api`（容器内 `8089`），但 **默认 Nginx 仍把全部 `/api` 交给 Node `cqim:3000`**；生产未自动切流。
 
 ## 编译与启动
 
@@ -72,4 +72,43 @@ curl -i "$GO_API_BASE/api/health"
 
 媒体/MinIO、认证注册登录验证码、群聊、朋友圈、贴纸、二维码、管理后台及其余 `/api/*` 路由尚未迁移。
 
-Nginx 未切流；Node `cqim-app/server` 保持可部署，生产流量仍由 Node 处理默认 `/api`。
+私聊中 Node 仍有、Go 未实现的接口也保持走 Node：`DELETE /api/chat/{chatId}`、`POST /api/chat/{chatId}/read`、`POST /api/chat/{chatId}/recall/{messageId}`。
+
+Node `cqim-app/server` 保持可部署。默认 Nginx 未切流；生产流量仍由 Node 处理全部 `/api`，除非按下一节 **显式复制** 可选切流配置。
+
+## 如何切 / 如何改回 Node
+
+只改本机 Compose 挂载的 `nginx/default.conf`，不会部署到生产。
+
+切到已实现的 Go 路由：
+
+```bash
+cd cqim-app
+cp nginx/default.go-api-cutover.conf nginx/default.conf
+docker compose up -d --build go-api nginx
+```
+
+改回 Node（全部 `/api` 再走 `cqim:3000`）：
+
+```bash
+cd cqim-app
+cp nginx/default.node-all-api.conf nginx/default.conf
+docker compose up -d nginx
+```
+
+可选停掉 Go 进程：`docker compose stop go-api`。若当前 `default.conf` 已是 HTTPS 版，改用 `https.go-api-cutover.conf` 切流、用 `https.conf` 改回。
+
+### Nginx location 清单（仅切流配置生效时）
+
+| location | 上游 |
+| --- | --- |
+| `/api/health`、`/api/me`、`/api/presence`、`/api/friend`、`/api/apns` | `go-api:8089` |
+| `/api/chat/create`、`/api/chat/list`、`/api/chat/send` | `go-api:8089` |
+| `/api/chat/{chatId}/messages` | `go-api:8089` |
+| `GET /api/chat/{chatId}` | `go-api:8089` |
+| `DELETE /api/chat/{chatId}` 以及 `/api/chat/{chatId}/read`、`/recall` | `cqim:3000` |
+| 其余 `/api`（含 `/api/admin`、`/api/moments`、`/api/media`、`/api/auth`、群聊、贴纸、二维码、Web Push） | `cqim:3000` |
+| `/signal` | **不变**，仍 `cqim:3000`（本仓库 Go 网关不处理 `/signal`） |
+| `/ws` | **不变**，仍 `go-gateway:8081` |
+
+不要把 `/api/admin`、`/api/moments`、`/api/media` 指到 go-api：这些路由尚未实现。路径是 `/api/friend`，不是 `/api/friends`。`/api/me` 使用边界匹配，不会把 `/api/media` 切走。
