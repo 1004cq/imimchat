@@ -25,7 +25,7 @@ WuKongIM 不是主路径。
 | 推送 | 自建 APNs + Web Push |
 | 通话 | TRTC（AppId 以环境变量为准，禁止旧 ID 兜底） |
 
-不使用 MongoDB、MySQL、个推 / 极光为主通道。
+不使用 MongoDB、MySQL。
 
 朋友圈、用户资料、SMTP 配置、管理日志都在 PostgreSQL。
 
