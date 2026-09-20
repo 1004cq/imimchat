@@ -23,6 +23,18 @@ func (s *Server) registerLegacyRoutes(mux *http.ServeMux) {
     mux.HandleFunc("GET /api/stickers/discover", s.stickerPacks)
     mux.HandleFunc("GET /api/stickers/search", s.stickerSearch)
     mux.HandleFunc("GET /api/stickers/status", s.stickerStatus)
+    mux.HandleFunc("GET /api/users/search", s.usersSearch)
+    mux.HandleFunc("GET /api/users/{userId}/presence", s.userPresence)
+    mux.HandleFunc("GET /api/users/{userId}", s.userPublic)
+    mux.HandleFunc("GET /api/profile", s.profile)
+    mux.HandleFunc("GET /api/user/me", s.requireUser(s.userMe))
+    mux.HandleFunc("POST /api/crypto/register-key", s.cryptoRegisterKey)
+    mux.HandleFunc("GET /api/crypto/get-key", s.cryptoGetKey)
+    mux.HandleFunc("POST /api/crypto/verify-message", s.cryptoVerifyMessage)
+    mux.HandleFunc("POST /api/crypto/register-bundle", s.cryptoRegisterBundle)
+    mux.HandleFunc("GET /api/crypto/get-bundle", s.cryptoGetBundle)
+    mux.HandleFunc("GET /api/crypto/prekey-count", s.cryptoPreKeyCount)
+    mux.HandleFunc("POST /api/crypto/replenish-prekeys", s.cryptoReplenishPreKeys)
     // Auth and the remaining mounted families are listed explicitly in the
     // README; returning JSON keeps clients from receiving an HTML 404 while
     // their full business migration is staged.
