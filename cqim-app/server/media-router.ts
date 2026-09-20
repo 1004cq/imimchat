@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import busboy from 'busboy';
 import { userAuth } from './auth.js';
 import { isMediaKind, resolveMedia, saveMedia, type MediaKind } from './media-storage.js';
 
@@ -42,8 +43,7 @@ router.post('/upload', userAuth, async (req: AuthenticatedRequest, res: Response
 
 router.post('/upload-form', userAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const busboyModule: any = require('busboy');
-    const createBusboy = busboyModule.default || busboyModule;
+    const createBusboy = (busboy as any).default || busboy;
     const bb = createBusboy({ headers: req.headers, limits: { fileSize: 200 * 1024 * 1024 } });
     let file: Buffer | null = null;
     let filename = 'upload';

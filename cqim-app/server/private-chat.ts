@@ -5,6 +5,7 @@
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import path from 'path';
+import busboy from 'busboy';
 import prisma from './db.js';
 import {
   getCachedConversationList,
@@ -264,8 +265,7 @@ router.post('/send', async (req: AuthenticatedRequest, res: Response) => {
       return await createPrivateMessageAndNotify(req, res, chatId, 'encrypted', String(content), replyTo || null);
     }
 
-    const busboyModule: any = require('busboy');
-    const createBusboy = busboyModule.default || busboyModule;
+    const createBusboy = (busboy as any).default || busboy;
     const bb = createBusboy({ headers: req.headers, limits: { fileSize: 200 * 1024 * 1024, files: 1 } });
     const fields: Record<string, string> = {};
     let fileBuffer: Buffer | null = null;
