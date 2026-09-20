@@ -12,6 +12,9 @@ RUN pnpm config set registry https://registry.npmmirror.com && \
     pnpm install --frozen-lockfile
 
 FROM deps AS build
+# Match the runner OpenSSL so generate ships debian-openssl-3.0.x engines.
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 COPY . .
 RUN pnpm exec prisma generate && \
     pnpm build
