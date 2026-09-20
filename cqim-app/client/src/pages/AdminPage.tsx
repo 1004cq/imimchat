@@ -2,7 +2,7 @@
  * imim 管理员后台
  * 完整的后台管理系统，包含：仪表盘、用户管理、举报管理、敏感词、IP黑名单、公告、操作日志、OneBot 配置
  */
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard, Users, Shield, FileWarning, MessageSquareWarning,
