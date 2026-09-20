@@ -20,6 +20,7 @@ const defaultListenAddr = "127.0.0.1:8089"
 
 type Server struct {
 	listenAddr string
+	startedAt  time.Time
 	db         *pgxpool.Pool
 	redis      redis.UniversalClient
 }
@@ -44,7 +45,10 @@ type user struct {
 }
 
 func NewServerFromEnv() (*Server, func(), error) {
-	server := &Server{listenAddr: envOrDefault("GO_API_LISTEN_ADDR", defaultListenAddr)}
+	server := &Server{
+		listenAddr: envOrDefault("GO_API_LISTEN_ADDR", defaultListenAddr),
+		startedAt:  time.Now(),
+	}
 	if databaseURL := os.Getenv("DATABASE_URL"); databaseURL != "" {
 		pool, err := pgxpool.New(context.Background(), normalizeDatabaseURL(databaseURL))
 		if err != nil {
@@ -84,11 +88,37 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 
 	postgresOK := s.db != nil && s.db.Ping(ctx) == nil
 	redisOK := s.redis != nil && s.redis.Ping(ctx).Err() == nil
-	status := http.StatusOK
-	if !postgresOK || !redisOK {
-		status = http.StatusServiceUnavailable
+	ok := postgresOK && redisOK
+	timestamp := time.Now().UTC().Format(time.RFC3339Nano)
+	checks := map[string]bool{"database": postgresOK, "redis": redisOK}
+
+	if !ok {
+		errorCode := "redis_unavailable"
+		if !postgresOK {
+			errorCode = "database_unavailable"
+		}
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"ok":        false,
+			"service":   "cqim",
+			"checks":    checks,
+			"postgres":  postgresOK,
+			"redis":     redisOK,
+			"error":     errorCode,
+			"timestamp": timestamp,
+		})
+		return
 	}
-	writeJSON(w, status, map[string]bool{"postgres": postgresOK, "redis": redisOK})
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":        true,
+		"service":   "cqim",
+		"checks":    checks,
+		"postgres":  postgresOK,
+		"redis":     redisOK,
+		"env":       envOrDefault("NODE_ENV", "development"),
+		"uptime":    int(time.Since(s.startedAt).Round(time.Second).Seconds()),
+		"timestamp": timestamp,
+	})
 }
 
 func (s *Server) requireUser(next func(http.ResponseWriter, *http.Request, user)) http.HandlerFunc {
@@ -104,8 +134,9 @@ func (s *Server) requireUser(next func(http.ResponseWriter, *http.Request, user)
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "登录已过期"})
 			return
 		}
-		if errors.Is(err, errBanned) {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "账号已被封禁"})
+		var banned banError
+		if errors.As(err, &banned) {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "账号已被封禁", "reason": banned.reason})
 			return
 		}
 		if err != nil {
@@ -120,10 +151,13 @@ func (s *Server) me(w http.ResponseWriter, _ *http.Request, currentUser user) {
 	writeJSON(w, http.StatusOK, map[string]user{"user": currentUser})
 }
 
-var (
-	errInvalidSession = errors.New("invalid session")
-	errBanned         = errors.New("banned user")
-)
+var errInvalidSession = errors.New("invalid session")
+
+type banError struct {
+	reason *string
+}
+
+func (e banError) Error() string { return "banned user" }
 
 func (s *Server) findSessionUser(ctx context.Context, token string) (user, error) {
 	if s.db == nil {
@@ -136,7 +170,7 @@ func (s *Server) findSessionUser(ctx context.Context, token string) (user, error
 		SELECT u."id", u."dialogId", u."username", u."nickname", u."phone", u."email",
 		       u."avatar", u."bio", COALESCE(u."gender", ''), COALESCE(u."region", ''),
 		       COALESCE(u."birthday", ''), u."isBot", u."phoneVerified", u."emailVerified",
-		       u."createdAt", u."updatedAt", u."isBanned"
+		       u."createdAt", u."updatedAt", u."isBanned", u."banReason"
 		FROM "UserSession" AS s
 		JOIN "User" AS u ON u."id" = s."userId"
 		WHERE s."token" = $1 AND s."expiresAt" > NOW()
@@ -145,12 +179,13 @@ func (s *Server) findSessionUser(ctx context.Context, token string) (user, error
 	var currentUser user
 	var updatedAt time.Time
 	var banned bool
+	var banReason *string
 	err := s.db.QueryRow(ctx, query, token).Scan(
 		&currentUser.ID, &currentUser.DialogID, &currentUser.Username, &currentUser.Nickname,
 		&currentUser.Phone, &currentUser.Email, &currentUser.Avatar, &currentUser.Bio,
 		&currentUser.Gender, &currentUser.Region, &currentUser.Birthday, &currentUser.IsBot,
 		&currentUser.PhoneVerified, &currentUser.EmailVerified, &currentUser.CreatedAt,
-		&updatedAt, &banned,
+		&updatedAt, &banned, &banReason,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -159,7 +194,7 @@ func (s *Server) findSessionUser(ctx context.Context, token string) (user, error
 		return user{}, fmt.Errorf("query user session: %w", err)
 	}
 	if banned {
-		return user{}, errBanned
+		return user{}, banError{reason: banReason}
 	}
 	currentUser.UpdatedAt = updatedAt.UnixMilli()
 	return currentUser, nil
@@ -187,9 +222,6 @@ func redisFromEnv() (redis.UniversalClient, error) {
 	return nil, nil
 }
 
-// normalizeDatabaseURL accepts the same Prisma URL that Node uses. Prisma's
-// schema query parameter is not a PostgreSQL connection parameter and must not
-// be sent by pgx during startup.
 func normalizeDatabaseURL(rawURL string) string {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {

@@ -136,6 +136,29 @@ services:
       redis:
         condition: service_healthy
 
+  # Disabled by default: start explicitly with docker compose --profile go-api up -d go-api.
+  # Nginx remains pointed at the Node cqim service.
+  go-api:
+    profiles: ["go-api"]
+    build:
+      context: ./go-api
+      dockerfile: Dockerfile
+    image: cqim-go-api:latest
+    restart: "no"
+    ports:
+      - "127.0.0.1:8089:8089"
+    env_file:
+      - .env
+    environment:
+      GO_API_LISTEN_ADDR: 0.0.0.0:8089
+      DATABASE_URL: ${DATABASE_URL:-postgresql://cqim:cqim@postgres:5432/cqim?schema=public}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 volumes:
   pg_data:
   redis_data:
