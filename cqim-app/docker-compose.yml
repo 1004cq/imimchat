@@ -115,7 +115,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 5
-      start_period: 40s
+      start_period: 90s
 
   go-gateway:
     build:
