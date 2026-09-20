@@ -3,6 +3,7 @@
  * 提供创建/获取会话、发送/拉取消息、标记已读、撤回等功能
  */
 import { Router, Request, Response } from 'express';
+import busboy from 'busboy';
 import crypto from 'crypto';
 import path from 'path';
 import prisma from './db.js';
@@ -264,8 +265,7 @@ router.post('/send', async (req: AuthenticatedRequest, res: Response) => {
       return await createPrivateMessageAndNotify(req, res, chatId, 'encrypted', String(content), replyTo || null);
     }
 
-    const busboyModule: any = require('busboy');
-    const createBusboy = busboyModule.default || busboyModule;
+    const createBusboy = (busboy as any).default || busboy;
     const bb = createBusboy({ headers: req.headers, limits: { fileSize: 200 * 1024 * 1024, files: 1 } });
     const fields: Record<string, string> = {};
     let fileBuffer: Buffer | null = null;
