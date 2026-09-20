@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Bind cq.je to the Docker Compose CQIM stack and issue a Let's Encrypt certificate.
+# Bind im.cq.je to the Docker Compose CQIM stack and issue a Let's Encrypt certificate.
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-/home/ubuntu/cqim-app.new}"
 COMPOSE=(docker compose)
-DOMAIN="cq.je"
-WWW_DOMAIN="www.cq.je"
+DOMAIN="im.cq.je"
 
 cd "$APP_DIR"
 
@@ -21,7 +20,7 @@ fi
 ${COMPOSE[@]} up -d --force-recreate nginx
 ${COMPOSE[@]} exec -T nginx nginx -s reload || true
 
-echo "==> Requesting Let's Encrypt certificate for ${DOMAIN} and ${WWW_DOMAIN}"
+echo "==> Requesting Let's Encrypt certificate for ${DOMAIN}"
 docker run --rm \
   -v "${APP_DIR}/certbot/www:/var/www/certbot" \
   -v "${APP_DIR}/certbot/conf:/etc/letsencrypt" \
@@ -29,7 +28,6 @@ docker run --rm \
     --webroot \
     -w /var/www/certbot \
     -d "$DOMAIN" \
-    -d "$WWW_DOMAIN" \
     --agree-tos \
     --register-unsafely-without-email \
     --non-interactive \

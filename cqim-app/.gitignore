@@ -39,6 +39,9 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Runtime bind mount for compose (stickers, etc.)
+/data/
+
 # Runtime data
 pids
 *.pid
@@ -104,8 +107,10 @@ temp/
 certs/*.p8
 
 # Let's Encrypt / Certbot live material
-certbot/conf/
-certbot/www/
+certbot/conf/*
+certbot/www/*
+!certbot/conf/.gitkeep
+!certbot/www/.gitkeep
 
 # Database
 *.db

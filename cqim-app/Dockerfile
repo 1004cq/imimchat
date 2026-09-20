@@ -12,28 +12,26 @@ RUN pnpm config set registry https://registry.npmmirror.com && \
     pnpm install --frozen-lockfile
 
 FROM deps AS build
+# Match the runner OpenSSL so generate ships debian-openssl-3.0.x engines.
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 COPY . .
 RUN pnpm exec prisma generate && \
     pnpm build
-
-FROM base AS prod-deps
-COPY package.json pnpm-lock.yaml ./
-COPY patches ./patches
-RUN pnpm config set registry https://registry.npmmirror.com && \
-    pnpm install --prod --frozen-lockfile
 
 FROM base AS runner
 ENV NODE_ENV=production
 WORKDIR /app
 
-RUN groupadd -r nodejs && useradd -r -g nodejs nodeuser && \
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd -r nodejs && useradd -r -g nodejs nodeuser && \
     mkdir -p /app/prisma/data && \
     chown -R nodeuser:nodejs /app
 
-COPY --from=prod-deps --chown=nodeuser:nodejs /app/node_modules ./node_modules
-# Keep the Prisma CLI and engines available for the migration entrypoint.
-COPY --from=deps --chown=nodeuser:nodejs /app/node_modules/prisma ./node_modules/prisma
-COPY --from=deps --chown=nodeuser:nodejs /app/node_modules/@prisma ./node_modules/@prisma
+# Copy the full pnpm tree from build so Prisma CLI, engines, and the
+# generated client stay resolvable (pnpm does not hoist .prisma).
+COPY --from=build --chown=nodeuser:nodejs /app/node_modules ./node_modules
 COPY --from=build --chown=nodeuser:nodejs /app/dist ./dist
 COPY --from=build --chown=nodeuser:nodejs /app/prisma ./prisma
 COPY --from=build --chown=nodeuser:nodejs /app/package.json ./package.json

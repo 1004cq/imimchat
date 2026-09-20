@@ -1,11 +1,11 @@
-# wed.imim.chat 双节点部署指南
+# im.cq.je 双节点部署指南
 
-两台服务器作为**同一站点**运行，用户只访问 `https://wed.imim.chat`。EdgeOne 仅回源**节点1**，由节点1 宿主机 Nginx 将流量分发到两台应用节点。
+两台服务器作为**同一站点**运行，用户只访问 `https://im.cq.je`。EdgeOne 仅回源**节点1**，由节点1 宿主机 Nginx 将流量分发到两台应用节点。
 
 ## 架构
 
 ```
-用户 → EdgeOne（wed.imim.chat）→ 仅回源 42.194.167.201（节点1）
+用户 → EdgeOne（im.cq.je）→ 仅回源 42.194.167.201（节点1）
                                       │
                     节点1 宿主机 Nginx（TLS 终结）
                     ├─ /api、/        least_conn → 节点1:3011 + 节点2:3011
@@ -23,7 +23,7 @@
                            跨节点推送：Redis Pub/Sub cqim:im:push
 ```
 
-**禁止**：EdgeOne 多源站轮询、两套独立数据库、在节点2 对外暴露 wed.imim.chat 的 Nginx/SSL。
+**禁止**：EdgeOne 多源站轮询、两套独立数据库、在节点2 对外暴露 im.cq.je 的 Nginx/SSL。
 
 ## 节点角色
 
@@ -41,7 +41,7 @@ cd /home/ubuntu/cqim-release
 cp deploy/env.app.example .env   # 或沿用现有 .env
 # 节点1 必须设置：
 #   GATEWAY_ID=gw-app-1
-#   PUBLIC_BASE_URL=https://wed.imim.chat
+#   PUBLIC_BASE_URL=https://im.cq.je
 
 docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml up -d
 ```
@@ -51,8 +51,8 @@ docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml up -d
 证书放在宿主机（**勿提交私钥到 Git**）：
 
 ```
-/etc/nginx/ssl/wed.imim.chat/wed.imim.chat_bundle.pem   # 站点证书 + 中间证书
-/etc/nginx/ssl/wed.imim.chat/wed.imim.chat.key          # 私钥
+/etc/nginx/ssl/im.cq.je/im.cq.je_bundle.pem   # 站点证书 + 中间证书
+/etc/nginx/ssl/im.cq.je/im.cq.je.key          # 私钥
 ```
 
 ### Nginx 双节点 upstream
@@ -89,11 +89,11 @@ docker compose -f docker-compose.yml -f deploy/docker-compose.app.yml up -d cqim
 
 节点2 容器端口需对节点1 可达：`3011`（API）、`8082`（Gateway）。`docker-compose.app.yml` 已绑定 `0.0.0.0`；请在云安全组限制来源为节点1 公网 IP。
 
-**不要**在节点2 安装 wed.imim.chat 的 Nginx/SSL。
+**不要**在节点2 安装 im.cq.je 的 Nginx/SSL。
 
 ## EdgeOne 配置
 
-- 域名：`wed.imim.chat`
+- 域名：`im.cq.je`
 - 源站：**仅** `42.194.167.201`（HTTP/HTTPS 按现有配置）
 - 不要添加 `106.53.196.247` 为源站
 
@@ -128,7 +128,7 @@ docker compose up -d
 | 文件 | 说明 |
 |------|------|
 | `deploy/nginx-lb.conf` | 节点1 upstream 模板 |
-| `deploy/docker-compose.prod.yml` | 节点1 生产覆盖（wed.imim.chat） |
+| `deploy/docker-compose.prod.yml` | 节点1 生产覆盖（im.cq.je） |
 | `deploy/docker-compose.app.yml` | 节点2 仅应用层 |
 | `deploy/env.app.example` | 节点2 环境变量模板 |
 | `docs/dual-node-deploy.md` | 通用双节点说明（Mongo 版） |

@@ -25,7 +25,7 @@ cqim 容器执行 prisma migrate deploy
     ↓
 Node cqim 与 Go gateway 提供服务
     ↓
-Nginx 对外提供 HTTP/HTTPS/WSS
+Nginx 对外提供 HTTP（默认 default.conf）/ HTTPS（切换 https.conf 后）
 ```
 
 首次部署：
@@ -33,12 +33,38 @@ Nginx 对外提供 HTTP/HTTPS/WSS
 ```bash
 cd cqim-app
 cp .env.example .env
-# 编辑 .env：至少修改 MINIO_ROOT_USER、MINIO_ROOT_PASSWORD、TRTC_SECRET_KEY、APNS_P8_KEY 等密钥
-docker compose up -d --build
-docker compose ps
+# 编辑 .env：至少修改 MINIO_ROOT_USER、MINIO_ROOT_PASSWORD
+# PUBLIC_BASE_URL 示例为 https://im.cq.je；CORS_ORIGINS 须包含 https://im.cq.je
+# 生产再填 TRTC_SECRET_KEY、APNS_*、WEB_PUSH_*（不要把 APNs P8 提交进 Git）
+./scripts/deploy.sh
+# 等价于：docker compose up -d --build && docker compose ps
 ```
 
-Node 容器的启动脚本会在启动服务前执行 `pnpm exec prisma migrate deploy`。如果迁移失败，Node 不会启动，先查看 `docker compose logs cqim`。
+`scripts/deploy.sh` 会拒绝空的 `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` / `DATABASE_URL`，以及 `file:./dev.db`。它还会创建 `./data` 并尽量把属主改成镜像里的 `nodeuser`（uid 999），否则 Node 无法在 `/app/data/stickers` 建目录。
+
+Node 容器的启动脚本会在启动服务前执行 `prisma migrate deploy`。如果迁移失败，Node 不会启动，先查看 `docker compose logs cqim`。
+
+## Nginx 配置与证书目录
+
+Compose 只挂载这些路径，必须和 `nginx/*.conf` 一致：
+
+| 宿主机 | 容器内 | 用途 |
+|--------|--------|------|
+| `nginx/default.conf` | `/etc/nginx/conf.d/default.conf` | 当前生效配置 |
+| `certbot/www` | `/var/www/certbot` | ACME webroot |
+| `certbot/conf` | `/etc/letsencrypt` | Let's Encrypt 证书（`https.conf` 读 `live/im.cq.je/`） |
+
+`cqim-app/certs/` 是 APNs 密钥目录，不是 Nginx TLS 目录，不要挂进 Nginx。
+
+默认 `nginx/default.conf` 的 `server_name` 是 `im.cq.je`（以及 `localhost`），只监听 80，因此不需要先有证书。签发证书后：
+
+```bash
+# scripts/bind-cq-je-domain.sh 为 im.cq.je 申请证书，成功后再切 https.conf
+cp nginx/https.conf nginx/default.conf
+docker compose up -d nginx
+```
+
+`https.conf` 的证书路径是 `/etc/letsencrypt/live/im.cq.je/fullchain.pem` 与 `privkey.pem`，对应宿主机 `certbot/conf/live/im.cq.je/`。把 Let's Encrypt 或其它证书放到该目录，文件名保持 `fullchain.pem` / `privkey.pem`。
 
 ## APNs 环境与 Token 生命周期
 
@@ -58,9 +84,9 @@ Compose 使用的最终探针是：
 test: ["CMD", "/usr/local/bin/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9000/minio/health/live"]
 ```
 
-官方 `minio/minio` 镜像提供 `/minio/health/live` 未授权存活接口，但近期官方镜像不保证包含 `mc`、`curl` 或 `wget`。仓库中的 `minio-healthcheck.Dockerfile` 仍以官方 MinIO 镜像为基础，只从官方 BusyBox 镜像复制一个静态 `busybox` 二进制，因此探针不依赖 `mc`，并且确实请求 MinIO 官方健康路径。HTTP 200 才会使 `minio` 变为 healthy，`cqim` 的 `depends_on` 才会继续。
+官方 MinIO 镜像（`quay.io/minio/minio`，Docker Hub 的 `minio/minio` 已下线）提供 `/minio/health/live` 未授权存活接口，但近期官方镜像不保证包含 `mc`、`curl` 或 `wget`。仓库中的 `minio-healthcheck.Dockerfile` 仍以官方 MinIO 镜像为基础，只从官方 BusyBox 镜像复制一个静态 `busybox` 二进制，因此探针不依赖 `mc`，并且确实请求 MinIO 官方健康路径。HTTP 200 才会使 `minio` 变为 healthy，`cqim` 的 `depends_on` 才会继续。
 
-手工检查：
+默认 Compose **不**把 MinIO `9000` 映射到宿主机。手工检查：
 
 ```bash
 docker compose exec minio /usr/local/bin/busybox wget -q -O /dev/null http://127.0.0.1:9000/minio/health/live
@@ -70,23 +96,29 @@ echo $?  # 0 表示 live
 ## 探活
 
 ```bash
-# Node API
-curl -fsS http://127.0.0.1/api/health
+# Node API（经 Nginx → cqim:3000，不是 C++ 8088）
+# HTTP 默认配置：
+curl -fsS http://im.cq.je/api/health
+# 本机尚未解析域名时：
+curl -fsS -H 'Host: im.cq.je' http://127.0.0.1/api/health
+# 切换 https.conf 之后：
+curl -fsS https://im.cq.je/api/health
 
 # Redis
 docker compose exec redis redis-cli ping  # PONG
 
-# MinIO
-curl -fsSI http://127.0.0.1:9000/minio/health/live
+# MinIO（容器内，不是宿主机 :9000）
+docker compose exec minio /usr/local/bin/busybox wget -q -O /dev/null http://127.0.0.1:9000/minio/health/live
 
-# WebSocket /signal（需要按现网 Nginx 域名和认证参数替换）
+# WebSocket /signal（Node；HTTP 默认 / HTTPS 生产）
 curl --http1.1 -i -N \
   -H 'Connection: Upgrade' \
   -H 'Upgrade: websocket' \
   -H 'Sec-WebSocket-Version: 13' \
-  -H 'Sec-WebSocket-Key: SGVsbG9XZWJTb2NrZXQ=' \
-  https://your-domain.example/signal
+  -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+  http://im.cq.je/signal
 # 预期 HTTP/1.1 101 Switching Protocols；若需要 token，追加现网认证参数。
+# HTTPS：https://im.cq.je/signal
 ```
 
 ## 八条发布后冒烟

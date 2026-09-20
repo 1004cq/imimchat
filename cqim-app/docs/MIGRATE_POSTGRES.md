@@ -12,16 +12,16 @@
 DATABASE_URL=postgresql://USER:PASS@内网IP:5432/cqim?schema=public
 ```
 
-## 还缺
+## 空库迁移
 
-仓里还没有一份可在空 PG 上直接 `prisma migrate deploy` 的 SQL。必须在空库执行：
+`prisma/migrations/` 已包含可在空 PostgreSQL 上 `prisma migrate deploy` 的 SQL。Compose 里 `cqim` 容器启动脚本会先跑 `pnpm exec prisma migrate deploy`，失败则不启动 Node。
+
+本地对已有开发库追加迁移时再用：
 
 ```bash
 cd cqim-app
-npx prisma migrate dev --name init_postgres
+npx prisma migrate dev --name describe_the_change
 ```
-
-再把 `prisma/migrations/` 提交回 Git。
 
 ## 切流
 
