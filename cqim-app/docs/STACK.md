@@ -64,7 +64,7 @@ cp .env.example .env
 curl -fsS http://127.0.0.1/api/health
 ```
 
-`cqim` 容器启动时已经执行 `prisma migrate deploy`，不必再手工跑一遍。
+`cqim` 容器启动时已经执行 `prisma migrate deploy`（`scripts/start-api.sh`），不必再手工跑一遍。
 
 应确认以下服务均健康：
 

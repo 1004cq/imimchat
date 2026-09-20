@@ -41,7 +41,7 @@ cp .env.example .env
 
 `scripts/deploy.sh` 会拒绝空的 `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` / `DATABASE_URL`，以及 `file:./dev.db`。
 
-Node 容器的启动脚本会在启动服务前执行 `pnpm exec prisma migrate deploy`。如果迁移失败，Node 不会启动，先查看 `docker compose logs cqim`。
+Node 容器的启动脚本会在启动服务前执行 `prisma migrate deploy`。如果迁移失败，Node 不会启动，先查看 `docker compose logs cqim`。
 
 ## Nginx 配置与证书目录
 
