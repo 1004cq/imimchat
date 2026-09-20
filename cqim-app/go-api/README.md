@@ -67,6 +67,10 @@ curl -i "$GO_API_BASE/api/health"
 | POST | `/api/auth/register` | 基础账号注册 |
 | GET | `/api/auth/me` | 当前用户信息 |
 | POST | `/api/auth/logout` | 删除当前会话 |
+| POST | `/api/auth/send-code` | 发送 SMS/邮箱验证码；复用 Node 的 `VerifyCode` 与 Redis `verify_code:*` 状态，5 分钟有效、60 秒限发 |
+| POST | `/api/auth/reset-password` | 校验 `reset` 验证码、执行与 Node 相同的密码强度检查并撤销全部用户会话 |
+| POST | `/api/auth/bind-phone` | 校验 `bind` 短信验证码后绑定手机 |
+| POST | `/api/auth/bind-email` | 校验 `bind` 邮箱验证码后绑定邮箱 |
 | POST/DELETE | `/api/web-push/subscription` | 保存/删除 VAPID 订阅 |
 | GET | `/api/web-push/public-key` | VAPID 公钥 |
 | GET | `/api/stickers/packs`, `/api/stickers/discover`, `/api/stickers/search`, `/api/stickers/status` | 兼容基础 JSON 响应 |
@@ -114,6 +118,6 @@ curl -i "$GO_API_BASE/api/health"
 
 ## 未迁移
 
-验证码发送/校验、密码重置与绑定资料的完整认证流程，未列出的 `/api/admin/*` 管理子路由、二维码业务校验，以及未列出的 `/api/*` 仍未迁移；这些路径会返回 JSON `501`，不会伪装成已完成。
+未列出的 `/api/admin/*` 管理子路由、二维码业务校验，以及未列出的 `/api/*` 仍未迁移；这些路径会返回 JSON `501`，不会伪装成已完成。验证码由 `SystemConfig` 中与 Node 相同的 `smtp`、`aliyun` 配置读取（也兼容现有 SMTP/阿里云环境变量）；缺少 SMTP 或短信配置时返回明确错误，不会返回伪造的发送成功。
 
 Nginx 未切流；Node `cqim-app/server` 保持可部署，生产流量仍由 Node 处理默认 `/api`。
