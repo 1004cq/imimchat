@@ -142,6 +142,42 @@ const MessageSkeleton = memo(() => (
 ));
 MessageSkeleton.displayName = 'MessageSkeleton';
 
+interface MessageRowErrorBoundaryProps {
+  messageId: string;
+  children: React.ReactNode;
+}
+
+interface MessageRowErrorBoundaryState {
+  hasError: boolean;
+}
+
+/**
+ * 单条消息的兜底边界。
+ * 某条历史密文或媒体消息的气泡渲染异常时，只显示占位，不要让整个会话列表进入错误挡板。
+ */
+class MessageRowErrorBoundary extends React.Component<MessageRowErrorBoundaryProps, MessageRowErrorBoundaryState> {
+  state: MessageRowErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): MessageRowErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error) {
+    console.error(`[MessageList] 单条消息渲染异常 messageId=${this.props.messageId}:`, error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="mx-3 my-1 rounded-xl border border-amber-200/70 bg-amber-50/70 px-3 py-2 text-xs text-amber-700">
+          此条消息暂时无法显示
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export const VirtualMessageList = memo(forwardRef<VirtualMessageListHandle, VirtualMessageListProps>(function VirtualMessageList({
   messages,
   currentUserId,
@@ -449,7 +485,9 @@ export const VirtualMessageList = memo(forwardRef<VirtualMessageListHandle, Virt
                 style={{ transform: `translateY(${getOffsetBefore(index)}px)`, contain: 'layout paint style' }}
               >
                 {shouldShowTimeSeparator(msg, previous) && <TimeSeparator timestamp={msg.timestamp} />}
-                {renderMessage ? renderMessage(msg, isOwn, index, previous) : <DefaultMessageBubble msg={msg} isOwn={isOwn} />}
+                <MessageRowErrorBoundary messageId={String(msg.id || msg.seq || key)}>
+                  {renderMessage ? renderMessage(msg, isOwn, index, previous) : <DefaultMessageBubble msg={msg} isOwn={isOwn} />}
+                </MessageRowErrorBoundary>
               </div>
             );
           })}
