@@ -20,7 +20,9 @@ FROM base AS runner
 ENV NODE_ENV=production
 WORKDIR /app
 
-RUN groupadd -r nodejs && useradd -r -g nodejs nodeuser && \
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd -r nodejs && useradd -r -g nodejs nodeuser && \
     mkdir -p /app/prisma/data && \
     chown -R nodeuser:nodejs /app
 

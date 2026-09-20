@@ -11,5 +11,15 @@ else
   exit 1
 fi
 
-$PRISMA_CLI migrate deploy
+i=0
+until $PRISMA_CLI migrate deploy; do
+  i=$((i + 1))
+  if [ "$i" -ge 15 ]; then
+    echo "prisma migrate deploy failed after ${i} attempts" >&2
+    exit 1
+  fi
+  echo "prisma migrate deploy: waiting for PostgreSQL (attempt ${i}/15)"
+  sleep 2
+done
+
 exec node dist/index.js
