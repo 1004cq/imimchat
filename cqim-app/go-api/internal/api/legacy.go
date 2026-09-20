@@ -35,7 +35,7 @@ func (s *Server) registerLegacyRoutes(mux *http.ServeMux) {
     mux.HandleFunc("POST /api/media/upload", s.mediaUploadJSON)
     mux.HandleFunc("POST /api/media/upload-form", s.mediaUploadForm)
     mux.HandleFunc("GET /api/media/{id}", s.mediaDownload)
-    mux.HandleFunc("/api/group/", s.notMigrated)
+    s.registerGroupRoutes(mux)
     mux.HandleFunc("/api/moments/", s.notMigrated)
     mux.HandleFunc("/api/admin/", s.notMigrated)
 }
