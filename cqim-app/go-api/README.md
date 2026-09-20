@@ -111,6 +111,24 @@ curl -i "$GO_API_BASE/api/health"
 | GET | `/api/admin/users`, `/api/admin/users/:id` | 用户列表、搜索、分页与详情 |
 | POST | `/api/admin/users/:id/ban` | 管理员封禁/解封用户并撤销被封禁用户会话 |
 | GET | `/api/admin/logs` | 管理员操作日志分页 |
+| POST | `/api/crypto/register-key` | 注册 ECDH 公钥到 `e2ee:pubkey:{userId}:{deviceId}` |
+| GET | `/api/crypto/get-key` | 读取已注册公钥 |
+| POST | `/api/crypto/verify-message` | HMAC-SHA256 完整性校验 |
+| POST | `/api/crypto/register-bundle` | 上传 PreKey Bundle；`signingPublicKey` 合并规则与 Node `resolveSigningPublicKey` 相同 |
+| GET | `/api/crypto/get-bundle` | 返回 Bundle 并消费一个 one-time prekey；无 Bundle 时 JSON `404 {"error":"用户未注册 E2EE Bundle"}`，不会返回 `404 page not found` |
+| GET | `/api/crypto/prekey-count` | 剩余 one-time prekey 数量 |
+| POST | `/api/crypto/replenish-prekeys` | 追加 one-time prekeys |
+| GET | `/api/users/search` | 按 id/username/phone/email 精确搜索 |
+| GET | `/api/users/{userId}` | 公开资料 + 在线/设备；聊天顶栏与资料卡使用此形状 |
+| GET | `/api/users/{userId}/presence` | 在线状态、设备、最后在线时间 |
+| GET | `/api/profile` | 当前或指定用户资料（`userId=me` 需登录） |
+| PUT | `/api/profile` | 更新当前用户资料 |
+| PUT | `/api/auth/profile` | 设置页保存昵称/头像/账号 ID |
+| GET | `/api/q/profile/{userId}` | 外链公开资料 |
+| GET | `/api/user/me` | 当前用户简要信息 |
+| GET | `/api/home/sync` | 首页聚合：当前用户、私聊、群、未读 |
+
+头像字段使用与 Node `safeAvatarUrl` 相同的规则：保留 `/api/media/` 与非 COS 的 `https` URL；历史 COS 直链返回空字符串，避免 403。E2EE 公钥与 Bundle 存在 `SystemConfig`，key 与 Node 相同：`e2ee:bundle:`、`e2ee:prekeys:`、`e2ee:pubkey:`。
 
 私聊发送仅接受 `msgType=encrypted`。成功写入后会更新 `Chat.lastMessageAt`、将会话预览固定为 `🔒 [加密消息]`，并向 Redis `cqim:im:push` 发布与 Node 相同的 `{ userId, payload }` 信封，供仍在运行的网关投递。
 
@@ -119,6 +137,22 @@ curl -i "$GO_API_BASE/api/health"
 ## 未迁移
 
 未列出的 `/api/admin/*` 管理子路由、二维码业务校验，以及未列出的 `/api/*` 仍未迁移；这些路径会返回 JSON `501`，不会伪装成已完成。验证码由 `SystemConfig` 中与 Node 相同的 `smtp`、`aliyun` 配置读取（也兼容现有 SMTP/阿里云环境变量）；缺少 SMTP 或短信配置时返回明确错误，不会返回伪造的发送成功。
+
+### 只热更新 go-api（不改默认 Nginx）
+
+生产若已经把 `/api` 指到 go-api，补齐 E2EE / 用户资料后只需重建 `go-api` 容器。不要改仓库里的默认 Nginx 配置；切流与回滚由运维在服务器上复制可选 conf。
+
+```bash
+cd cqim-app
+docker compose up -d --build go-api
+```
+
+本机编译检查：
+
+```bash
+cd cqim-app/go-api
+go build -o ./bin/go-api ./cmd/go-api
+```
 
 Node `cqim-app/server` 保持可部署。默认 Nginx 未切流；生产流量仍由 Node 处理全部 `/api`，除非按下一节 **显式复制** 可选切流配置。
 

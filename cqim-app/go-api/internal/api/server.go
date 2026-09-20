@@ -26,22 +26,22 @@ type Server struct {
 }
 
 type user struct {
-	ID            string     `json:"id"`
-	DialogID      *string    `json:"dialogId"`
-	Username      string     `json:"username"`
-	Nickname      *string    `json:"nickname"`
-	Phone         *string    `json:"phone"`
-	Email         *string    `json:"email"`
-	Avatar        *string    `json:"avatar"`
-	Bio           *string    `json:"bio"`
-	Gender        string     `json:"gender"`
-	Region        string     `json:"region"`
-	Birthday      string     `json:"birthday"`
-	IsBot         bool       `json:"isBot"`
-	PhoneVerified bool       `json:"phoneVerified"`
-	EmailVerified bool       `json:"emailVerified"`
-	CreatedAt     time.Time  `json:"createdAt"`
-	UpdatedAt     int64      `json:"updatedAt"`
+	ID            string    `json:"id"`
+	DialogID      *string   `json:"dialogId"`
+	Username      string    `json:"username"`
+	Nickname      *string   `json:"nickname"`
+	Phone         *string   `json:"phone"`
+	Email         *string   `json:"email"`
+	Avatar        *string   `json:"avatar"`
+	Bio           *string   `json:"bio"`
+	Gender        string    `json:"gender"`
+	Region        string    `json:"region"`
+	Birthday      string    `json:"birthday"`
+	IsBot         bool      `json:"isBot"`
+	PhoneVerified bool      `json:"phoneVerified"`
+	EmailVerified bool      `json:"emailVerified"`
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     int64     `json:"updatedAt"`
 }
 
 func NewServerFromEnv() (*Server, func(), error) {
@@ -79,6 +79,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/me", s.requireUser(s.me))
+	s.registerCryptoRoutes(mux)
+	s.registerUserRoutes(mux)
 	s.registerPhaseBRoutes(mux)
 	return mux
 }
@@ -149,6 +151,10 @@ func (s *Server) requireUser(next func(http.ResponseWriter, *http.Request, user)
 }
 
 func (s *Server) me(w http.ResponseWriter, _ *http.Request, currentUser user) {
+	if currentUser.Avatar != nil {
+		safe := safeAvatarUrl(*currentUser.Avatar)
+		currentUser.Avatar = &safe
+	}
 	writeJSON(w, http.StatusOK, map[string]user{"user": currentUser})
 }
 
