@@ -79,6 +79,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/me", s.requireUser(s.me))
+	s.registerPhaseBRoutes(mux)
 	return mux
 }
 
