@@ -39,3 +39,16 @@ Node user authentication is an opaque UserSession token, not JWT. server/auth.ts
 All remaining /api routes, including auth login/registration, friends, chats, groups, presence, media, APNs, web push, moments, stickers, QR, admin, crypto, MLS, channels and other registered Node routes.
 
 The Compose go-api service is behind the explicit go-api profile and is off by default. Nginx and cqim-app/server are not changed; the default /api continues to use Node.
+
+
+## Node route inventory (not migrated)
+
+- /api/admin/*, /api/auth/*, /api/media/*, /api/moments/*, /api/group/*, /api/crypto/*, /api/mls/*, /api/chat/*, /api/home/*, /api/friend/*, /api/qr/*, /api/apns/*, /api/web-push/*, /api/stickers/*, /api/channel/*
+- /api/presence, /api/trtc/usersig, /api/login-info, /api/site-config-public, /api/ai-chat
+- /api/voice/upload, /api/cos/sts, /api/push-to-onebot, /api/onebot-status
+- /api/txmap-config, /api/txmap/geocoder/reverse, /api/txmap/staticmap
+- /api/profile, /api/users/search, /api/users/:userId, /api/users/:userId/presence
+- /api/link-preview, /api/q/profile/:userId, /api/report, /api/im/resolve/:slug
+- Compatibility paths /send_group_msg, /send_private_msg, /send_msg, /delete_msg, /get_login_info, /get_group_list, /get_group_info, /get_group_member_list, /get_status and /get_version_info
+
+These routes remain served by Node and are deliberately not claimed as Go implementations.
