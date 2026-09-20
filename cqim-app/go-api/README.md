@@ -1,6 +1,6 @@
 # Go API
 
-独立 Go 1.22+ HTTP 服务，使用标准库 `net/http`、`pgx` 和 `go-redis`。它与现有 Node 服务共用 PostgreSQL、Redis 与 `UserSession`。没有修改 Node、Nginx 或 Prisma，默认 `/api` 仍由 Node 处理。
+独立 Go 1.22+ HTTP 服务，使用标准库 `net/http`、`pgx` 和 `go-redis`。它与现有 Node 服务共用 PostgreSQL、Redis 与 `UserSession`。没有修改 Node 或 Prisma。Compose 可启动 `go-api`（容器内 `8089`），但 **默认 Nginx 仍把全部 `/api` 交给 Node `cqim:3000`**；生产未自动切流。
 
 ## 编译与启动
 
@@ -120,4 +120,58 @@ curl -i "$GO_API_BASE/api/health"
 
 未列出的 `/api/admin/*` 管理子路由、二维码业务校验，以及未列出的 `/api/*` 仍未迁移；这些路径会返回 JSON `501`，不会伪装成已完成。验证码由 `SystemConfig` 中与 Node 相同的 `smtp`、`aliyun` 配置读取（也兼容现有 SMTP/阿里云环境变量）；缺少 SMTP 或短信配置时返回明确错误，不会返回伪造的发送成功。
 
-Nginx 未切流；Node `cqim-app/server` 保持可部署，生产流量仍由 Node 处理默认 `/api`。
+Node `cqim-app/server` 保持可部署。默认 Nginx 未切流；生产流量仍由 Node 处理全部 `/api`，除非按下一节 **显式复制** 可选切流配置。
+
+## 如何切 / 如何改回 Node
+
+只改本机 Compose 挂载的 `nginx/default.conf`，不会部署到生产。
+
+切到已实现的 Go 路由（部分切流）：
+
+```bash
+cd cqim-app
+cp nginx/default.go-api-cutover.conf nginx/default.conf
+docker compose up -d --build go-api nginx
+```
+
+切到全部 `/api` → `go-api`（`/signal` → go-gateway）：
+
+```bash
+cd cqim-app
+cp nginx/default.go-api-all.conf nginx/default.conf
+docker compose up -d --build go-api nginx
+```
+
+改回 Node（`node-all-api`，全部 `/api` 再走 `cqim:3000`）：
+
+```bash
+cd cqim-app
+cp nginx/default.node-all-api.conf nginx/default.conf
+docker compose up -d nginx
+```
+
+可选停掉 Go 进程：`docker compose stop go-api`。若当前 `default.conf` 已是 HTTPS 版，部分切流改用 `https.go-api-cutover.conf`，改回用 `https.conf`。
+
+### Nginx location 清单（部分切流 `default.go-api-cutover.conf`）
+
+| location | 上游 |
+| --- | --- |
+| `/api/health`、`/api/me`、`/api/presence`、`/api/friend`、`/api/apns` | `go-api:8089` |
+| `/api/chat/create`、`/api/chat/list`、`/api/chat/send` | `go-api:8089` |
+| `/api/chat/{chatId}/messages` | `go-api:8089` |
+| `GET /api/chat/{chatId}` | `go-api:8089` |
+| `DELETE /api/chat/{chatId}` 以及 `/api/chat/{chatId}/read`、`/recall` | `cqim:3000` |
+| 其余 `/api` | `cqim:3000` |
+| `/signal` | **不变**，仍 `cqim:3000` |
+| `/ws` | **不变**，仍 `go-gateway:8081` |
+
+部分切流只改上表列出的前缀；路径是 `/api/friend`，不是 `/api/friends`。`/api/me` 使用边界匹配，不会把 `/api/media` 切走。
+
+### 全部切流 `default.go-api-all.conf`
+
+| location | 上游 |
+| --- | --- |
+| `location /api/`（及 `location = /api`） | `go-api:8089` |
+| `/signal` | `go-gateway:8081`（不是 Node，不是 C++） |
+| `/ws` | `go-gateway:8081` |
+| `/` 与 ACME `root` | 与 `default.conf` 相同（站点仍由 `cqim` 提供） |
