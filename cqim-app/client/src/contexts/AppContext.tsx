@@ -848,41 +848,41 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     const chatId = state.currentChatId;
     const ownerId = state.currentUser?.id || CURRENT_USER.id;
+    const restoreServerHistory = async () => {
+      // 服务端请求必须独立启动，不能等待可能卡住的 IndexedDB 初始化。
+      const response = await authFetch(`/api/chat/${encodeURIComponent(chatId)}/messages?limit=50`);
+      if (!response.ok) throw new Error(`history_${response.status}`);
+      const data = await response.json();
+      const messages = Array.isArray(data?.messages)
+        ? data.messages.filter((m: any) => m?.id && m?.senderId).map((m: any) => ({
+            id: m.id,
+            chatId: m.chatId || chatId,
+            cursor: m.id,
+            senderId: m.senderId,
+            content: m.isRevoked ? '消息已撤回' : (m.msgType === 'encrypted' ? '🔒 加密消息' : (m.content || '')),
+            type: m.msgType === 'encrypted' ? 'text' : (m.msgType || 'text'),
+            timestamp: m.createdAt || Date.now(),
+            isEncrypted: m.msgType === 'encrypted',
+            decryptionStatus: m.msgType === 'encrypted' ? 'ciphertext' : 'decrypted',
+            direction: m.senderId === ownerId ? 'outbound' : 'inbound',
+            reactions: {},
+            status: m.status || 'sent',
+            isRecalled: !!m.isRevoked,
+          } as Message))
+        : [];
+      if (messages.length > 0) {
+        dispatch({ type: 'SET_MESSAGES', chatId, messages });
+        console.log(`[AppContext] 从服务端恢复会话 ${chatId} 的 ${messages.length} 条消息`);
+      }
+    };
+    void restoreServerHistory().catch((err) => console.error('[AppContext] 服务端私聊历史恢复失败:', err));
+
     void loadPrivateMessagesFromLocalDb(chatId, ownerId)
       .then((localMessages) => {
         if (localMessages.length > 0) {
           dispatch({ type: 'SET_MESSAGES', chatId, messages: localMessages });
           console.log(`[AppContext] 已从本地 NoSQL 恢复会话 ${chatId} 的 ${localMessages.length} 条消息`);
-          return;
         }
-
-        // 刷新/清站点数据后本地缓存可能为空；不能因此让聊天界面保持空白。
-        return authFetch(`/api/chat/${encodeURIComponent(chatId)}/messages?limit=50`)
-          .then(async (response) => {
-            if (!response.ok) throw new Error(`history_${response.status}`);
-            const data = await response.json();
-            const messages = Array.isArray(data?.messages)
-              ? data.messages.filter((m: any) => m?.id && m?.senderId).map((m: any) => ({
-                  id: m.id,
-                  chatId: m.chatId || chatId,
-                  cursor: m.id,
-                  senderId: m.senderId,
-                  content: m.isRevoked ? '消息已撤回' : (m.msgType === 'encrypted' ? '🔒 加密消息' : (m.content || '')),
-                  type: m.msgType === 'encrypted' ? 'text' : (m.msgType || 'text'),
-                  timestamp: m.createdAt || Date.now(),
-                  isEncrypted: m.msgType === 'encrypted',
-                  decryptionStatus: m.msgType === 'encrypted' ? 'ciphertext' : 'decrypted',
-                  direction: m.senderId === ownerId ? 'outbound' : 'inbound',
-                  reactions: {},
-                  status: m.status || 'sent',
-                  isRecalled: !!m.isRevoked,
-                } as Message))
-              : [];
-            if (messages.length > 0) {
-              dispatch({ type: 'SET_MESSAGES', chatId, messages });
-              console.log(`[AppContext] 从服务端恢复会话 ${chatId} 的 ${messages.length} 条消息`);
-            }
-          });
       })
       .catch((err) => console.error('[AppContext] 本地私聊消息恢复失败:', err));
   }, [state.isLoggedIn, state.currentChatId, state.messages]);
