@@ -136,21 +136,15 @@ services:
       redis:
         condition: service_healthy
 
-  # Starts by default on internal 8089 and reads the same .env as Node cqim.
-  # Nginx still sends all /api to cqim:3000 unless you copy the optional cutover conf
-  # (see go-api/README.md 「如何切 / 如何改回 Node」). Node cqim is not removed.
-  # Easy rollback of the process: docker compose stop go-api
+  # Disabled by default: start explicitly with docker compose --profile go-api up -d go-api.
+  # Nginx remains pointed at the Node cqim service.
   go-api:
-    # Uncomment to keep go-api from starting with `docker compose up -d`:
-    # profiles: ["go-api"]
+    profiles: ["go-api"]
     build:
       context: ./go-api
       dockerfile: Dockerfile
     image: cqim-go-api:latest
-    container_name: cqim-go-api
-    restart: unless-stopped
-    expose:
-      - "8089"
+    restart: "no"
     ports:
       - "127.0.0.1:8089:8089"
     env_file:

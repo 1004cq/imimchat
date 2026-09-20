@@ -2,7 +2,7 @@
 
 ## 默认部署
 
-默认 Compose 文件是 `cqim-app/docker-compose.yml`，启动 `postgres`、`redis`、`minio`、`cqim`、`go-gateway`、`go-api` 与 `nginx`。`go-api` 监听容器内 `8089` 并读取同一份 `.env`，但默认 Nginx 仍把全部 `/api` 交给 Node `cqim:3000`。现网仍由 Node API、Go 网关和 Nginx 承载，不包含 C++ 服务，也不会自动生产切流。可选切流与回滚见 `cqim-app/go-api/README.md`。
+默认 Compose 文件是 `cqim-app/docker-compose.yml`，启动 `postgres`、`redis`、`minio`、`cqim`、`go-gateway` 与 `nginx`。现网仍由 Node API、Go 网关和 Nginx 承载，不包含 C++ 服务，也不会自动生产切流。
 
 旧 Mongo、MySQL、SQLite、COS 数据不迁移，新库从空 PostgreSQL 开始。起来后是空账号，需要重新注册；旧 COS 链接不再作为新上传入口。
 
@@ -69,7 +69,7 @@ curl -fsS http://127.0.0.1/api/health
 应确认以下服务均健康：
 
 ```bash
-docker compose ps postgres redis minio cqim go-gateway go-api nginx
+docker compose ps postgres redis minio cqim go-gateway nginx
 ```
 
 `cqim-app/deploy/docker-compose.prod.yml` 和 `docker-compose.app.yml` 是可选部署覆盖，同样使用 PostgreSQL、Redis 和 MinIO，不引入 MongoDB、MySQL、SQLite 或 C++ 服务。
