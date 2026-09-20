@@ -272,7 +272,14 @@ func (s *Server) mediaUploadJSONAuth(w http.ResponseWriter, r *http.Request, u u
 	if comma := strings.IndexByte(encoded, ','); comma >= 0 {
 		encoded = encoded[comma+1:]
 	}
+	if len(encoded) < 8 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing_data"})
+		return
+	}
 	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		raw, err = base64.RawStdEncoding.DecodeString(encoded)
+	}
 	if err != nil || len(raw) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing_data"})
 		return
