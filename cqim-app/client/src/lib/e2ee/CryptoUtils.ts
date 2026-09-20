@@ -118,8 +118,8 @@ export async function generateKeyPair(): Promise<ECKeyPair> {
   };
 }
 
-/** 导出密钥对为 Base64 */
-export async function exportKeyPair(keyPair: ECKeyPair): Promise<ExportedKeyPair> {
+/** 导出密钥对为 Base64（ECDH 或 ECDSA 均可） */
+export async function exportKeyPair(keyPair: { publicKey: CryptoKey; privateKey: CryptoKey }): Promise<ExportedKeyPair> {
   const pubRaw = await crypto.subtle.exportKey('spki', keyPair.publicKey);
   const privRaw = await crypto.subtle.exportKey('pkcs8', keyPair.privateKey);
   return {
@@ -210,6 +210,52 @@ export async function verify(
     signature,
     data
   );
+}
+
+export const SIGNED_PREKEY_MISSING_SIGNING_KEY =
+  '对端安全凭证缺少签名公钥，请双方更新应用并重新进入会话后再试';
+export const SIGNED_PREKEY_SIGNATURE_INVALID = '对端安全凭证签名验证失败';
+
+/** 用 ECDSA 身份签名私钥对 Signed PreKey 公钥签名 */
+export async function signSignedPreKey(
+  signingPrivateKeyB64: string,
+  signedPreKeyB64: string,
+): Promise<string> {
+  const signingPriv = await importPrivateKey(signingPrivateKeyB64, 'ECDSA');
+  const signatureBuf = await sign(signingPriv, base64ToBuffer(signedPreKeyB64));
+  return bufferToBase64(signatureBuf);
+}
+
+/**
+ * 用对端 ECDSA 签名公钥验证 Signed PreKey。
+ * 不可用 identityKey（ECDH）验签：Web Crypto P-256 不能把同一把密钥同时用于 ECDH 和 ECDSA。
+ */
+export async function verifySignedPreKeySignature(
+  signingPublicKeyB64: string,
+  signedPreKeyB64: string,
+  signatureB64: string,
+): Promise<boolean> {
+  const signingPub = await importPublicKey(signingPublicKeyB64, 'ECDSA');
+  return verify(signingPub, base64ToBuffer(signatureB64), base64ToBuffer(signedPreKeyB64));
+}
+
+/** X3DH 建立会话前校验对端 Signed PreKey 签名 */
+export async function assertValidSignedPreKey(bundle: {
+  signingPublicKey?: string;
+  signedPreKey: string;
+  signedPreKeySignature: string;
+}): Promise<void> {
+  if (!bundle.signingPublicKey) {
+    throw new Error(SIGNED_PREKEY_MISSING_SIGNING_KEY);
+  }
+  const isValid = await verifySignedPreKeySignature(
+    bundle.signingPublicKey,
+    bundle.signedPreKey,
+    bundle.signedPreKeySignature,
+  );
+  if (!isValid) {
+    throw new Error(SIGNED_PREKEY_SIGNATURE_INVALID);
+  }
 }
 
 // ============================================================

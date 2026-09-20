@@ -15,6 +15,7 @@ import { clearDecryptedMessageCache } from '@/lib/localdb';
 import { e2eeProxy } from './WorkerProxy';
 import {
   generateKeyPair,
+  generateSigningKeyPair,
   exportKeyPair,
   importPublicKey,
   importPrivateKey,
@@ -32,6 +33,8 @@ import {
   concatBuffers,
   randomBytes,
   generateRegistrationId,
+  signSignedPreKey,
+  assertValidSignedPreKey,
   type EncryptedPayload,
 } from './CryptoUtils';
 
@@ -42,12 +45,13 @@ import {
 /** PreKey Bundle — 用于 X3DH 初始化会话 */
 export interface PreKeyBundle {
   registrationId: number;
-  identityKey: string;      // Base64 公钥
+  identityKey: string;       // Base64 ECDH 公钥（DH 步骤）
+  signingPublicKey?: string; // Base64 ECDSA 公钥（Signed PreKey 验签）
   signedPreKeyId: number;
-  signedPreKey: string;     // Base64 公钥
+  signedPreKey: string;      // Base64 公钥
   signedPreKeySignature: string;
   oneTimePreKeyId?: number;
-  oneTimePreKey?: string;   // Base64 公钥
+  oneTimePreKey?: string;    // Base64 公钥
 }
 
 /** 加密后的消息信封 */
@@ -122,6 +126,7 @@ export class E2EEManager {
   private _initialized = false;
   private _registrationId = 0;
   private _identityKeyPair: KeyPairB64 | null = null;
+  private _signingKeyPair: KeyPairB64 | null = null;
 
   // 已彻底禁用 Mock Bundle，强制使用服务器获取真实凭证
 
@@ -169,7 +174,15 @@ export class E2EEManager {
     const existing = await this.store.getLocalRegistration();
     if (existing) {
       this._registrationId = existing.registrationId;
-      this._identityKeyPair = existing.identityKeyPair;
+      this._identityKeyPair = {
+        pubKey: existing.identityKeyPair.pubKey,
+        privKey: existing.identityKeyPair.privKey,
+      };
+      this._signingKeyPair = existing.signingKeyPair
+        ?? (existing.identityKeyPair as KeyPairB64 & { signingKeyPair?: KeyPairB64 }).signingKeyPair
+        ?? null;
+      await this.ensureSigningKeyPair();
+      await this.ensureSignedPreKeyMatchesSigningKey();
       this._initialized = true;
       
       // 启动 Worker 代理（极致优化：计算密集型任务后台化）。
@@ -206,14 +219,18 @@ export class E2EEManager {
     // 1. 生成 Registration ID
     this._registrationId = generateRegistrationId();
 
-    // 2. 生成 Identity Key Pair
+    // 2. 生成 Identity Key Pair（ECDH）与独立 Signing Key Pair（ECDSA）
+    // Web Crypto P-256 不能让同一把密钥同时用于 ECDH 和 ECDSA。
     const identityKP = await generateKeyPair();
     this._identityKeyPair = await exportKeyPair(identityKP);
+    const signingKP = await generateSigningKeyPair();
+    this._signingKeyPair = await exportKeyPair(signingKP);
 
     // 3. 保存本地注册信息
     await this.store.saveLocalRegistration({
       registrationId: this._registrationId,
       identityKeyPair: this._identityKeyPair,
+      signingKeyPair: this._signingKeyPair,
       createdAt: Date.now(),
     });
 
@@ -224,38 +241,59 @@ export class E2EEManager {
     await this.generatePreKeys(0, 20);
   }
 
-  /** 生成 Signed PreKey */
+  /** 确保本地有 ECDSA 签名密钥，并写回 IndexedDB（平滑升级旧客户端） */
+  private async ensureSigningKeyPair(): Promise<KeyPairB64> {
+    if (this._signingKeyPair?.pubKey && this._signingKeyPair?.privKey) {
+      const reg = await this.store.getLocalRegistration();
+      if (reg && !reg.signingKeyPair) {
+        await this.store.saveLocalRegistration({
+          ...reg,
+          identityKeyPair: this._identityKeyPair || reg.identityKeyPair,
+          signingKeyPair: this._signingKeyPair,
+        });
+      }
+      return this._signingKeyPair;
+    }
+
+    const signingKP = await generateSigningKeyPair();
+    this._signingKeyPair = await exportKeyPair(signingKP);
+    const reg = await this.store.getLocalRegistration();
+    if (reg) {
+      await this.store.saveLocalRegistration({
+        ...reg,
+        identityKeyPair: this._identityKeyPair || reg.identityKeyPair,
+        signingKeyPair: this._signingKeyPair,
+      });
+    }
+    return this._signingKeyPair;
+  }
+
+  /** 旧设备可能有 Signed PreKey 但签名密钥已丢失或从未发布，需要重签 */
+  private async ensureSignedPreKeyMatchesSigningKey(): Promise<void> {
+    const signing = await this.ensureSigningKeyPair();
+    const signedPreKeys = await this.store.getAllSignedPreKeys();
+    const latest = signedPreKeys[signedPreKeys.length - 1];
+    if (!latest) {
+      await this.generateSignedPreKey();
+      return;
+    }
+    try {
+      await assertValidSignedPreKey({
+        signingPublicKey: signing.pubKey,
+        signedPreKey: latest.keyPair.pubKey,
+        signedPreKeySignature: latest.signature,
+      });
+    } catch {
+      await this.generateSignedPreKey(latest.id);
+    }
+  }
+
+  /** 生成 Signed PreKey（用 ECDSA 签名密钥签名，不用 ECDH Identity Key） */
   async generateSignedPreKey(id: number = 1): Promise<void> {
     const keyPair = await generateKeyPair();
     const exported = await exportKeyPair(keyPair);
-
-    // 使用 Identity Key 签名
-    // 导入私钥（用于签名，必须是 ECDSA 类型）
-    // 注意：目前的 generateKeyPair 生成的是 ECDH 密钥，用于协商；
-    // Identity Key 在 Signal 中既用于协商也用于签名。
-    // 在 Web Crypto P-256 中，ECDH 密钥不能直接用于 ECDSA 签名。
-    // 为了合规，我们需要为 Identity 额外生成一对签名密钥，或者使用相同的种子。
-    // 这里采用最简单的合规做法：Identity Key 实际上包含两对 P-256，一对用于 ECDH，一对用于 ECDSA。
-    
-    // 获取本地注册信息中的签名私钥
-    const reg = await this.store.getLocalRegistration();
-    if (!reg || !(reg as any).signingKeyPair) {
-      // 如果没有签名密钥对，重新生成（平滑升级）
-      const signingKP = await import('./CryptoUtils').then(m => m.generateSigningKeyPair());
-      const exportedSigning = await import('./CryptoUtils').then(m => m.exportKeyPair(signingKP as any));
-      await this.store.saveLocalRegistration({
-        ...reg!,
-        signingKeyPair: exportedSigning,
-      } as any);
-      this._identityKeyPair = { ...this._identityKeyPair!, signingKeyPair: exportedSigning } as any;
-    }
-
-    const signingPrivKeyBase64 = (this._identityKeyPair as any).signingKeyPair.privKey;
-    const signingPriv = await import('./CryptoUtils').then(m => m.importPrivateKey(signingPrivKeyBase64, 'ECDSA'));
-    const signedPubBuf = base64ToBuffer(exported.pubKey);
-
-    const signatureBuf = await import('./CryptoUtils').then(m => m.sign(signingPriv, signedPubBuf));
-    const signatureData = bufferToBase64(signatureBuf);
+    const signing = await this.ensureSigningKeyPair();
+    const signatureData = await signSignedPreKey(signing.privKey, exported.pubKey);
 
     await this.store.saveSignedPreKey({
       id,
@@ -280,6 +318,7 @@ export class E2EEManager {
   /** 获取本地 PreKey Bundle（供对端使用） */
   async getLocalPreKeyBundle(): Promise<PreKeyBundle> {
     if (!this._identityKeyPair) throw new Error('E2EE 未初始化');
+    const signing = await this.ensureSigningKeyPair();
 
     const signedPreKeys = await this.store.getAllSignedPreKeys();
     const signedPreKey = signedPreKeys[signedPreKeys.length - 1];
@@ -291,6 +330,7 @@ export class E2EEManager {
     return {
       registrationId: this._registrationId,
       identityKey: this._identityKeyPair.pubKey,
+      signingPublicKey: signing.pubKey,
       signedPreKeyId: signedPreKey.id,
       signedPreKey: signedPreKey.keyPair.pubKey,
       signedPreKeySignature: signedPreKey.signature,
@@ -323,6 +363,7 @@ export class E2EEManager {
           userId,
           registrationId: bundle.registrationId,
           identityKey: bundle.identityKey,
+          signingPublicKey: bundle.signingPublicKey,
           signedPreKey: {
             keyId: bundle.signedPreKeyId,
             publicKey: bundle.signedPreKey,
@@ -357,6 +398,7 @@ export class E2EEManager {
     const bundle: PreKeyBundle = {
       registrationId: data.registrationId,
       identityKey: data.identityKey,
+      signingPublicKey: data.signingPublicKey || undefined,
       signedPreKeyId: data.signedPreKey.keyId,
       signedPreKey: data.signedPreKey.publicKey,
       signedPreKeySignature: data.signedPreKey.signature,
@@ -437,17 +479,13 @@ export class E2EEManager {
 
     console.log('[E2EE] 开始 X3DH 密钥协商，对端:', peerId);
 
-    // 验证对端 Signed PreKey 签名 (P0 安全要求)
+    // 验证对端 Signed PreKey 签名：必须用 ECDSA signingPublicKey，不能用 ECDH identityKey
     try {
-      const remoteIdentityPubForVerify = await importPublicKey(bundle.identityKey, 'ECDSA');
-      const signatureBuf = base64ToBuffer(bundle.signedPreKeySignature);
-      const signedPubBuf = base64ToBuffer(bundle.signedPreKey);
-      const isValid = await import('./CryptoUtils').then(m => m.verify(remoteIdentityPubForVerify, signatureBuf, signedPubBuf));
-      if (!isValid) {
-        throw new Error('对端安全凭证签名验证失败');
-      }
+      await assertValidSignedPreKey(bundle);
     } catch (err: any) {
-      throw new Error(`安全凭证验证失败: ${err.message}`);
+      const msg = err?.message || String(err);
+      if (msg.includes('对端安全凭证')) throw err;
+      throw new Error(`安全凭证验证失败: ${msg}`);
     }
 
     // 导入密钥
@@ -834,6 +872,7 @@ export class E2EEManager {
     this._initialized = false;
     this._registrationId = 0;
     this._identityKeyPair = null;
+    this._signingKeyPair = null;
     console.log('[E2EE] 所有加密数据已清除');
   }
 
