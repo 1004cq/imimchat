@@ -73,6 +73,9 @@ curl -i "$GO_API_BASE/api/health"
 | POST | `/api/apns/token` | 注册或更新 APNs alert token |
 | POST | `/api/apns/voip-token` | 注册或更新 APNs VoIP token |
 | DELETE | `/api/apns/token` | 按 Node 同样范围删除当前用户 token |
+| POST | `/api/media/upload` | 认证后上传 base64 媒体到 MinIO，并仅写入 `MediaFile` 元数据 |
+| POST | `/api/media/upload-form` | 认证后 multipart 上传媒体到 MinIO，并仅写入 `MediaFile` 元数据 |
+| GET | `/api/media/:id` | 按 `MediaFile.id` 从 MinIO 下载媒体 |
 
 私聊发送仅接受 `msgType=encrypted`。成功写入后会更新 `Chat.lastMessageAt`、将会话预览固定为 `🔒 [加密消息]`，并向 Redis `cqim:im:push` 发布与 Node 相同的 `{ userId, payload }` 信封，供仍在运行的网关投递。
 
@@ -80,6 +83,6 @@ curl -i "$GO_API_BASE/api/health"
 
 ## 未迁移
 
-验证码发送/校验、密码重置与绑定资料的完整认证流程，MinIO `/api/media` 文件上传下载，`/api/group`，`/api/moments`，`/api/admin` 全部管理业务，二维码业务校验，以及未列出的 `/api/*` 仍未迁移；这些路径会返回 JSON `501`，不会伪装成已完成。
+验证码发送/校验、密码重置与绑定资料的完整认证流程，`/api/group`，`/api/moments`，`/api/admin` 全部管理业务，二维码业务校验，以及未列出的 `/api/*` 仍未迁移；这些路径会返回 JSON `501`，不会伪装成已完成。
 
 Nginx 未切流；Node `cqim-app/server` 保持可部署，生产流量仍由 Node 处理默认 `/api`。

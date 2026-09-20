@@ -1,0 +1,241 @@
+package api
+
+import (
+	"bytes"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
+)
+
+var mediaMax = map[string]int64{
+	"image":   15 << 20,
+	"voice":   20 << 20,
+	"video":   100 << 20,
+	"sticker": 8 << 20,
+	"file":    30 << 20,
+}
+
+func mediaKind(value string) string {
+	if value == "audio" {
+		value = "voice"
+	}
+	if _, ok := mediaMax[value]; !ok {
+		return ""
+	}
+	return value
+}
+
+func mediaLimit(kind string) int64 {
+	if kind == "video" {
+		if value, err := strconv.ParseInt(os.Getenv("MEDIA_MAX_VIDEO_BYTES"), 10, 64); err == nil && value > 0 {
+			return value
+		}
+	}
+	return mediaMax[kind]
+}
+
+func mediaClient() (*minio.Client, string, error) {
+	endpoint := envOrDefault("MINIO_ENDPOINT", "minio")
+	port := envOrDefault("MINIO_PORT", "9000")
+	if _, _, err := net.SplitHostPort(endpoint); err != nil && !strings.Contains(endpoint, ":") {
+		endpoint = net.JoinHostPort(endpoint, port)
+	}
+	client, err := minio.New(endpoint, &minio.Options{
+		Creds:  credentials.NewStaticV4(envOrDefault("MINIO_ROOT_USER", "cqimminio"), envOrDefault("MINIO_ROOT_PASSWORD", "cqimio-secret-change-me"), ""),
+		Secure: strings.EqualFold(os.Getenv("MINIO_USE_SSL"), "true"),
+		Region: envOrDefault("MINIO_REGION", "us-east-1"),
+	})
+	return client, envOrDefault("MINIO_BUCKET", "cqim-media"), err
+}
+
+func mediaID() string {
+	value := make([]byte, 12)
+	if _, err := rand.Read(value); err != nil {
+		return fmt.Sprint(time.Now().UnixNano())
+	}
+	return hex.EncodeToString(value)
+}
+
+func mediaURL(id string) string { return "/api/media/" + id }
+
+func choose(first, second, fallback string) string {
+	if first != "" {
+		return first
+	}
+	if second != "" {
+		return second
+	}
+	return fallback
+}
+
+func (s *Server) mediaUploadJSON(w http.ResponseWriter, r *http.Request) {
+	s.requireUser(s.mediaUploadJSONAuth)(w, r)
+}
+
+func (s *Server) mediaUploadJSONAuth(w http.ResponseWriter, r *http.Request, u user) {
+	var input struct {
+		Kind          string `json:"kind"`
+		Type          string `json:"type"`
+		MediaType     string `json:"mediaType"`
+		Mime          string `json:"mime"`
+		MimeType      string `json:"mimeType"`
+		Filename      string `json:"filename"`
+		Name          string `json:"name"`
+		Data          string `json:"data"`
+		DataBase64    string `json:"dataBase64"`
+		File          string `json:"file"`
+		Content       string `json:"content"`
+		Width         int    `json:"width"`
+		Height        int    `json:"height"`
+		DurationMS    int    `json:"durationMs"`
+		PosterMediaID string `json:"posterMediaId"`
+	}
+	if decode(r, &input) != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing_data"})
+		return
+	}
+	requestedKind := choose(input.Kind, input.Type, input.MediaType)
+	kind := mediaKind(requestedKind)
+	if requestedKind == "" {
+		kind = mediaKind("file")
+	}
+	if requestedKind != "" && kind == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_kind", "allow": []string{"image", "voice", "video", "sticker", "file"}})
+		return
+	}
+	encoded := choose(input.Data, input.DataBase64, choose(input.File, input.Content, ""))
+	if comma := strings.IndexByte(encoded, ','); comma >= 0 {
+		encoded = encoded[comma+1:]
+	}
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || len(raw) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing_data"})
+		return
+	}
+	s.storeMedia(w, r, u, kind, raw, choose(input.Mime, input.MimeType, "application/octet-stream"), choose(input.Filename, input.Name, ""), input.Width, input.Height, input.DurationMS, input.PosterMediaID, false)
+}
+
+func (s *Server) mediaUploadForm(w http.ResponseWriter, r *http.Request) {
+	s.requireUser(s.mediaUploadFormAuth)(w, r)
+}
+
+func (s *Server) mediaUploadFormAuth(w http.ResponseWriter, r *http.Request, u user) {
+	if err := r.ParseMultipartForm(200 << 20); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_multipart"})
+		return
+	}
+	kind := mediaKind(choose(r.FormValue("kind"), r.FormValue("mediaType"), "file"))
+	file, header, err := r.FormFile("file")
+	if err != nil || kind == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_upload"})
+		return
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, 200<<20+1))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "upload_failed"})
+		return
+	}
+	if int64(len(raw)) > 200<<20 {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "file_too_large"})
+		return
+	}
+	s.storeMedia(w, r, u, kind, raw, header.Header.Get("Content-Type"), header.Filename, 0, 0, 0, "", true)
+}
+
+func (s *Server) storeMedia(w http.ResponseWriter, r *http.Request, u user, kind string, raw []byte, mime, filename string, width, height, duration int, poster string, formResponse bool) {
+	if mime == "" {
+		mime = "application/octet-stream"
+	}
+	limit := mediaLimit(kind)
+	if int64(len(raw)) > limit {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": fmt.Sprintf("file_too_large:%s:%d", kind, limit)})
+		return
+	}
+	client, bucket, err := mediaClient()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "upload_failed"})
+		return
+	}
+	if err = client.MakeBucket(r.Context(), bucket, minio.MakeBucketOptions{Region: envOrDefault("MINIO_REGION", "us-east-1")}); err != nil {
+		exists, existsErr := client.BucketExists(r.Context(), bucket)
+		if existsErr != nil || !exists {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "upload_failed"})
+			return
+		}
+	}
+	id := mediaID()
+	key := fmt.Sprintf("media/%s/%d/%s", kind, time.Now().UTC().Year(), id)
+	hash := sha256.Sum256(raw)
+	_, err = client.PutObject(r.Context(), bucket, key, bytes.NewReader(raw), int64(len(raw)), minio.PutObjectOptions{
+		ContentType:  mime,
+		UserMetadata: map[string]string{"X-Amz-Meta-Original-Filename": filename},
+	})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "upload_failed"})
+		return
+	}
+	url := mediaURL(id)
+	_, err = s.db.Exec(r.Context(), `INSERT INTO "MediaFile" ("id","userId","type","kind","url","filename","mime","size","width","height","durationMs","posterMediaId","sha256","diskPath","publicPath","createdAt") VALUES ($1,$2,$3,$3,$4,$5,$6,$7,NULLIF($8,0),NULLIF($9,0),NULLIF($10,0),NULLIF($11,''),$12,$13,$4,NOW())`, id, u.ID, kind, url, nilString(filename), mime, len(raw), width, height, duration, nilString(poster), hex.EncodeToString(hash[:]), key)
+	if err != nil {
+		_ = client.RemoveObject(r.Context(), bucket, key, minio.RemoveObjectOptions{})
+		dbError(w, err)
+		return
+	}
+	if formResponse {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": id, "kind": kind, "url": url, "fileName": nilIfEmpty(filename), "storage": "minio", "size": len(raw), "mime": mime})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "kind": kind, "url": url, "size": len(raw), "mime": mime, "storage": "minio"})
+}
+
+func nilString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func (s *Server) mediaDownload(w http.ResponseWriter, r *http.Request) {
+	var key, mime string
+	var size int64
+	if err := s.db.QueryRow(r.Context(), `SELECT "diskPath",COALESCE("mime",'application/octet-stream'),COALESCE("size",0) FROM "MediaFile" WHERE "id"=$1`, r.PathValue("id")).Scan(&key, &mime, &size); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found"})
+		return
+	}
+	client, bucket, err := mediaClient()
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "missing_object"})
+		return
+	}
+	object, err := client.GetObject(r.Context(), bucket, key, minio.GetObjectOptions{})
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "missing_object"})
+		return
+	}
+	defer object.Close()
+	stat, err := object.Stat()
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "missing_object"})
+		return
+	}
+	if size <= 0 {
+		size = stat.Size
+	}
+	w.Header().Set("Content-Type", mime)
+	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	w.Header().Set("Cache-Control", "private, max-age=86400")
+	_, _ = io.Copy(w, object)
+}
