@@ -2,9 +2,22 @@ import type { MomentPost } from '@/lib/store';
 import type { MomentItem, VisibilityType } from './types';
 
 export const MOMENTS_COVER_STORAGE_KEY = 'cqim_moments_cover_image';
+/** Marks the Moments header avatar so cover-change clicks ignore it. */
+export const MOMENTS_HEADER_AVATAR_ATTR = 'data-moments-header-avatar';
+export const MOMENTS_HEADER_AVATAR_SELECTOR = `[${MOMENTS_HEADER_AVATAR_ATTR}]`;
 export const FEED_CACHE_KEY = 'cqim_moments_feed_cache';
 export const FEED_CACHE_VERSION = 'v2';
 export const FEED_CACHE_MAX_AGE = 5 * 60 * 1000;
+
+/**
+ * Cover/banner change is bound to the Moments header. Avatar sits inside that
+ * header, so taps on it must not open the file picker (avatar edits belong in
+ * settings/profile).
+ */
+export function shouldOpenMomentsCoverPicker(target: { closest?: (selector: string) => unknown } | null): boolean {
+  if (!target || typeof target.closest !== 'function') return true;
+  return target.closest(MOMENTS_HEADER_AVATAR_SELECTOR) == null;
+}
 
 export function extractTopics(content: string): string[] {
   const matches = content.match(/#([^#\s]+)#/g) || [];
