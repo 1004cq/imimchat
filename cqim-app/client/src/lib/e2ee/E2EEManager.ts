@@ -10,7 +10,7 @@
  * 参考唐僧叨叨 E2EEManager 设计，使用 Web Crypto API 实现真实密码学。
  */
 
-import { SignalStore, type KeyPairB64, type SessionRecord } from './SignalStore';
+import { SignalStore, type KeyPairB64, type PreKeyRecord, type SessionRecord } from './SignalStore';
 import { clearDecryptedMessageCache } from '@/lib/localdb';
 import { e2eeProxy } from './WorkerProxy';
 import {
@@ -60,6 +60,10 @@ export interface SignalEnvelope {
   senderRegistrationId: number;
   senderIdentityKey: string;
   senderEphemeralKey?: string; // 仅 prekey 类型
+  /** 发起方使用的对端 One-Time PreKey id（响应方必须用同一把私钥完成 X3DH） */
+  usedOneTimePreKeyId?: number;
+  /** 发起方使用的对端 Signed PreKey id */
+  usedSignedPreKeyId?: number;
   senderRatchetKey: string;
   previousCounter: number;
   counter: number;
@@ -552,8 +556,10 @@ export class E2EEManager {
       peerId,
       sessionData: JSON.stringify({
         ratchetState,
+        role: 'initiator',
         ephemeralKey: ephemeralExported.pubKey,
         usedOneTimePreKeyId: bundle.oneTimePreKeyId,
+        usedSignedPreKeyId: bundle.signedPreKeyId,
       }),
       updatedAt: Date.now(),
     });
@@ -617,6 +623,11 @@ export class E2EEManager {
     const sessionData = JSON.parse(sessionRecord!.sessionData);
     const state: RatchetState = sessionData.ratchetState;
 
+    // 响应方首次回复时尚无发送链：先对当前对端棘轮密钥做一次发送侧 DH 棘轮
+    if (!state.sendChainKey) {
+      await this.initiateSendRatchet(state);
+    }
+
     // 对称棘轮步骤：从 sendChainKey 派生消息密钥
     const chainKey = base64ToBuffer(state.sendChainKey!);
     const { messageKey, nextChainKey } = await deriveMessageKeys(chainKey);
@@ -638,7 +649,10 @@ export class E2EEManager {
     });
 
     // 构建信封
-    const isFirstMessage = state.sendCounter === 1 && !state.receiveChainKey;
+    const isFirstMessage =
+      sessionData.role === 'initiator' &&
+      state.sendCounter === 1 &&
+      !state.receiveChainKey;
     const envelope: SignalEnvelope = {
       type: isFirstMessage ? 'prekey' : 'message',
       senderRegistrationId: this._registrationId,
@@ -652,6 +666,12 @@ export class E2EEManager {
 
     if (isFirstMessage) {
       envelope.senderEphemeralKey = sessionData.ephemeralKey;
+      if (sessionData.usedOneTimePreKeyId != null) {
+        envelope.usedOneTimePreKeyId = sessionData.usedOneTimePreKeyId;
+      }
+      if (sessionData.usedSignedPreKeyId != null) {
+        envelope.usedSignedPreKeyId = sessionData.usedSignedPreKeyId;
+      }
     }
 
     console.log(`[E2EE] 消息已加密 → ${peerId}, counter: ${state.sendCounter}`);
@@ -667,10 +687,18 @@ export class E2EEManager {
 
     let sessionRecord = await this.store.getSession(peerId);
 
-    // 如果是 PreKey 消息且没有会话，需要处理 X3DH 响应
-    if (!sessionRecord && envelope.type === 'prekey') {
-      await this.handlePreKeyMessage(peerId, envelope);
-      sessionRecord = await this.store.getSession(peerId);
+    // PreKey 消息：作为响应方完成 X3DH（不可再走发起方 establishSession）
+    if (envelope.type === 'prekey') {
+      const shouldReplace =
+        !sessionRecord || this.shouldReplaceSessionForPreKey(sessionRecord, envelope);
+      if (shouldReplace) {
+        if (sessionRecord) {
+          console.log('[E2EE] 替换现有会话以处理对端 PreKey 消息');
+          await this.store.removeSession(peerId);
+        }
+        await this.establishSessionAsResponder(peerId, envelope);
+        sessionRecord = await this.store.getSession(peerId);
+      }
     }
 
     if (!sessionRecord) {
@@ -729,13 +757,174 @@ export class E2EEManager {
     return bufferToString(plainBuf);
   }
 
-  /** 处理 PreKey 消息（作为接收方建立会话） */
-  private async handlePreKeyMessage(peerId: string, envelope: SignalEnvelope): Promise<void> {
-    console.log('[E2EE] 处理 PreKey 消息，建立被动会话');
-    const bundle = await this.fetchRemoteBundle(peerId);
-    if (bundle) {
-      await this.establishSession(peerId, bundle);
+  /**
+   * 判断收到 PreKey 时是否应丢弃本地会话并改为响应方 X3DH。
+   * - 对端 identity / registrationId 变化（重装/重置密钥）→ 替换
+   * - 双方同时 initiate（本地仍是 initiator 且尚未成功收过消息）→ 按 identityKey 字典序，
+   *   对端更大则我方让出，改为响应方，避免双会话无法互解密
+   */
+  private shouldReplaceSessionForPreKey(
+    sessionRecord: SessionRecord,
+    envelope: SignalEnvelope,
+  ): boolean {
+    try {
+      const sessionData = JSON.parse(sessionRecord.sessionData);
+      const state: RatchetState | undefined = sessionData.ratchetState;
+      if (!state) return true;
+
+      if (state.remoteIdentityKey !== envelope.senderIdentityKey) return true;
+      if (state.remoteRegistrationId !== envelope.senderRegistrationId) return true;
+
+      const isInitiatorOnly =
+        (sessionData.role === 'initiator' || !!sessionData.ephemeralKey) &&
+        state.receiveCounter === 0 &&
+        !state.receiveChainKey;
+
+      if (isInitiatorOnly && this._identityKeyPair) {
+        // 对端 identity 更大 → 对端保留发起方角色，我方改为响应方
+        return envelope.senderIdentityKey > this._identityKeyPair.pubKey;
+      }
+
+      return false;
+    } catch {
+      return true;
     }
+  }
+
+  /**
+   * 作为响应方完成 X3DH，并镜像发起方的首次 DH 棘轮，得到可解密首条 PreKey 消息的接收链。
+   *
+   * 发起方 DH：
+   *   DH1=ECDH(IK_A, SPK_B), DH2=ECDH(EK_A, IK_B), DH3=ECDH(EK_A, SPK_B), DH4=ECDH(EK_A, OPK_B?)
+   * 响应方对偶：
+   *   DH1=ECDH(SPK_B, IK_A), DH2=ECDH(IK_B, EK_A), DH3=ECDH(SPK_B, EK_A), DH4=ECDH(OPK_B, EK_A?)
+   */
+  private async establishSessionAsResponder(
+    peerId: string,
+    envelope: SignalEnvelope,
+  ): Promise<void> {
+    if (!this._identityKeyPair) throw new Error('E2EE 未初始化');
+    if (!envelope.senderEphemeralKey) {
+      throw new Error('PreKey 消息缺少 senderEphemeralKey');
+    }
+    if (!envelope.senderRatchetKey) {
+      throw new Error('PreKey 消息缺少 senderRatchetKey');
+    }
+
+    console.log('[E2EE] 作为响应方完成 X3DH，对端:', peerId);
+
+    let signedPreKey =
+      envelope.usedSignedPreKeyId != null
+        ? await this.store.getSignedPreKey(envelope.usedSignedPreKeyId)
+        : undefined;
+    if (!signedPreKey) {
+      const all = await this.store.getAllSignedPreKeys();
+      signedPreKey = all[all.length - 1];
+    }
+    if (!signedPreKey) throw new Error('没有可用的 Signed PreKey');
+
+    let oneTimePreKey: PreKeyRecord | undefined;
+    if (envelope.usedOneTimePreKeyId != null) {
+      oneTimePreKey = await this.store.getPreKey(envelope.usedOneTimePreKeyId);
+      if (!oneTimePreKey) {
+        throw new Error(
+          `One-Time PreKey ${envelope.usedOneTimePreKeyId} 不存在或已消耗`,
+        );
+      }
+    }
+
+    const identityPriv = await importPrivateKey(this._identityKeyPair.privKey);
+    const spkPriv = await importPrivateKey(signedPreKey.keyPair.privKey);
+    const remoteIdentityPub = await importPublicKey(envelope.senderIdentityKey);
+    const remoteEphemeralPub = await importPublicKey(envelope.senderEphemeralKey);
+
+    const dh1 = await ecdh(spkPriv, remoteIdentityPub);
+    const dh2 = await ecdh(identityPriv, remoteEphemeralPub);
+    const dh3 = await ecdh(spkPriv, remoteEphemeralPub);
+    let dhResults = concatBuffers(dh1, dh2, dh3);
+
+    if (oneTimePreKey) {
+      const opkPriv = await importPrivateKey(oneTimePreKey.keyPair.privKey);
+      const dh4 = await ecdh(opkPriv, remoteEphemeralPub);
+      dhResults = concatBuffers(dhResults, dh4);
+    }
+
+    const salt = new Uint8Array(32).buffer;
+    const x3dhInfo = stringToBuffer('imim-x3dh');
+    const rootKey = await hkdf(dhResults, salt, x3dhInfo, 32);
+
+    // 镜像发起方首次棘轮：ECDH(AliceRatchet, BobSPK) + info=imim-chain
+    const remoteRatchetPub = await importPublicKey(envelope.senderRatchetKey);
+    const dhRecv = await ecdh(spkPriv, remoteRatchetPub);
+    const chainInfo = stringToBuffer('imim-chain');
+    const derivedKeys = await hkdf(concatBuffers(rootKey, dhRecv), salt, chainInfo, 64);
+    const newRootKey = derivedKeys.slice(0, 32);
+    const receiveChainKey = derivedKeys.slice(32, 64);
+
+    // 发送链在首次回复时再生成（initiateSendRatchet）
+    const placeholderSendKP = await generateKeyPair();
+    const placeholderSendExported = await exportKeyPair(placeholderSendKP);
+
+    const ratchetState: RatchetState = {
+      dhSendingKeyPair: placeholderSendExported,
+      dhReceivingKey: envelope.senderRatchetKey,
+      rootKey: bufferToBase64(newRootKey),
+      sendChainKey: null,
+      sendCounter: 0,
+      receiveChainKey: bufferToBase64(receiveChainKey),
+      receiveCounter: 0,
+      previousSendCounter: 0,
+      remoteIdentityKey: envelope.senderIdentityKey,
+      remoteRegistrationId: envelope.senderRegistrationId,
+      initialized: true,
+    };
+
+    await this.store.saveSession({
+      peerId,
+      sessionData: JSON.stringify({
+        ratchetState,
+        role: 'responder',
+      }),
+      updatedAt: Date.now(),
+    });
+
+    await this.store.saveIdentity({
+      userId: peerId,
+      identityKey: envelope.senderIdentityKey,
+      trusted: true,
+      addedAt: Date.now(),
+    });
+
+    if (oneTimePreKey) {
+      await this.store.removePreKey(oneTimePreKey.id);
+    }
+
+    console.log('[E2EE] 响应方 X3DH 完成，会话已建立');
+  }
+
+  /** 响应方首次发送前：基于当前对端棘轮公钥创建发送链（info=imim-ratchet） */
+  private async initiateSendRatchet(state: RatchetState): Promise<void> {
+    if (!state.dhReceivingKey) {
+      throw new Error('无法创建发送链：缺少对端棘轮密钥');
+    }
+
+    state.previousSendCounter = state.sendCounter;
+    state.sendCounter = 0;
+
+    const remoteRatchetPub = await importPublicKey(state.dhReceivingKey);
+    const newSendKP = await generateKeyPair();
+    const dhSend = await ecdh(newSendKP.privateKey, remoteRatchetPub);
+
+    const rootKey = base64ToBuffer(state.rootKey);
+    const salt = new Uint8Array(32).buffer;
+    const info = stringToBuffer('imim-ratchet');
+    const derived = await hkdf(concatBuffers(rootKey, dhSend), salt, info, 64);
+
+    state.rootKey = bufferToBase64(derived.slice(0, 32));
+    state.sendChainKey = bufferToBase64(derived.slice(32, 64));
+    state.dhSendingKeyPair = await exportKeyPair(newSendKP);
+
+    console.log('[E2EE] 已创建响应方发送链');
   }
 
   /** 执行 DH 棘轮步骤 */
