@@ -97,6 +97,11 @@ curl -i "$GO_API_BASE/api/health"
 | POST | `/api/group/qrcode`, `/api/group/invite-members` | 群二维码/批量邀请 |
 | GET/POST | `/api/group/invites`, `/api/group/invite-accept/:inviteId`, `/api/group/invite-reject/:inviteId` | 群邀请处理 |
 | POST | `/api/group/burn-message` | 群阅后即焚销毁通知 |
+| GET | `/api/moments/feed`, `/api/moments`, `/api/moments/my`, `/api/moments/:id` | 好友 Feed、公开列表、我的动态、详情与可见性过滤 |
+| POST | `/api/moments`, `/api/moments/:id/like`, `/api/moments/:id/comments`, `/api/moments/:id/pin` | 发布、点赞、评论、置顶 |
+| PUT | `/api/moments/:id`, `/api/moments/reorder` | 编辑可见性/内容/位置、排序 |
+| DELETE | `/api/moments/:id`, `/api/moments/:momentId/comments/:commentId` | 删除动态或评论 |
+| GET | `/api/moments/topics/hot` | 热门话题 |
 
 私聊发送仅接受 `msgType=encrypted`。成功写入后会更新 `Chat.lastMessageAt`、将会话预览固定为 `🔒 [加密消息]`，并向 Redis `cqim:im:push` 发布与 Node 相同的 `{ userId, payload }` 信封，供仍在运行的网关投递。
 
@@ -104,6 +109,6 @@ curl -i "$GO_API_BASE/api/health"
 
 ## 未迁移
 
-验证码发送/校验、密码重置与绑定资料的完整认证流程，`/api/moments`，`/api/admin` 全部管理业务，二维码业务校验，以及未列出的 `/api/*` 仍未迁移；这些路径会返回 JSON `501`，不会伪装成已完成。
+验证码发送/校验、密码重置与绑定资料的完整认证流程，`/api/admin` 全部管理业务，二维码业务校验，以及未列出的 `/api/*` 仍未迁移；这些路径会返回 JSON `501`，不会伪装成已完成。
 
 Nginx 未切流；Node `cqim-app/server` 保持可部署，生产流量仍由 Node 处理默认 `/api`。
