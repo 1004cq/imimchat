@@ -89,33 +89,111 @@ func (s *Server) momentMedia(ctx context.Context, id string) []map[string]any {
 }
 
 func (s *Server) momentAuthor(ctx context.Context, id string) map[string]any {
-	var uid,name string; var nick,av,bg,bio *string
-	if s.db.QueryRow(ctx, `SELECT "id","username","nickname","avatar","backgroundUrl","bio" FROM "User" WHERE "id"=$1`,id).Scan(&uid,&name,&nick,&av,&bg,&bio)!=nil { return map[string]any{"id":id} }
-	return map[string]any{"id":uid,"username":name,"nickname":nick,"avatar":av,"backgroundUrl":bg,"bio":bio}
+	var uid, name, nick, av, bio string
+	var bg *string
+	if s.db.QueryRow(ctx, `SELECT "id","username",COALESCE("nickname",''),COALESCE("avatar",''),"backgroundUrl",COALESCE("bio",'') FROM "User" WHERE "id"=$1`, id).
+		Scan(&uid, &name, &nick, &av, &bg, &bio) != nil {
+		return map[string]any{"id": id, "username": "", "nickname": "", "avatar": "", "backgroundUrl": nil, "bio": ""}
+	}
+	return map[string]any{
+		"id": uid, "username": name, "nickname": nick,
+		"avatar": safeAvatarUrl(av), "backgroundUrl": bg, "bio": bio,
+	}
 }
 
 func (s *Server) momentCounts(ctx context.Context, id string) (int,int) { var likes,comments int; _=s.db.QueryRow(ctx,`SELECT (SELECT COUNT(*) FROM "MomentLike" WHERE "momentId"=$1),(SELECT COUNT(*) FROM "MomentComment" WHERE "momentId"=$1)`,id).Scan(&likes,&comments); return likes,comments }
 func (s *Server) momentLiked(ctx context.Context,id,uid string) bool { if uid=="" {return false}; var yes bool; _=s.db.QueryRow(ctx,`SELECT EXISTS(SELECT 1 FROM "MomentLike" WHERE "momentId"=$1 AND "userId"=$2)`,id,uid).Scan(&yes);return yes }
 
 func (s *Server) momentLikes(ctx context.Context, id string) []map[string]any {
-	rows,e:=s.db.Query(ctx,`SELECT l."userId",COALESCE(u."nickname",u."username",l."userId"),COALESCE(u."avatar",''),l."createdAt" FROM "MomentLike" l LEFT JOIN "User" u ON u."id"=l."userId" WHERE l."momentId"=$1 ORDER BY l."createdAt" ASC LIMIT 20`,id);if e!=nil{return []map[string]any{}};defer rows.Close();out:=[]map[string]any{};for rows.Next(){var uid,name,av string;var t time.Time;if rows.Scan(&uid,&name,&av,&t)==nil{out=append(out,map[string]any{"userId":uid,"userName":name,"userAvatar":av,"createdAt":t})}};return out
+	rows, e := s.db.Query(ctx, `SELECT l."userId",COALESCE(u."nickname",u."username",l."userId"),COALESCE(u."avatar",''),l."createdAt" FROM "MomentLike" l LEFT JOIN "User" u ON u."id"=l."userId" WHERE l."momentId"=$1 ORDER BY l."createdAt" ASC LIMIT 20`, id)
+	if e != nil {
+		return []map[string]any{}
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var uid, name, av string
+		var t time.Time
+		if rows.Scan(&uid, &name, &av, &t) == nil {
+			out = append(out, map[string]any{"userId": uid, "userName": name, "userAvatar": safeAvatarUrl(av), "createdAt": t.UnixMilli()})
+		}
+	}
+	return out
 }
 
 func (s *Server) momentComments(ctx context.Context, id string, nested bool) []map[string]any {
-	rows,e:=s.db.Query(ctx,`SELECT c."id",c."userId",c."content",c."replyToId",c."createdAt",COALESCE(u."username",''),u."nickname",u."avatar" FROM "MomentComment" c LEFT JOIN "User" u ON u."id"=c."userId" WHERE c."momentId"=$1 ORDER BY c."createdAt" ASC`,id);if e!=nil{return []map[string]any{}};defer rows.Close();all:=[]map[string]any{};children:=map[string][]map[string]any{};roots:=[]map[string]any{};for rows.Next(){var cid,uid,content,uname string;var reply,nick,av *string;var created time.Time;if rows.Scan(&cid,&uid,&content,&reply,&created,&uname,&nick,&av)!=nil{continue};user:=map[string]any{"id":uid,"username":uname,"nickname":nick,"avatar":av};c:=map[string]any{"id":cid,"momentId":id,"userId":uid,"content":content,"replyToId":reply,"createdAt":created,"user":user,"userName":firstMomentName(nick,uname),"userAvatar":av};all=append(all,c);if reply==nil{roots=append(roots,c)}else{children[*reply]=append(children[*reply],c)}};if !nested{return all};for _,root:=range roots{root["replies"]=children[root["id"].(string)]};return roots
+	rows, e := s.db.Query(ctx, `SELECT c."id",c."userId",c."content",c."replyToId",c."createdAt",COALESCE(u."username",''),COALESCE(u."nickname",''),COALESCE(u."avatar",'') FROM "MomentComment" c LEFT JOIN "User" u ON u."id"=c."userId" WHERE c."momentId"=$1 ORDER BY c."createdAt" ASC`, id)
+	if e != nil {
+		return []map[string]any{}
+	}
+	defer rows.Close()
+	all := []map[string]any{}
+	children := map[string][]map[string]any{}
+	roots := []map[string]any{}
+	for rows.Next() {
+		var cid, uid, content, uname, nick, av string
+		var reply *string
+		var created time.Time
+		if rows.Scan(&cid, &uid, &content, &reply, &created, &uname, &nick, &av) != nil {
+			continue
+		}
+		safeAv := safeAvatarUrl(av)
+		user := map[string]any{"id": uid, "username": uname, "nickname": nick, "avatar": safeAv}
+		c := map[string]any{
+			"id": cid, "momentId": id, "userId": uid, "content": content, "replyToId": reply,
+			"createdAt": created.UnixMilli(), "user": user, "userName": firstMomentName(nick, uname), "userAvatar": safeAv,
+		}
+		all = append(all, c)
+		if reply == nil {
+			roots = append(roots, c)
+		} else {
+			children[*reply] = append(children[*reply], c)
+		}
+	}
+	if !nested {
+		return all
+	}
+	for _, root := range roots {
+		root["replies"] = children[root["id"].(string)]
+	}
+	return roots
 }
 
-func firstMomentName(nick *string, username string) string { if nick!=nil && *nick!="" {return *nick};return username }
+func firstMomentName(nick, username string) string {
+	if nick != "" {
+		return nick
+	}
+	return username
+}
 
 func (s *Server) momentJSON(ctx context.Context, m momentRecord, viewer *user, detailed bool) map[string]any {
-	likes,comments:=s.momentCounts(ctx,m.ID); author:=s.momentAuthor(ctx,m.UserID); out:=map[string]any{"id":m.ID,"userId":m.UserID,"content":m.Content,"visibility":m.Visibility,"location":m.Location,"topics":momentTopics(m.Topics),"isPinned":m.Pinned,"pinnedAt":m.PinnedAt,"viewCount":m.ViewCount,"sortOrder":m.SortOrder,"createdAt":m.CreatedAt,"updatedAt":m.UpdatedAt,"user":author,"media":s.momentMedia(ctx,m.ID),"likeCount":likes,"commentCount":comments,"isLiked":false}
-	if viewer!=nil {out["isLiked"]=s.momentLiked(ctx,m.ID,viewer.ID)}
-	if detailed {out["likes"]=s.momentLikes(ctx,m.ID);out["comments"]=s.momentComments(ctx,m.ID,true)}
+	likes, comments := s.momentCounts(ctx, m.ID)
+	author := s.momentAuthor(ctx, m.UserID)
+	authorName := firstMomentName(author["nickname"].(string), author["username"].(string))
+	authorAvatar := author["avatar"].(string)
+	var pinnedAt any
+	if m.PinnedAt != nil {
+		pinnedAt = m.PinnedAt.UnixMilli()
+	}
+	out := map[string]any{
+		"id": m.ID, "userId": m.UserID, "authorId": m.UserID, "authorName": authorName, "authorAvatar": authorAvatar,
+		"content": m.Content, "visibility": m.Visibility, "location": m.Location, "topics": momentTopics(m.Topics),
+		"isPinned": m.Pinned, "pinnedAt": pinnedAt, "viewCount": m.ViewCount, "sortOrder": m.SortOrder,
+		"createdAt": m.CreatedAt.UnixMilli(), "updatedAt": m.UpdatedAt.UnixMilli(),
+		"user": author, "media": s.momentMedia(ctx, m.ID), "likeCount": likes, "commentCount": comments, "isLiked": false,
+	}
+	if viewer != nil {
+		out["isLiked"] = s.momentLiked(ctx, m.ID, viewer.ID)
+	}
+	if detailed {
+		out["likes"] = s.momentLikes(ctx, m.ID)
+		out["comments"] = s.momentComments(ctx, m.ID, true)
+	}
 	return out
 }
 
 func (s *Server) momentsFeed(w http.ResponseWriter,r *http.Request,u user) {
-	limit:=intQuery(r,"limit",10);if limit>20{limit=20};cursor:=groupQuery(r,"cursor"); friends:=[]string{u.ID}; rows,e:=s.db.Query(r.Context(),`SELECT "userA","userB" FROM "Friendship" WHERE "userA"=$1 OR "userB"=$1`,u.ID);if e==nil{for rows.Next(){var a,b string;if rows.Scan(&a,&b)==nil{if a==u.ID{friends=append(friends,b)}else{friends=append(friends,a)}}};rows.Close()};args:=[]any{friends};where:=`("userId"=ANY($1) AND ("userId"=$2 OR "visibility" IN ('public','friends')))`;args=append(args,u.ID);if cursor!=""{if t,e:=time.Parse(time.RFC3339,cursor);e==nil{args=append(args,t);where+=` AND "createdAt"<$3`}};q:=`SELECT "id","userId","content","visibility","location","topics","isPinned","pinnedAt","viewCount","sortOrder","createdAt","updatedAt" FROM "Moment" WHERE `+where+` ORDER BY "isPinned" DESC,"pinnedAt" DESC NULLS LAST,"createdAt" DESC LIMIT `+strconv.Itoa(limit+1);rows,e=s.db.Query(r.Context(),q,args...);if e!=nil{dbError(w,e);return};defer rows.Close();items:=[]momentRecord{};for rows.Next(){var m momentRecord;if rows.Scan(&m.ID,&m.UserID,&m.Content,&m.Visibility,&m.Location,&m.Topics,&m.Pinned,&m.PinnedAt,&m.ViewCount,&m.SortOrder,&m.CreatedAt,&m.UpdatedAt)==nil{items=append(items,m)}};more:=len(items)>limit;if more{items=items[:limit]};out:=[]map[string]any{};for _,m:=range items{base:=s.momentJSON(r.Context(),m,&u,true);a:=base["user"].(map[string]any);base["authorId"]=m.UserID;base["authorName"]=firstMomentName(a["nickname"].(*string),a["username"].(string));base["authorAvatar"]=a["avatar"];out=append(out,base)};var next any;if more{next=items[len(items)-1].CreatedAt.UTC().Format(time.RFC3339)};writeJSON(w,200,map[string]any{"moments":out,"hasMore":more,"nextCursor":next,"_ts":time.Now().UnixMilli()})
+	limit:=intQuery(r,"limit",10);if limit>20{limit=20};cursor:=groupQuery(r,"cursor"); friends:=[]string{u.ID}; rows,e:=s.db.Query(r.Context(),`SELECT "userA","userB" FROM "Friendship" WHERE "userA"=$1 OR "userB"=$1`,u.ID);if e==nil{for rows.Next(){var a,b string;if rows.Scan(&a,&b)==nil{if a==u.ID{friends=append(friends,b)}else{friends=append(friends,a)}}};rows.Close()};args:=[]any{friends};where:=`("userId"=ANY($1) AND ("userId"=$2 OR "visibility" IN ('public','friends')))`;args=append(args,u.ID);if cursor!=""{if t,e:=time.Parse(time.RFC3339,cursor);e==nil{args=append(args,t);where+=` AND "createdAt"<$3`}};q:=`SELECT "id","userId","content","visibility","location","topics","isPinned","pinnedAt","viewCount","sortOrder","createdAt","updatedAt" FROM "Moment" WHERE `+where+` ORDER BY "isPinned" DESC,"pinnedAt" DESC NULLS LAST,"createdAt" DESC LIMIT `+strconv.Itoa(limit+1);rows,e=s.db.Query(r.Context(),q,args...);if e!=nil{dbError(w,e);return};defer rows.Close();items:=[]momentRecord{};for rows.Next(){var m momentRecord;if rows.Scan(&m.ID,&m.UserID,&m.Content,&m.Visibility,&m.Location,&m.Topics,&m.Pinned,&m.PinnedAt,&m.ViewCount,&m.SortOrder,&m.CreatedAt,&m.UpdatedAt)==nil{items=append(items,m)}};more:=len(items)>limit;if more{items=items[:limit]};out:=[]map[string]any{};for _,m:=range items{out=append(out,s.momentJSON(r.Context(),m,&u,true))};var next any;if more{next=items[len(items)-1].CreatedAt.UTC().Format(time.RFC3339)};writeJSON(w,200,map[string]any{"moments":out,"hasMore":more,"nextCursor":next,"_ts":time.Now().UnixMilli()})
 }
 
 func (s *Server) momentsList(w http.ResponseWriter,r *http.Request) {
@@ -131,7 +209,7 @@ func (s *Server) momentsMy(w http.ResponseWriter,r *http.Request,u user) { rows,
 func (s *Server) momentDetail(w http.ResponseWriter,r *http.Request) { viewer:=s.optionalMomentUser(r);m,e:=s.fetchMoment(r.Context(),r.PathValue("id"));if e==pgx.ErrNoRows{writeJSON(w,404,map[string]string{"error":"动态不存在"});return};if e!=nil{dbError(w,e);return};if !s.momentVisible(r.Context(),m,viewer){writeJSON(w,404,map[string]string{"error":"动态不存在"});return};writeJSON(w,200,s.momentJSON(r.Context(),m,viewer,true)) }
 func (s *Server) momentDelete(w http.ResponseWriter,r *http.Request,u user){m,e:=s.fetchMoment(r.Context(),r.PathValue("id"));if e==pgx.ErrNoRows{writeJSON(w,404,map[string]string{"error":"动态不存在"});return};if e!=nil{dbError(w,e);return};if m.UserID!=u.ID{writeJSON(w,403,map[string]string{"error":"无权删除"});return};_,e=s.db.Exec(r.Context(),`DELETE FROM "Moment" WHERE "id"=$1`,m.ID);if e!=nil{dbError(w,e);return};writeJSON(w,200,map[string]bool{"success":true})}
 func (s *Server) momentLike(w http.ResponseWriter,r *http.Request,u user){id:=r.PathValue("id");if _,e:=s.fetchMoment(r.Context(),id);e==pgx.ErrNoRows{writeJSON(w,404,map[string]string{"error":"动态不存在"});return};var exists bool;_=s.db.QueryRow(r.Context(),`SELECT EXISTS(SELECT 1 FROM "MomentLike" WHERE "momentId"=$1 AND "userId"=$2)`,id,u.ID).Scan(&exists);if exists{_,e:=s.db.Exec(r.Context(),`DELETE FROM "MomentLike" WHERE "momentId"=$1 AND "userId"=$2`,id,u.ID);if e!=nil{dbError(w,e);return}}else{_,e:=s.db.Exec(r.Context(),`INSERT INTO "MomentLike" ("id","momentId","userId","createdAt") VALUES ($1,$2,$3,NOW())`,newID(),id,u.ID);if e!=nil{dbError(w,e);return}};likes,_:=s.momentCounts(r.Context(),id);if !exists{s.momentPublish(r.Context(),"moment_like_notify",id,u.ID,"",nil)};writeJSON(w,200,map[string]any{"liked":!exists,"likeCount":likes})}
-func (s *Server) momentComment(w http.ResponseWriter,r *http.Request,u user){var in struct{Content string `json:"content"`;ReplyToID *string `json:"replyToId"`};if decode(r,&in)!=nil||strings.TrimSpace(in.Content)==""{groupBad(w,"评论内容不能为空");return};if len(in.Content)>1000{groupBad(w,"评论内容超出长度限制（1000 字） ");return};id:=r.PathValue("id");if _,e:=s.fetchMoment(r.Context(),id);e==pgx.ErrNoRows{writeJSON(w,404,map[string]string{"error":"动态不存在"});return};cid:=newID();_,e:=s.db.Exec(r.Context(),`INSERT INTO "MomentComment" ("id","momentId","userId","content","replyToId","createdAt","updatedAt") VALUES ($1,$2,$3,$4,$5,NOW(),NOW())`,cid,id,u.ID,strings.TrimSpace(in.Content),in.ReplyToID);if e!=nil{dbError(w,e);return};comment:=map[string]any{"id":cid,"momentId":id,"userId":u.ID,"content":strings.TrimSpace(in.Content),"replyToId":in.ReplyToID,"createdAt":time.Now(),"user":map[string]any{"id":u.ID,"username":u.Username,"nickname":u.Nickname,"avatar":u.Avatar}};s.momentPublish(r.Context(),"moment_comment_notify",id,u.ID,strings.TrimSpace(in.Content),in.ReplyToID);writeJSON(w,200,map[string]any{"success":true,"comment":comment})}
+func (s *Server) momentComment(w http.ResponseWriter,r *http.Request,u user){var in struct{Content string `json:"content"`;ReplyToID *string `json:"replyToId"`};if decode(r,&in)!=nil||strings.TrimSpace(in.Content)==""{groupBad(w,"评论内容不能为空");return};if len(in.Content)>1000{groupBad(w,"评论内容超出长度限制（1000 字） ");return};id:=r.PathValue("id");if _,e:=s.fetchMoment(r.Context(),id);e==pgx.ErrNoRows{writeJSON(w,404,map[string]string{"error":"动态不存在"});return};cid:=newID();_,e:=s.db.Exec(r.Context(),`INSERT INTO "MomentComment" ("id","momentId","userId","content","replyToId","createdAt","updatedAt") VALUES ($1,$2,$3,$4,$5,NOW(),NOW())`,cid,id,u.ID,strings.TrimSpace(in.Content),in.ReplyToID);if e!=nil{dbError(w,e);return};comment:=map[string]any{"id":cid,"momentId":id,"userId":u.ID,"content":strings.TrimSpace(in.Content),"replyToId":in.ReplyToID,"createdAt":time.Now(),"user":map[string]any{"id":u.ID,"username":u.Username,"nickname":u.Nickname,"avatar":safeAvatarUrl(deref(u.Avatar))}};s.momentPublish(r.Context(),"moment_comment_notify",id,u.ID,strings.TrimSpace(in.Content),in.ReplyToID);writeJSON(w,200,map[string]any{"success":true,"comment":comment})}
 func (s *Server) momentCommentDelete(w http.ResponseWriter,r *http.Request,u user){var uid,owner string;e:=s.db.QueryRow(r.Context(),`SELECT c."userId",m."userId" FROM "MomentComment" c JOIN "Moment" m ON m."id"=c."momentId" WHERE c."id"=$1 AND c."momentId"=$2`,r.PathValue("commentId"),r.PathValue("momentId")).Scan(&uid,&owner);if e==pgx.ErrNoRows{writeJSON(w,404,map[string]string{"error":"评论不存在"});return};if e!=nil{dbError(w,e);return};if uid!=u.ID&&owner!=u.ID{writeJSON(w,403,map[string]string{"error":"无权删除"});return};_,e=s.db.Exec(r.Context(),`DELETE FROM "MomentComment" WHERE "id"=$1`,r.PathValue("commentId"));if e!=nil{dbError(w,e);return};writeJSON(w,200,map[string]bool{"success":true})}
 func (s *Server) momentPin(w http.ResponseWriter,r *http.Request,u user){var in struct{Pin bool `json:"pin"`};if decode(r,&in)!=nil{groupBad(w,"请求无效");return};m,e:=s.fetchMoment(r.Context(),r.PathValue("id"));if e==pgx.ErrNoRows{writeJSON(w,404,map[string]string{"error":"动态不存在"});return};if e!=nil{dbError(w,e);return};if m.UserID!=u.ID{writeJSON(w,403,map[string]string{"error":"只有作者可以置顶"});return};if in.Pin{_,_=s.db.Exec(r.Context(),`UPDATE "Moment" SET "isPinned"=false,"pinnedAt"=NULL,"updatedAt"=NOW() WHERE "userId"=$1 AND "isPinned"=true`,u.ID)};var t any;if in.Pin{t=time.Now()};_,e=s.db.Exec(r.Context(),`UPDATE "Moment" SET "isPinned"=$2,"pinnedAt"=$3,"updatedAt"=NOW() WHERE "id"=$1`,m.ID,in.Pin,t);if e!=nil{dbError(w,e);return};updated,_:=s.fetchMoment(r.Context(),m.ID);writeJSON(w,200,map[string]any{"success":true,"moment":s.momentJSON(r.Context(),updated,&u,false)})}
 func (s *Server) momentsReorder(w http.ResponseWriter,r *http.Request,u user){var in struct{IDs []string `json:"ids"`};if decode(r,&in)!=nil||len(in.IDs)==0{groupBad(w,"请提供排序列表");return};tx,e:=s.db.Begin(r.Context());if e!=nil{dbError(w,e);return};defer tx.Rollback(r.Context());for i,id:=range in.IDs{_,e=tx.Exec(r.Context(),`UPDATE "Moment" SET "sortOrder"=$3,"updatedAt"=NOW() WHERE "id"=$1 AND "userId"=$2`,id,u.ID,i+1);if e!=nil{dbError(w,e);return}};if e=tx.Commit(r.Context());e!=nil{dbError(w,e);return};writeJSON(w,200,map[string]bool{"success":true})}
