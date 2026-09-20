@@ -15,6 +15,7 @@
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import prisma from './db.js';
+import { resolveSigningPublicKey } from './prekey-bundle.js';
 
 const router = Router();
 
@@ -250,7 +251,8 @@ router.post('/verify-message', async (req: Request, res: Response) => {
  * body: {
  *   userId: string,
  *   registrationId: number,
- *   identityKey: string,       // Base64 编码的身份公钥
+ *   identityKey: string,       // Base64 编码的 ECDH 身份公钥
+ *   signingPublicKey?: string, // Base64 编码的 ECDSA 签名公钥（Signed PreKey 验签）
  *   signedPreKey: {
  *     keyId: number,
  *     publicKey: string,       // Base64
@@ -260,20 +262,30 @@ router.post('/verify-message', async (req: Request, res: Response) => {
  * }
  */
 router.post('/register-bundle', async (req: Request, res: Response) => {
-  const { userId, registrationId, identityKey, signedPreKey, preKeys } = req.body;
+  const { userId, registrationId, identityKey, signingPublicKey, signedPreKey, preKeys } = req.body;
 
   if (!userId || !identityKey || !signedPreKey) {
     return res.status(400).json({ error: '缺少必要参数' });
   }
 
   try {
-    // 存储身份公钥和签名预密钥
+    const existingBundle = await prisma.systemConfig.findUnique({
+      where: { key: `e2ee:bundle:${userId}` },
+    });
+    const storedSigningPublicKey = resolveSigningPublicKey(
+      signingPublicKey,
+      identityKey,
+      existingBundle?.value,
+    );
+
+    // 存储 ECDH 身份公钥、ECDSA 签名公钥和签名预密钥
     await prisma.systemConfig.upsert({
       where: { key: `e2ee:bundle:${userId}` },
       update: {
         value: JSON.stringify({
           registrationId,
           identityKey,
+          signingPublicKey: storedSigningPublicKey,
           signedPreKey,
           updatedAt: new Date().toISOString(),
         }),
@@ -283,6 +295,7 @@ router.post('/register-bundle', async (req: Request, res: Response) => {
         value: JSON.stringify({
           registrationId,
           identityKey,
+          signingPublicKey: storedSigningPublicKey,
           signedPreKey,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
@@ -368,6 +381,7 @@ router.get('/get-bundle', async (req: Request, res: Response) => {
     res.json({
       registrationId: bundle.registrationId,
       identityKey: bundle.identityKey,
+      signingPublicKey: bundle.signingPublicKey || null,
       signedPreKey: bundle.signedPreKey,
       preKey: oneTimePreKey || null,
     });
