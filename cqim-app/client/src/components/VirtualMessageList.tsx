@@ -162,7 +162,8 @@ export const VirtualMessageList = memo(forwardRef<VirtualMessageListHandle, Virt
   const prependScrollRef = useRef<{ height: number; top: number } | null>(null);
   const isLoadingMoreRef = useRef(false);
   const isAtBottomRef = useRef(true);
-  const prevLengthRef = useRef(safeMessages.length);
+  // Must not read `safeMessages` here: it is declared below and would TDZ-crash every render.
+  const prevLengthRef = useRef(0);
   const rafRef = useRef<number | null>(null);
   const saveAnchorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingAnchorRef = useRef<string | null | undefined>(undefined);
