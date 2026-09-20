@@ -195,6 +195,55 @@ const syncStateSchema: any = {
 } as const;
 
 let dbPromise: Promise<CqimLocalDb> | null = null;
+const FALLBACK_CACHE_PREFIX = 'cqim-private-cache-v1:';
+
+function fallbackCacheKey(chatId: string, ownerId: string) {
+  return `${FALLBACK_CACHE_PREFIX}${ownerId}:${chatId}`;
+}
+
+function readFallbackMessages(chatId: string, ownerId: string): Message[] {
+  try {
+    const raw = localStorage.getItem(fallbackCacheKey(chatId, ownerId));
+    const value = raw ? JSON.parse(raw) : [];
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeFallbackMessages(messages: Message[], chatId: string, ownerId: string) {
+  try {
+    const existing = readFallbackMessages(chatId, ownerId);
+    const byId = new Map(existing.map(message => [message.id, message]));
+    for (const message of messages) {
+      // 只缓存已经解密的本地展示稿，不把服务端密文当作明文缓存。
+      if (message.decryptionStatus === 'ciphertext') continue;
+      byId.set(message.id, message);
+    }
+    localStorage.setItem(fallbackCacheKey(chatId, ownerId), JSON.stringify(
+      Array.from(byId.values()).sort((a, b) => a.timestamp - b.timestamp).slice(-500),
+    ));
+  } catch (error) {
+    console.warn('[localdb] 明文缓存兜底写入失败:', error);
+  }
+}
+
+function groupMessagesByChat(messages: Message[]): Map<string, Message[]> {
+  const grouped = new Map<string, Message[]>();
+  for (const message of messages) {
+    const list = grouped.get(message.chatId) || [];
+    list.push(message);
+    grouped.set(message.chatId, list);
+  }
+  return grouped;
+}
+
+function withTimeout<T>(promise: Promise<T>, ms = 1500): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error('localdb_timeout')), ms)),
+  ]);
+}
 
 async function getDb(): Promise<CqimLocalDb> {
   if (!dbPromise) {
@@ -316,7 +365,10 @@ export async function persistChats(chats: Chat[]) {
 const MAX_MESSAGES_PER_CONVERSATION = 500;
 
 export async function persistPrivateMessages(messages: Message[], ownerId = 'legacy') {
-  const db = await getDb();
+  for (const [chatId, chatMessages] of groupMessagesByChat(messages)) {
+    writeFallbackMessages(chatMessages, chatId, ownerId);
+  }
+  const db = await withTimeout(getDb());
   const byChat = new Map<string, Message[]>();
   for (const message of messages) {
     await db.privateMessages.upsert(normalizePrivateMessage(message, ownerId));
@@ -344,11 +396,16 @@ export async function loadChatsFromLocalDb() {
 }
 
 export async function loadPrivateMessagesFromLocalDb(chatId: string, ownerId = 'legacy') {
-  const db = await getDb();
-  const docs = await db.privateMessages.find({ selector: { chatId, ownerId } }).exec();
-  return docs
-    .map((doc: any) => denormalizePrivateMessage(doc.toJSON() as PrivateMessageDoc))
-    .sort((a: Message, b: Message) => a.timestamp - b.timestamp);
+  try {
+    const db = await withTimeout(getDb());
+    const docs = await db.privateMessages.find({ selector: { chatId, ownerId } }).exec();
+    const local = docs
+      .map((doc: any) => denormalizePrivateMessage(doc.toJSON() as PrivateMessageDoc))
+      .sort((a: Message, b: Message) => a.timestamp - b.timestamp);
+    return local.length > 0 ? local : readFallbackMessages(chatId, ownerId);
+  } catch {
+    return readFallbackMessages(chatId, ownerId);
+  }
 }
 
 export async function loadGroupMessagesFromLocalDb(groupId: string, ownerId = 'legacy') {
