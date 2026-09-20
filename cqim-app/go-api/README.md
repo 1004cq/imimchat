@@ -1,6 +1,6 @@
 # Go API
 
-独立 Go 1.22+ HTTP 服务，使用标准库 `net/http`、`pgx` 和 `go-redis`。它与现有 Node 服务共用 PostgreSQL、Redis 与 `UserSession`，默认监听 `127.0.0.1:8089`。没有修改 Node、Nginx 或 Prisma，默认 `/api` 仍由 Node 处理。
+独立 Go 1.22+ HTTP 服务，使用标准库 `net/http`、`pgx` 和 `go-redis`。它与现有 Node 服务共用 PostgreSQL、Redis 与 `UserSession`。没有修改 Node、Nginx 或 Prisma，默认 `/api` 仍由 Node 处理。
 
 ## 编译与启动
 
@@ -22,23 +22,25 @@ Node 当前用户鉴权使用 `Authorization: Bearer <UserSession.token>`；没�
 
 ```bash
 TOKEN='<现有 UserSession token>'
-curl -i -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/auth/me
-curl -i -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8089/api/me
+NODE_API_BASE='<Node API base URL>'
+GO_API_BASE='<Go API base URL>'
+curl -i -H "Authorization: Bearer $TOKEN" "$NODE_API_BASE/api/auth/me"
+curl -i -H "Authorization: Bearer $TOKEN" "$GO_API_BASE/api/me"
 
-curl -i -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/friend/list
-curl -i -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8089/api/friend/list
+curl -i -H "Authorization: Bearer $TOKEN" "$NODE_API_BASE/api/friend/list"
+curl -i -H "Authorization: Bearer $TOKEN" "$GO_API_BASE/api/friend/list"
 
-curl -i -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/chat/list
-curl -i -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8089/api/chat/list
+curl -i -H "Authorization: Bearer $TOKEN" "$NODE_API_BASE/api/chat/list"
+curl -i -H "Authorization: Bearer $TOKEN" "$GO_API_BASE/api/chat/list"
 ```
 
 健康检查：
 
 ```bash
-curl -i http://127.0.0.1:8089/api/health
+curl -i "$GO_API_BASE/api/health"
 ```
 
-## 已实现（阶段 A/B）
+## 已实现（阶段 A/B/C）
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
@@ -58,13 +60,16 @@ curl -i http://127.0.0.1:8089/api/health
 | POST | `/api/chat/send` | JSON 加密私聊发送入口 |
 | POST | `/api/chat/{chatId}/messages` | 加密私聊消息写入 |
 | GET | `/api/chat/{chatId}/messages` | 私聊历史分页，仅返回存储的信封字段 |
+| POST | `/api/apns/token` | 注册或更新 APNs alert token |
+| POST | `/api/apns/voip-token` | 注册或更新 APNs VoIP token |
+| DELETE | `/api/apns/token` | 按 Node 同样范围删除当前用户 token |
 
 私聊发送仅接受 `msgType=encrypted`。成功写入后会更新 `Chat.lastMessageAt`、将会话预览固定为 `🔒 [加密消息]`，并向 Redis `cqim:im:push` 发布与 Node 相同的 `{ userId, payload }` 信封，供仍在运行的网关投递。
 
-离线 APNs/Web Push 在此阶段**仍由 Node 执行**；Go 不会假实现推送，也不会接入个推。
+离线 APNs 与 Web Push 已由 Go API 真实发送：APNs 按设备的 sandbox/production 环境与 alert/VoIP topic 发送，失效设备仅删除对应行；Web Push 使用 VAPID 并会清理失效订阅。私聊唤醒通知只带会话/消息路由数据，不包含明文。缺少 APNs P8 配置时会记录 `no_p8_keys`，不会报告发送成功。不会接入个推。
 
 ## 未迁移（阶段 C/D）
 
-媒体/MinIO、APNs、Web Push、认证注册登录验证码、群聊、朋友圈、贴纸、二维码、管理后台及其余 `/api/*` 路由尚未迁移。
+媒体/MinIO、认证注册登录验证码、群聊、朋友圈、贴纸、二维码、管理后台及其余 `/api/*` 路由尚未迁移。
 
-Nginx 未切流；Node `cqim-app/server` 保持可部署，默认 `/api` 没有切到 `:8089`。
+Nginx 未切流；Node `cqim-app/server` 保持可部署，生产流量仍由 Node 处理默认 `/api`。
