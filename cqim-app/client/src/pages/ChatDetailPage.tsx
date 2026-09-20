@@ -361,19 +361,27 @@ export default function ChatDetailPage() {
         }
 
         for (const [senderId, encryptedMessages] of bySender) {
-          const results = e2eeProxy.isReady
-            ? await e2eeProxy.signalBatchDecrypt(senderId, encryptedMessages)
-            : await (async () => {
-                const fallbackResults: Array<{ id: string; plaintext?: string; error?: string; success: boolean }> = [];
-                for (const item of encryptedMessages) {
-                  try {
-                    fallbackResults.push({ id: item.id, plaintext: await e2ee.decrypt(senderId, item.envelope), success: true });
-                  } catch (error) {
-                    fallbackResults.push({ id: item.id, error: error instanceof Error ? error.message : String(error), success: false });
+          let results: Array<{ id: string; plaintext?: string; error?: string; success: boolean }>;
+          try {
+            results = e2eeProxy.isReady
+              ? await e2eeProxy.signalBatchDecrypt(senderId, encryptedMessages)
+              : await (async () => {
+                  const fallbackResults: Array<{ id: string; plaintext?: string; error?: string; success: boolean }> = [];
+                  for (const item of encryptedMessages) {
+                    try {
+                      fallbackResults.push({ id: item.id, plaintext: await e2ee.decrypt(senderId, item.envelope), success: true });
+                    } catch (error) {
+                      fallbackResults.push({ id: item.id, error: error instanceof Error ? error.message : String(error), success: false });
+                    }
                   }
-                }
-                return fallbackResults;
-              })();
+                  return fallbackResults;
+                })();
+          } catch (error) {
+            // Worker 初始化/批处理失败不能中断历史列表；保留密文并让单条消息进入可见失败态。
+            const reason = error instanceof Error ? error.message : String(error);
+            console.error(`[E2EE] 历史批量解密失败 sender=${senderId}:`, error);
+            results = encryptedMessages.map(item => ({ id: item.id, error: reason, success: false }));
+          }
           for (const result of results) decryptResults.set(result.id, result);
         }
 
