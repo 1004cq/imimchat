@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Phone, Video, Mic, Loader2, Copy, CornerUpRight, Trash2, Star, X, Shield, Ban, Camera, Clock, Check, CheckCheck } from 'lucide-react';
+import { Phone, Video, Mic, Loader2, Copy, CornerUpRight, Trash2, Star, X, Shield, Ban, Camera, Clock, Check, CheckCheck, Lock } from 'lucide-react';
 import { toast } from 'sonner';
 import { DoveAvatar } from '@/components/DoveAvatar';
 import { VoiceMessageBubble } from '@/components/VoiceMessageBubble';
