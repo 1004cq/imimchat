@@ -101,7 +101,7 @@ curl -i "$GO_API_BASE/api/health"
 | POST | `/api/group/qrcode`, `/api/group/invite-members` | 群二维码/批量邀请 |
 | GET/POST | `/api/group/invites`, `/api/group/invite-accept/:inviteId`, `/api/group/invite-reject/:inviteId` | 群邀请处理 |
 | POST | `/api/group/burn-message` | 群阅后即焚销毁通知 |
-| GET | `/api/moments/feed`, `/api/moments`, `/api/moments/my`, `/api/moments/:id` | 好友 Feed、公开列表、我的动态、详情与可见性过滤 |
+| GET | `/api/moments/feed`, `/api/moments`, `/api/moments/my`, `/api/moments/:id` | 好友 Feed（`/feed` 与已登录的 `GET /api/moments`）、未登录公开列表、`?userId=` 资料页可见性、我的动态、详情 |
 | POST | `/api/moments`, `/api/moments/:id/like`, `/api/moments/:id/comments`, `/api/moments/:id/pin` | 发布、点赞、评论、置顶 |
 | PUT | `/api/moments/:id`, `/api/moments/reorder` | 编辑可见性/内容/位置、排序 |
 | DELETE | `/api/moments/:id`, `/api/moments/:momentId/comments/:commentId` | 删除动态或评论 |

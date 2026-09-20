@@ -166,11 +166,61 @@ func firstMomentName(nick, username string) string {
 	return username
 }
 
+// momentMapString accepts JSON-map nickname/username/avatar values that may be
+// a string or *string (Prisma-style nullable columns). A hard *string assert
+// panics when the value is a plain string.
+func momentMapString(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case *string:
+		if x != nil {
+			return *x
+		}
+	}
+	return ""
+}
+
+func momentAuthorFields(author map[string]any) (name, avatar string) {
+	name = firstMomentName(momentMapString(author["nickname"]), momentMapString(author["username"]))
+	avatar = safeAvatarUrl(momentMapString(author["avatar"]))
+	return name, avatar
+}
+
+// momentsListMode chooses GET /api/moments query semantics.
+// Authenticated list without ?userId= is the friends timeline (Node clients
+// treat GET /api/moments as that feed). ?userId= keeps profile-page rules.
+func momentsListMode(viewer *user, userID string) string {
+	if userID != "" {
+		return "profile"
+	}
+	if viewer != nil {
+		return "friends"
+	}
+	return "public"
+}
+
+func momentsFriendsWhere() string {
+	return `("userId"=ANY($1) AND ("userId"=$2 OR "visibility" IN ('public','friends')))`
+}
+
+func momentsProfileWhere(viewer *user, userID string) (string, []any) {
+	args := []any{userID}
+	where := `"userId"=$1`
+	if viewer == nil {
+		where += ` AND "visibility"='public'`
+	} else if viewer.ID != userID {
+		args = append(args, viewer.ID)
+		where += ` AND ("visibility"='public' OR ("visibility"='friends' AND EXISTS(SELECT 1 FROM "Friendship" f WHERE (f."userA"="Moment"."userId" AND f."userB"=$2) OR (f."userB"="Moment"."userId" AND f."userA"=$2))))`
+	}
+	return where, args
+}
+
 func (s *Server) momentJSON(ctx context.Context, m momentRecord, viewer *user, detailed bool) map[string]any {
 	likes, comments := s.momentCounts(ctx, m.ID)
 	author := s.momentAuthor(ctx, m.UserID)
-	authorName := firstMomentName(author["nickname"].(string), author["username"].(string))
-	authorAvatar := author["avatar"].(string)
+	authorName, authorAvatar := momentAuthorFields(author)
+	author["avatar"] = authorAvatar
 	var pinnedAt any
 	if m.PinnedAt != nil {
 		pinnedAt = m.PinnedAt.UnixMilli()
@@ -192,12 +242,125 @@ func (s *Server) momentJSON(ctx context.Context, m momentRecord, viewer *user, d
 	return out
 }
 
-func (s *Server) momentsFeed(w http.ResponseWriter,r *http.Request,u user) {
-	limit:=intQuery(r,"limit",10);if limit>20{limit=20};cursor:=groupQuery(r,"cursor"); friends:=[]string{u.ID}; rows,e:=s.db.Query(r.Context(),`SELECT "userA","userB" FROM "Friendship" WHERE "userA"=$1 OR "userB"=$1`,u.ID);if e==nil{for rows.Next(){var a,b string;if rows.Scan(&a,&b)==nil{if a==u.ID{friends=append(friends,b)}else{friends=append(friends,a)}}};rows.Close()};args:=[]any{friends};where:=`("userId"=ANY($1) AND ("userId"=$2 OR "visibility" IN ('public','friends')))`;args=append(args,u.ID);if cursor!=""{if t,e:=time.Parse(time.RFC3339,cursor);e==nil{args=append(args,t);where+=` AND "createdAt"<$3`}};q:=`SELECT "id","userId","content","visibility","location","topics","isPinned","pinnedAt","viewCount","sortOrder","createdAt","updatedAt" FROM "Moment" WHERE `+where+` ORDER BY "isPinned" DESC,"pinnedAt" DESC NULLS LAST,"createdAt" DESC LIMIT `+strconv.Itoa(limit+1);rows,e=s.db.Query(r.Context(),q,args...);if e!=nil{dbError(w,e);return};defer rows.Close();items:=[]momentRecord{};for rows.Next(){var m momentRecord;if rows.Scan(&m.ID,&m.UserID,&m.Content,&m.Visibility,&m.Location,&m.Topics,&m.Pinned,&m.PinnedAt,&m.ViewCount,&m.SortOrder,&m.CreatedAt,&m.UpdatedAt)==nil{items=append(items,m)}};more:=len(items)>limit;if more{items=items[:limit]};out:=[]map[string]any{};for _,m:=range items{out=append(out,s.momentJSON(r.Context(),m,&u,true))};var next any;if more{next=items[len(items)-1].CreatedAt.UTC().Format(time.RFC3339)};writeJSON(w,200,map[string]any{"moments":out,"hasMore":more,"nextCursor":next,"_ts":time.Now().UnixMilli()})
+func (s *Server) momentsFeed(w http.ResponseWriter, r *http.Request, u user) {
+	s.respondFriendMoments(w, r, u)
 }
 
-func (s *Server) momentsList(w http.ResponseWriter,r *http.Request) {
-	viewer:=s.optionalMomentUser(r); uid:=groupQuery(r,"userId");limit:=intQuery(r,"limit",10);if limit>20{limit=20};cursor:=groupQuery(r,"cursor");args:=[]any{};where:=`"visibility"='public'`;if uid!=""{args=append(args,uid);where=`"userId"=$1`;if viewer==nil{where+=` AND "visibility"='public'`}else if viewer.ID!=uid{args=append(args,viewer.ID);where+=` AND ("visibility"='public' OR ("visibility"='friends' AND EXISTS(SELECT 1 FROM "Friendship" f WHERE (f."userA"="Moment"."userId" AND f."userB"=$2) OR (f."userB"="Moment"."userId" AND f."userA"=$2))))`}};if cursor!=""{if t,e:=time.Parse(time.RFC3339,cursor);e==nil{args=append(args,t);where+=` AND "createdAt"<$`+strconv.Itoa(len(args))}};q:=`SELECT "id","userId","content","visibility","location","topics","isPinned","pinnedAt","viewCount","sortOrder","createdAt","updatedAt" FROM "Moment" WHERE `+where+` ORDER BY "isPinned" DESC,"pinnedAt" DESC NULLS LAST,"createdAt" DESC LIMIT `+strconv.Itoa(limit+1);rows,e:=s.db.Query(r.Context(),q,args...);if e!=nil{dbError(w,e);return};defer rows.Close();items:=[]momentRecord{};for rows.Next(){var m momentRecord;if rows.Scan(&m.ID,&m.UserID,&m.Content,&m.Visibility,&m.Location,&m.Topics,&m.Pinned,&m.PinnedAt,&m.ViewCount,&m.SortOrder,&m.CreatedAt,&m.UpdatedAt)==nil{items=append(items,m)}};more:=len(items)>limit;if more{items=items[:limit]};out:=[]map[string]any{};for _,m:=range items{out=append(out,s.momentJSON(r.Context(),m,viewer,uid!=""))};var next any;if more{next=items[len(items)-1].CreatedAt.UTC().Format(time.RFC3339)};result:=map[string]any{"moments":out,"hasMore":more,"nextCursor":next,"_ts":time.Now().UnixMilli()};if uid!=""{var total int;_=s.db.QueryRow(r.Context(),`SELECT COUNT(*) FROM "Moment" WHERE "userId"=$1 AND "visibility"='public'`,uid).Scan(&total);result["total"]=total;result["user"]=s.momentAuthor(r.Context(),uid)};writeJSON(w,200,result)
+func (s *Server) respondFriendMoments(w http.ResponseWriter, r *http.Request, u user) {
+	limit := intQuery(r, "limit", 10)
+	if limit > 20 {
+		limit = 20
+	}
+	cursor := groupQuery(r, "cursor")
+	friends := []string{u.ID}
+	rows, e := s.db.Query(r.Context(), `SELECT "userA","userB" FROM "Friendship" WHERE "userA"=$1 OR "userB"=$1`, u.ID)
+	if e == nil {
+		for rows.Next() {
+			var a, b string
+			if rows.Scan(&a, &b) == nil {
+				if a == u.ID {
+					friends = append(friends, b)
+				} else {
+					friends = append(friends, a)
+				}
+			}
+		}
+		rows.Close()
+	}
+	args := []any{friends, u.ID}
+	where := momentsFriendsWhere()
+	if cursor != "" {
+		if t, err := time.Parse(time.RFC3339, cursor); err == nil {
+			args = append(args, t)
+			where += ` AND "createdAt"<$3`
+		}
+	}
+	q := `SELECT "id","userId","content","visibility","location","topics","isPinned","pinnedAt","viewCount","sortOrder","createdAt","updatedAt" FROM "Moment" WHERE ` + where + ` ORDER BY "isPinned" DESC,"pinnedAt" DESC NULLS LAST,"createdAt" DESC LIMIT ` + strconv.Itoa(limit+1)
+	rows, e = s.db.Query(r.Context(), q, args...)
+	if e != nil {
+		dbError(w, e)
+		return
+	}
+	defer rows.Close()
+	items := []momentRecord{}
+	for rows.Next() {
+		var m momentRecord
+		if rows.Scan(&m.ID, &m.UserID, &m.Content, &m.Visibility, &m.Location, &m.Topics, &m.Pinned, &m.PinnedAt, &m.ViewCount, &m.SortOrder, &m.CreatedAt, &m.UpdatedAt) == nil {
+			items = append(items, m)
+		}
+	}
+	more := len(items) > limit
+	if more {
+		items = items[:limit]
+	}
+	out := []map[string]any{}
+	for _, m := range items {
+		out = append(out, s.momentJSON(r.Context(), m, &u, true))
+	}
+	var next any
+	if more {
+		next = items[len(items)-1].CreatedAt.UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, 200, map[string]any{"moments": out, "hasMore": more, "nextCursor": next, "_ts": time.Now().UnixMilli()})
+}
+
+func (s *Server) momentsList(w http.ResponseWriter, r *http.Request) {
+	viewer := s.optionalMomentUser(r)
+	uid := groupQuery(r, "userId")
+	if momentsListMode(viewer, uid) == "friends" {
+		s.respondFriendMoments(w, r, *viewer)
+		return
+	}
+	limit := intQuery(r, "limit", 10)
+	if limit > 20 {
+		limit = 20
+	}
+	cursor := groupQuery(r, "cursor")
+	args := []any{}
+	where := `"visibility"='public'`
+	if uid != "" {
+		where, args = momentsProfileWhere(viewer, uid)
+	}
+	if cursor != "" {
+		if t, err := time.Parse(time.RFC3339, cursor); err == nil {
+			args = append(args, t)
+			where += ` AND "createdAt"<$` + strconv.Itoa(len(args))
+		}
+	}
+	q := `SELECT "id","userId","content","visibility","location","topics","isPinned","pinnedAt","viewCount","sortOrder","createdAt","updatedAt" FROM "Moment" WHERE ` + where + ` ORDER BY "isPinned" DESC,"pinnedAt" DESC NULLS LAST,"createdAt" DESC LIMIT ` + strconv.Itoa(limit+1)
+	rows, e := s.db.Query(r.Context(), q, args...)
+	if e != nil {
+		dbError(w, e)
+		return
+	}
+	defer rows.Close()
+	items := []momentRecord{}
+	for rows.Next() {
+		var m momentRecord
+		if rows.Scan(&m.ID, &m.UserID, &m.Content, &m.Visibility, &m.Location, &m.Topics, &m.Pinned, &m.PinnedAt, &m.ViewCount, &m.SortOrder, &m.CreatedAt, &m.UpdatedAt) == nil {
+			items = append(items, m)
+		}
+	}
+	more := len(items) > limit
+	if more {
+		items = items[:limit]
+	}
+	out := []map[string]any{}
+	for _, m := range items {
+		out = append(out, s.momentJSON(r.Context(), m, viewer, uid != ""))
+	}
+	var next any
+	if more {
+		next = items[len(items)-1].CreatedAt.UTC().Format(time.RFC3339)
+	}
+	result := map[string]any{"moments": out, "hasMore": more, "nextCursor": next, "_ts": time.Now().UnixMilli()}
+	if uid != "" {
+		var total int
+		_ = s.db.QueryRow(r.Context(), `SELECT COUNT(*) FROM "Moment" WHERE "userId"=$1 AND "visibility"='public'`, uid).Scan(&total)
+		result["total"] = total
+		result["user"] = s.momentAuthor(r.Context(), uid)
+	}
+	writeJSON(w, 200, result)
 }
 
 func (s *Server) momentsCreate(w http.ResponseWriter,r *http.Request,u user) {
