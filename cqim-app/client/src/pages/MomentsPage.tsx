@@ -12,7 +12,7 @@ import { authApi } from '@/lib/authFetch';
 import { setupWeChatVideoAutoPlayHack } from '@/lib/momentsPreloader';
 import { useMomentsFeed } from '@/hooks/useMomentsFeed';
 import type { VisibilityType } from '@/components/moments/types';
-import { clearFeedCache, MOMENTS_COVER_STORAGE_KEY } from '@/components/moments/utils';
+import { clearFeedCache, MOMENTS_COVER_STORAGE_KEY, MOMENTS_HEADER_AVATAR_ATTR, shouldOpenMomentsCoverPicker } from '@/components/moments/utils';
 import MomentCard from '@/components/moments/MomentCard';
 import MomentSkeleton from '@/components/moments/MomentSkeleton';
 import ImageLightbox from '@/components/moments/ImageLightbox';
@@ -174,7 +174,10 @@ export default function MomentsPage() {
               marginBottom: "2.5rem",
               cursor: "pointer",
             }}
-            onClick={() => coverInputRef.current?.click()}
+            onClick={(e) => {
+              if (!shouldOpenMomentsCoverPicker(e.target as Element | null)) return;
+              coverInputRef.current?.click();
+            }}
           >
             {/* 固定顶部导航栏 */}
             <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: 56, zIndex: 20 }}>
@@ -201,22 +204,30 @@ export default function MomentsPage() {
               </div>
             </div>
 
-            {/* 右下角：昵称 + 头像 */}
+            {/* 右下角：昵称 + 头像（头像仅展示，不触发封面/头像更换） */}
             <div style={{ position: "absolute", right: 16, bottom: -28, display: "flex", flexDirection: "row", alignItems: "flex-end" }}>
               <span style={{ color: "#fff", marginRight: 12, marginBottom: 16, fontSize: 16, fontWeight: 600, textShadow: "0 1px 4px rgba(0,0,0,0.5)", whiteSpace: "nowrap", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }}>
                 {currentUserName}
               </span>
-              <div style={{ width: 64, height: 64, borderRadius: 6, overflow: "hidden", flexShrink: 0, background: "#e5e7eb", border: "2px solid #fff" }}>
+              <div
+                {...{ [MOMENTS_HEADER_AVATAR_ATTR]: '' }}
+                role="img"
+                aria-label={currentUserName}
+                onClick={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
+                style={{ width: 64, height: 64, borderRadius: 6, overflow: "hidden", flexShrink: 0, background: "#e5e7eb", border: "2px solid #fff", cursor: "default", position: "relative", zIndex: 1 }}
+              >
                 {currentUserAvatar ? (
-                  <img src={currentUserAvatar} alt={currentUserName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  <img src={currentUserAvatar} alt="" draggable={false} style={{ width: "100%", height: "100%", objectFit: "cover", pointerEvents: "none" }} />
                 ) : (
-                  <DoveAvatar name={currentUserName} id={currentUserId} avatar={currentUserAvatar} size="lg" />
+                  <span style={{ pointerEvents: "none", display: "block", width: "100%", height: "100%" }}>
+                    <DoveAvatar name={currentUserName} id={currentUserId} avatar={currentUserAvatar} size="lg" />
+                  </span>
                 )}
               </div>
             </div>
-
-            <input ref={coverInputRef} type="file" accept="image/*" className="hidden" onChange={handleCoverChange} />
           </header>
+          <input ref={coverInputRef} type="file" accept="image/*" className="hidden" onChange={handleCoverChange} />
 
           {/* ===== 动态列表区域 ===== */}
           <div style={{ paddingTop: 8 }}>
