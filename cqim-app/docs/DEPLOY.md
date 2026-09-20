@@ -39,7 +39,7 @@ cp .env.example .env
 # 等价于：docker compose up -d --build && docker compose ps
 ```
 
-`scripts/deploy.sh` 会拒绝空的 `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` / `DATABASE_URL`，以及 `file:./dev.db`。
+`scripts/deploy.sh` 会拒绝空的 `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` / `DATABASE_URL`，以及 `file:./dev.db`。它还会创建 `./data` 并尽量把属主改成镜像里的 `nodeuser`（uid 999），否则 Node 无法在 `/app/data/stickers` 建目录。
 
 Node 容器的启动脚本会在启动服务前执行 `prisma migrate deploy`。如果迁移失败，Node 不会启动，先查看 `docker compose logs cqim`。
 
@@ -109,7 +109,7 @@ curl --http1.1 -i -N \
   -H 'Connection: Upgrade' \
   -H 'Upgrade: websocket' \
   -H 'Sec-WebSocket-Version: 13' \
-  -H 'Sec-WebSocket-Key: SGVsbG9XZWJTb2NrZXQ=' \
+  -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
   http://127.0.0.1/signal
 # 预期 HTTP/1.1 101 Switching Protocols；若需要 token，追加现网认证参数。
 # 生产 HTTPS：把 URL 换成 https://your-domain.example/signal

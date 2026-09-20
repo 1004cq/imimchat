@@ -49,6 +49,10 @@ if [[ "$DATABASE_URL" != postgresql://* && "$DATABASE_URL" != postgres://* ]]; t
 fi
 
 mkdir -p certbot/www certbot/conf data
+# Image runs as nodeuser (uid 999). A host bind of ./data must be writable.
+if ! chown -R 999:999 data 2>/dev/null; then
+  chmod 777 data
+fi
 
 echo "==> docker compose up -d --build"
 docker compose up -d --build
@@ -57,9 +61,11 @@ echo
 echo "==> docker compose ps"
 docker compose ps
 
-echo
-echo "When nginx and cqim are up, probe the Node API through Nginx:"
-echo "  curl -fsS http://127.0.0.1/api/health"
-echo
-echo "MinIO is not published on the host. Probe inside the container:"
-echo "  docker compose exec minio /usr/local/bin/busybox wget -q -O /dev/null http://127.0.0.1:9000/minio/health/live && echo minio-live"
+cat <<'EOF'
+
+When nginx and cqim are up, probe the Node API through Nginx:
+  curl -fsS http://127.0.0.1/api/health
+
+MinIO is not published on the host. Probe inside the container:
+  docker compose exec minio /usr/local/bin/busybox wget -q -O /dev/null http://127.0.0.1:9000/minio/health/live && echo minio-live
+EOF

@@ -39,6 +39,9 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Runtime bind mount for compose (stickers, etc.)
+/data/
+
 # Runtime data
 pids
 *.pid
