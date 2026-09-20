@@ -321,6 +321,7 @@ export default function ChatDetailPage() {
     };
 
     (async () => {
+      let serverMessages: any[] = [];
       try {
         const localMessages = await loadPrivateMessagesFromLocalDb(chatId, currentUserId);
         if (cancelled) return;
@@ -343,7 +344,25 @@ export default function ChatDetailPage() {
         const data = await response.json();
         if (!data?.messages || cancelled) return;
 
-        const serverMessages = Array.isArray(data.messages) ? data.messages : [];
+        serverMessages = Array.isArray(data.messages) ? data.messages : [];
+        // 先把服务端历史写入列表，解密失败也不能让整个聊天界面变空。
+        if (!cancelled && serverMessages.length > 0) {
+          setMessages(chatId, serverMessages.filter(m => m?.id).map(m => ({
+            id: m.id,
+            chatId: m.chatId || chatId,
+            cursor: m.id,
+            senderId: m.senderId || 'unknown',
+            content: m.isRevoked ? '消息已撤回' : (m.msgType === 'encrypted' ? '🔒 加密消息' : (m.content || '')),
+            type: m.msgType === 'encrypted' ? 'text' : (m.msgType || 'text'),
+            timestamp: m.createdAt || Date.now(),
+            isEncrypted: m.msgType === 'encrypted',
+            decryptionStatus: m.msgType === 'encrypted' ? 'ciphertext' : 'decrypted',
+            direction: m.senderId === currentUserId ? 'outbound' as const : 'inbound' as const,
+            reactions: {},
+            status: m.status || 'sent',
+            isRecalled: m.isRevoked || false,
+          })));
+        }
         // Double Ratchet 必须按同一对端的时间顺序串行推进，不能对整批消息 Promise.all。
         const decryptResults = new Map<string, { plaintext?: string; error?: string; success: boolean }>();
         const bySender = new Map<string, Array<{ id: string; envelope: any }>>();
@@ -455,7 +474,27 @@ export default function ChatDetailPage() {
           trackEvent('private_history_sync', { chatId, count: msgs.length, direction: 'inbound' });
         }
       } catch (err) {
-        if (!cancelled) console.error('[ChatDetail] 加载消息失败:', err);
+        if (!cancelled) {
+          console.error('[ChatDetail] 加载消息失败:', err);
+          if (serverMessages.length > 0) {
+            setMessages(chatId, serverMessages.filter(m => m?.id).map(m => ({
+              id: m.id,
+              chatId: m.chatId || chatId,
+              cursor: m.id,
+              senderId: m.senderId || 'unknown',
+              content: m.isRevoked ? '消息已撤回' : (m.msgType === 'encrypted' ? '🔒 加密消息' : (m.content || '')),
+              type: m.msgType === 'encrypted' ? 'text' : (m.msgType || 'text'),
+              timestamp: m.createdAt || Date.now(),
+              isEncrypted: m.msgType === 'encrypted',
+              decryptionStatus: m.msgType === 'encrypted' ? 'failed' : 'decrypted',
+              decryptionFailed: m.msgType === 'encrypted',
+              direction: m.senderId === currentUserId ? 'outbound' as const : 'inbound' as const,
+              reactions: {},
+              status: m.status || 'sent',
+              isRecalled: m.isRevoked || false,
+            })));
+          }
+        }
       } finally {
         if (!cancelled) setLoadingMessages(false);
       }
