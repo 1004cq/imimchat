@@ -34,16 +34,17 @@ COPY --from=prod-deps --chown=nodeuser:nodejs /app/node_modules ./node_modules
 # Keep the Prisma CLI and engines available for the migration entrypoint.
 COPY --from=deps --chown=nodeuser:nodejs /app/node_modules/prisma ./node_modules/prisma
 COPY --from=deps --chown=nodeuser:nodejs /app/node_modules/@prisma ./node_modules/@prisma
-COPY --from=build --chown=nodeuser:nodejs /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=build --chown=nodeuser:nodejs /app/node_modules/@prisma/client ./node_modules/@prisma/client
 COPY --from=build --chown=nodeuser:nodejs /app/dist ./dist
 COPY --from=build --chown=nodeuser:nodejs /app/prisma ./prisma
 COPY --from=build --chown=nodeuser:nodejs /app/package.json ./package.json
 COPY --from=build --chown=nodeuser:nodejs /app/.env.example ./.env.example
 COPY --from=build --chown=nodeuser:nodejs /app/scripts/start-api.sh ./scripts/start-api.sh
 
+# pnpm does not hoist node_modules/.prisma; generate in the runner image.
 RUN node -e "const p=require('./package.json'); delete p.type; require('fs').writeFileSync('./package.json', JSON.stringify(p, null, 2))" && \
-    chmod +x /app/scripts/start-api.sh
+    chmod +x /app/scripts/start-api.sh && \
+    DATABASE_URL="postgresql://cqim:cqim@postgres:5432/cqim?schema=public" pnpm exec prisma generate && \
+    chown -R nodeuser:nodejs /app
 
 USER nodeuser
 EXPOSE 3000
