@@ -144,6 +144,8 @@ MessageSkeleton.displayName = 'MessageSkeleton';
 
 interface MessageRowErrorBoundaryProps {
   messageId: string;
+  /** 已通过上游清洗的展示文本；仅在富气泡渲染失败时使用。 */
+  fallbackContent?: string;
   children: React.ReactNode;
 }
 
@@ -166,11 +168,18 @@ class MessageRowErrorBoundary extends React.Component<MessageRowErrorBoundaryPro
     console.error(`[MessageList] 单条消息渲染异常 messageId=${this.props.messageId}:`, error);
   }
 
+  componentDidUpdate(previousProps: MessageRowErrorBoundaryProps) {
+    // 虚拟列表复用行时不能让上一条消息的错误状态遮住下一条消息。
+    if (this.state.hasError && previousProps.messageId !== this.props.messageId) {
+      this.setState({ hasError: false });
+    }
+  }
+
   render() {
     if (this.state.hasError) {
       return (
         <div className="mx-3 my-1 rounded-xl border border-amber-200/70 bg-amber-50/70 px-3 py-2 text-xs text-amber-700">
-          此条消息暂时无法显示
+          {this.props.fallbackContent || '此条消息暂时无法显示'}
         </div>
       );
     }
@@ -485,7 +494,10 @@ export const VirtualMessageList = memo(forwardRef<VirtualMessageListHandle, Virt
                 style={{ transform: `translateY(${getOffsetBefore(index)}px)`, contain: 'layout paint style' }}
               >
                 {shouldShowTimeSeparator(msg, previous) && <TimeSeparator timestamp={msg.timestamp} />}
-                <MessageRowErrorBoundary messageId={String(msg.id || msg.seq || key)}>
+                <MessageRowErrorBoundary
+                  messageId={String(msg.id || msg.seq || key)}
+                  fallbackContent={safeFallbackContent(msg.content)}
+                >
                   {renderMessage ? renderMessage(msg, isOwn, index, previous) : <DefaultMessageBubble msg={msg} isOwn={isOwn} />}
                 </MessageRowErrorBoundary>
               </div>
@@ -511,6 +523,19 @@ export const VirtualMessageList = memo(forwardRef<VirtualMessageListHandle, Virt
     </div>
   );
 }));
+
+/** 防止在兜底视图中意外展示尚未处理的加密信封。 */
+function safeFallbackContent(content: unknown): string {
+  const text = typeof content === 'string' ? content.trim() : '';
+  if (!text) return '此条消息暂时无法显示';
+  if (
+    text.startsWith('{') &&
+    (text.includes('"ciphertext"') || text.includes('"senderRatchetKey"'))
+  ) {
+    return '加密消息已接收，正在安全显示';
+  }
+  return text.slice(0, 200);
+}
 
 VirtualMessageList.displayName = 'VirtualMessageList';
 export default VirtualMessageList;
