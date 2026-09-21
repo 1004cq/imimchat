@@ -847,10 +847,10 @@ export default function ChatDetailPage() {
         } else {
           const token = localStorage.getItem('user_token');
           if (token) {
-            fetch(`/api/chat/${chatId}/messages`, {
+            fetch('/api/chat/send', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-              body: JSON.stringify({ content: envelopeStr, msgType: 'encrypted', ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), ...(msgHmac ? { hmac: msgHmac } : {}), ...(activeReply ? { replyToId: activeReply.id } : {}) }),
+              body: JSON.stringify({ chatId, content: envelopeStr, msgType: 'encrypted', ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), ...(msgHmac ? { hmac: msgHmac } : {}), ...(activeReply ? { replyTo: activeReply.id } : {}) }),
             })
               .then(async r => {
                 if (!r.ok) throw new Error(`send_${r.status}`);

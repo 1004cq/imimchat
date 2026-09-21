@@ -71,6 +71,25 @@ export interface SignalEnvelope {
   timestamp: number;
 }
 
+function authJSONHeaders(): HeadersInit {
+  const token = localStorage.getItem('user_token');
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+async function apiError(response: Response): Promise<string> {
+  const text = await response.text();
+  try {
+    const data = JSON.parse(text);
+    if (typeof data?.error === 'string' && data.error) return data.error;
+  } catch {
+    // Non-JSON responses are still shown as a useful diagnostic.
+  }
+  return text || `请求失败 (${response.status})`;
+}
+
 /** Double Ratchet 会话状态 */
 interface RatchetState {
   // DH 棘轮
@@ -362,7 +381,7 @@ export class E2EEManager {
 
       const resp = await fetch('/api/crypto/register-bundle', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authJSONHeaders(),
         body: JSON.stringify({
           userId,
           registrationId: bundle.registrationId,
@@ -377,13 +396,11 @@ export class E2EEManager {
         }),
       });
 
-      if (resp.ok) {
-        console.log('[E2EE] Bundle 已注册到服务器');
-      } else {
-        console.error('[E2EE] Bundle 注册失败:', await resp.text());
-      }
+      if (!resp.ok) throw new Error(`注册 E2EE Bundle 失败: ${await apiError(resp)}`);
+      console.log('[E2EE] Bundle 已注册到服务器');
     } catch (err) {
       console.error('[E2EE] Bundle 注册网络错误:', err);
+      throw err;
     }
   }
 
@@ -394,7 +411,7 @@ export class E2EEManager {
   async fetchRemoteBundle(peerId: string): Promise<PreKeyBundle> {
     const resp = await fetch(`/api/crypto/get-bundle?userId=${encodeURIComponent(peerId)}`);
     if (!resp.ok) {
-      const errorText = await resp.text();
+      const errorText = await apiError(resp);
       throw new Error(`无法获取用户 ${peerId} 的安全凭证 (Bundle): ${errorText}`);
     }
 
@@ -443,7 +460,7 @@ export class E2EEManager {
 
         await fetch('/api/crypto/replenish-prekeys', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authJSONHeaders(),
           body: JSON.stringify({ userId, preKeys: preKeysPayload }),
         });
         console.log(`[E2EE] 已补充 ${preKeysPayload.length} 个 PreKeys 到服务器`);
@@ -635,6 +652,12 @@ export class E2EEManager {
     // 加密消息
     const plaintextBuf = stringToBuffer(plaintext);
     const encrypted = await aesEncrypt(plaintextBuf, messageKey);
+
+    // 本机在把信封交给 UI/网络前先校验一次，且不改变接收方向的 Ratchet 状态。
+    const verifiedPlaintext = bufferToString(await aesDecrypt(encrypted, messageKey));
+    if (verifiedPlaintext !== plaintext) {
+      throw new Error('本地加密信封校验失败');
+    }
 
     // 更新会话状态
     state.sendChainKey = bufferToBase64(nextChainKey);

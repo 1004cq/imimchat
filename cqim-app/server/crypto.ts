@@ -12,12 +12,24 @@
  * - 消息在客户端加密后传输，服务端无法解密消息内容
  * - HMAC 签名确保消息在传输过程中未被篡改
  */
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import prisma from './db.js';
 import { resolveSigningPublicKey } from './prekey-bundle.js';
+import { userAuth } from './auth.js';
 
 const router = Router();
+
+/** Bundle 和 PreKey 是公开材料，但写入方必须是材料所属用户。 */
+function requireOwnCryptoMaterial(req: Request, res: Response, next: NextFunction) {
+  const userId = typeof req.body?.userId === 'string' ? req.body.userId : '';
+  const authenticatedUserId = (req as any).user?.id;
+  if (!userId) return res.status(400).json({ error: '缺少必要参数' });
+  if (!authenticatedUserId || authenticatedUserId !== userId) {
+    return res.status(403).json({ error: '只能更新自己的 E2EE 密钥材料' });
+  }
+  next();
+}
 
 // ============================================================
 // 1. AES-256-GCM 加解密工具（服务端存储加密）
@@ -141,7 +153,7 @@ export function verifyHMAC(message: string, signature: string, secret: string): 
  * 客户端生成 ECDH 密钥对后，将公钥注册到服务端。
  * 其他用户可以通过 /get-key 获取该公钥，完成密钥交换。
  */
-router.post('/register-key', async (req: Request, res: Response) => {
+router.post('/register-key', userAuth, requireOwnCryptoMaterial, async (req: Request, res: Response) => {
   const { userId, publicKey, deviceId } = req.body;
 
   if (!userId || !publicKey) {
@@ -261,7 +273,7 @@ router.post('/verify-message', async (req: Request, res: Response) => {
  *   preKeys: Array<{ keyId: number, publicKey: string }>,  // One-Time PreKeys
  * }
  */
-router.post('/register-bundle', async (req: Request, res: Response) => {
+router.post('/register-bundle', userAuth, requireOwnCryptoMaterial, async (req: Request, res: Response) => {
   const { userId, registrationId, identityKey, signingPublicKey, signedPreKey, preKeys } = req.body;
 
   if (!userId || !identityKey || !signedPreKey) {
@@ -426,7 +438,7 @@ router.get('/prekey-count', async (req: Request, res: Response) => {
  * 补充 One-Time PreKeys
  * body: { userId: string, preKeys: Array<{ keyId: number, publicKey: string }> }
  */
-router.post('/replenish-prekeys', async (req: Request, res: Response) => {
+router.post('/replenish-prekeys', userAuth, requireOwnCryptoMaterial, async (req: Request, res: Response) => {
   const { userId, preKeys } = req.body;
 
   if (!userId || !Array.isArray(preKeys) || preKeys.length === 0) {
