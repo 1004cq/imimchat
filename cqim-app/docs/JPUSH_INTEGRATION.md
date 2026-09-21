@@ -34,7 +34,18 @@ npx cap sync
 2. **Signing & Capabilities** 添加：
    - Push Notifications
    - Background Modes → Remote notifications
-3. 在 `AppDelegate.swift` 中加入（`npx cap sync` 后合并，勿覆盖 Capacitor 原有逻辑）：
+3. `Info.plist` 需包含（已在 `capacitor.config.ts` → `ios.infoPlist` 配置，`npx cap sync ios` 会自动写入）：
+
+```xml
+<key>UIBackgroundModes</key>
+<array>
+    <string>remote-notification</string>
+</array>
+<key>NSUserNotificationsUsageDescription</key>
+<string>用于接收消息通知</string>
+```
+
+4. 在 `AppDelegate.swift` 中加入（`npx cap sync` 后合并，勿覆盖 Capacitor 原有逻辑）：
 
 ```swift
 func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
@@ -57,8 +68,8 @@ func applicationDidBecomeActive(_ application: UIApplication) {
 }
 ```
 
-4. Xcode 中找到 `JPUSHService.h` → Target Membership 勾选 **CapacitorPluginJPush** 并设为 **Public**（插件 README 要求）
-5. 真机运行，控制台应出现 `registrationID: ...`
+5. Xcode 中找到 `JPUSHService.h` → Target Membership 勾选 **CapacitorPluginJPush** 并设为 **Public**（插件 README 要求）
+6. 真机运行，控制台应出现 `registrationID: ...`
 
 ### Android（可选）
 
