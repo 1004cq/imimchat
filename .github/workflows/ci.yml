@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [master, main, feat/go-api-health-auth]
   pull_request:
     branches: [master]
 
@@ -41,3 +41,17 @@ jobs:
         working-directory: cqim-app/go-gateway
         run: go build -o /tmp/cqim-gateway .
         continue-on-error: true
+
+
+  go-api:
+    name: go-api build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: cqim-app/go-api/go.sum
+      - name: Build Go API
+        working-directory: cqim-app/go-api
+        run: go build ./cmd/go-api

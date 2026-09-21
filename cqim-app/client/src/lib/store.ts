@@ -332,6 +332,37 @@ export function syncCurrentUserProfile(payload: CurrentUserProfileSyncPayload) {
   }
 }
 
+export interface AuthMeUser {
+  id: string;
+  username: string;
+  nickname: string;
+  avatar: string;
+  bio: string;
+}
+
+function firstNonEmptyString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return '';
+}
+
+/** Apply GET /api/auth/me (go-api `{ user }` or flat Node shape) to localStorage + CURRENT_USER. */
+export function applyAuthMeUser(data: unknown): AuthMeUser | null {
+  const root = data && typeof data === 'object' ? data as Record<string, unknown> : null;
+  if (!root) return null;
+  const nested = root.user && typeof root.user === 'object' ? root.user as Record<string, unknown> : null;
+  const me = nested || root;
+  const id = firstNonEmptyString(me.id, me.userId);
+  if (!id) return null;
+  const username = firstNonEmptyString(me.username, me.uniqueId, id);
+  const nickname = firstNonEmptyString(me.nickname, me.name, username);
+  const avatar = typeof me.avatar === 'string' ? me.avatar : '';
+  const bio = typeof me.bio === 'string' ? me.bio : '';
+  syncCurrentUserProfile({ nickname, username, avatar, bio });
+  return { id, username, nickname, avatar, bio };
+}
+
 /** 官方账号 */
 export const OFFICIAL_ACCOUNT: User = {
   id: 'official',

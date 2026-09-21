@@ -67,21 +67,18 @@ export function useE2EE(): UseE2EEReturn {
         managerRef.current = manager;
 
         if (!cancelled) {
-          setIsReady(true);
           const s = await manager.getStatus();
           setStatus(s);
 
-          // 初始化后自动注册 Bundle 到服务器
+          // 只有 Bundle 已被服务端接受才允许私聊发送。
           const userId = localStorage.getItem('user_id');
-          if (userId) {
-            manager.registerBundleToServer(userId).catch(err => {
-              console.warn('[useE2EE] Bundle 注册失败:', err);
-            });
-            // 检查并补充服务端 PreKeys
-            manager.checkAndReplenishServerPreKeys(userId).catch(err => {
-              console.warn('[useE2EE] PreKey 补充失败:', err);
-            });
-          }
+          if (!userId) throw new Error('未读取到登录用户，无法注册 E2EE Bundle');
+          await manager.registerBundleToServer(userId);
+          // 检查并补充服务端 PreKeys
+          manager.checkAndReplenishServerPreKeys(userId).catch(err => {
+            console.warn('[useE2EE] PreKey 补充失败:', err);
+          });
+          if (!cancelled) setIsReady(true);
         }
       } catch (err) {
         console.error('[useE2EE] 初始化失败:', err);

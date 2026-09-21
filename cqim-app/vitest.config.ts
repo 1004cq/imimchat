@@ -14,8 +14,11 @@ export default defineConfig({
     include: [
       'server/**/*.test.ts',
       'client/src/lib/presence.test.ts',
+      'client/src/lib/store.authme.test.ts',
       'client/src/lib/e2ee/**/*.test.ts',
       'client/src/components/VirtualMessageList.test.ts',
+      'client/src/components/DoveAvatar.test.tsx',
+      'client/src/components/moments/utils.test.ts',
     ],
   },
 });

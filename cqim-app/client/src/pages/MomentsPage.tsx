@@ -3,11 +3,11 @@
  * 页面层只负责布局、导航、封面和组件事件绑定；Feed 业务逻辑位于 useMomentsFeed。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useCurrentUserState } from '@/contexts/AppContext';
+import { useAppActions, useCurrentUserState } from '@/contexts/AppContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { DoveAvatar } from '@/components/DoveAvatar';
 import VirtualFeedList from '@/components/VirtualFeedList';
-import { CURRENT_USER } from '@/lib/store';
+import { applyAuthMeUser, CURRENT_USER } from '@/lib/store';
 import { authApi } from '@/lib/authFetch';
 import { setupWeChatVideoAutoPlayHack } from '@/lib/momentsPreloader';
 import { useMomentsFeed } from '@/hooks/useMomentsFeed';
@@ -22,6 +22,7 @@ import { MomentsManager, PublishActionSheet, SettingsActionSheet } from '@/compo
 
 export default function MomentsPage() {
   const currentUserState = useCurrentUserState();
+  const { login } = useAppActions();
   const { mode, toggleTheme } = useTheme();
   const currentUser = currentUserState || {
     id: CURRENT_USER.id,
@@ -103,6 +104,19 @@ export default function MomentsPage() {
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !localStorage.getItem('user_token')) return;
+    let cancelled = false;
+    authApi('/api/auth/me')
+      .then((data) => {
+        if (cancelled) return;
+        const user = applyAuthMeUser(data);
+        if (user) login(user);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [login]);
 
   const handleCoverChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -207,11 +221,7 @@ export default function MomentsPage() {
                 {currentUserName}
               </span>
               <div style={{ width: 64, height: 64, borderRadius: 6, overflow: "hidden", flexShrink: 0, background: "#e5e7eb", border: "2px solid #fff" }}>
-                {currentUserAvatar ? (
-                  <img src={currentUserAvatar} alt={currentUserName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                ) : (
-                  <DoveAvatar name={currentUserName} id={currentUserId} avatar={currentUserAvatar} size="lg" />
-                )}
+                <DoveAvatar name={currentUserName} id={currentUserId} avatar={currentUserAvatar} size={64} className="!rounded-none" />
               </div>
             </div>
 
