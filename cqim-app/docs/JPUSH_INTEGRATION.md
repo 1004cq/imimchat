@@ -34,7 +34,18 @@ npx cap sync
 2. **Signing & Capabilities** 添加：
    - Push Notifications
    - Background Modes → Remote notifications
-3. 在 `AppDelegate.swift` 中加入（`npx cap sync` 后合并，勿覆盖 Capacitor 原有逻辑）：
+3. `Info.plist` 需包含（已在 `capacitor.config.ts` → `ios.infoPlist` 配置，`npx cap sync ios` 会自动写入）：
+
+```xml
+<key>UIBackgroundModes</key>
+<array>
+    <string>remote-notification</string>
+</array>
+<key>NSUserNotificationsUsageDescription</key>
+<string>用于接收消息通知</string>
+```
+
+4. 在 `AppDelegate.swift` 中加入（`npx cap sync` 后合并，勿覆盖 Capacitor 原有逻辑）：
 
 ```swift
 func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
@@ -57,8 +68,52 @@ func applicationDidBecomeActive(_ application: UIApplication) {
 }
 ```
 
-4. Xcode 中找到 `JPUSHService.h` → Target Membership 勾选 **CapacitorPluginJPush** 并设为 **Public**（插件 README 要求）
-5. 真机运行，控制台应出现 `registrationID: ...`
+5. Xcode 中找到 `JPUSHService.h` → Target Membership 勾选 **CapacitorPluginJPush** 并设为 **Public**（插件 README 要求）
+6. 真机运行，控制台应出现 `registrationID: ...`
+
+### iOS 前台消息提示音
+
+已集成本地插件 `capacitor-message-alert`：
+
+- **`MessageService`**：前台新消息统一入口（`onNewMessageReceived` → 广播 `cqim.newMessageReceived` + 调用 `NotificationManager`）
+- **`NotificationManager`**：触觉 + 提示音（见下方效果说明）
+- JS 侧 WebSocket / JPush 前台消息会调用 `MessageAlert.onNewMessageReceived({ chatId, ... })`
+- 受「设置 → 消息通知」声音/震动开关控制
+
+#### 效果说明
+
+| 反馈 | 实现 | 说明 |
+|------|------|------|
+| **震动** | `UIImpactFeedbackGenerator`（heavy → 0.1s → medium） | 比老的 `AudioServicesPlayAlertSound` 更强、更现代，走 Taptic Engine |
+| **急促提示音（默认）** | 系统音效 **1005** | 尖锐、短促的系统提示音 |
+| **急促提示音（推荐）** | 自定义 **`urgent_message.caf`** | 短促类似 Telegram 的「叮」声，效果最好 |
+
+**推荐做法：** 准备 `urgent_message.caf`（0.1–0.3 秒），拖入 Xcode **App** target（勾选 Copy items），或放到插件目录  
+`plugins/capacitor-message-alert/ios/Sources/MessageAlertPlugin/Resources/`，然后 `npx cap sync ios`。  
+未放置自定义文件时自动回退系统 1005。
+
+详细步骤见：`plugins/capacitor-message-alert/ios/Sources/MessageAlertPlugin/Resources/README.md`
+
+原生扩展示例（AppDelegate 或其他 Swift 模块）：
+
+```swift
+// 监听新消息（UI 仍由 Capacitor Web 层更新）
+NotificationCenter.default.addObserver(
+    forName: .cqimNewMessageReceived,
+    object: nil,
+    queue: .main
+) { notification in
+    let chatId = notification.userInfo?["chatId"] as? String
+    // 更新角标、本地缓存等
+}
+
+// 或直接调用
+MessageService.shared.onNewMessageReceived(
+    IncomingMessagePayload(chatId: "...", messageId: nil, senderId: nil, preview: nil)
+)
+```
+
+`npx cap sync ios` 后自动链接插件。
 
 ### Android（可选）
 

@@ -1,3 +1,5 @@
+import { Capacitor } from '@capacitor/core';
+
 export interface NotificationPreferences {
   enabled: boolean;
   soundEnabled: boolean;
@@ -117,6 +119,43 @@ export async function warmupNotificationAudio(): Promise<boolean> {
   if (!ctx) return false;
   await ensureAudioContextReady(ctx);
   return ctx.state === 'running';
+}
+
+export async function playNativeMessageAlert(
+  urgent = true,
+  meta?: { chatId?: string; messageId?: string; senderId?: string; preview?: string },
+): Promise<boolean> {
+  const preferences = loadNotificationPreferences();
+  if (!preferences.enabled) return false;
+  if (!preferences.soundEnabled && !preferences.vibrationEnabled) return false;
+
+  if (Capacitor.getPlatform() !== 'ios' || !Capacitor.isNativePlatform()) {
+    return false;
+  }
+
+  const alertOptions = {
+    urgent,
+    sound: preferences.soundEnabled,
+    vibration: preferences.vibrationEnabled,
+  };
+
+  try {
+    const { MessageAlert } = await import('capacitor-message-alert');
+    if (meta?.chatId) {
+      await MessageAlert.onNewMessageReceived({
+        chatId: meta.chatId,
+        messageId: meta.messageId,
+        senderId: meta.senderId,
+        preview: meta.preview,
+        ...alertOptions,
+      });
+    } else {
+      await MessageAlert.playNewMessageAlert(alertOptions);
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function playNotificationSound(volume = 0.035): Promise<boolean> {

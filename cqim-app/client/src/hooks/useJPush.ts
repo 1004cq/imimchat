@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect } from 'react';
 import { Capacitor } from '@capacitor/core';
+import { playNativeMessageAlert } from '@/lib/notifications';
 
 async function registerJPushOnServer(registrationId: string, platform: 'ios' | 'android') {
   const userToken = localStorage.getItem('user_token') || localStorage.getItem('auth_token');
@@ -75,6 +76,10 @@ export function useJPush(isLoggedIn: boolean) {
 
       await JPush.addListener('notificationReceived', (data) => {
         console.log('[JPush] 前台收到推送:', data);
+        void playNativeMessageAlert(true, chatId ? {
+          chatId,
+          preview: data.content || data.title,
+        } : undefined);
         const chatId = extractChatId(data);
         if (chatId) {
           window.dispatchEvent(new CustomEvent('cqim:fcm-notification', {
