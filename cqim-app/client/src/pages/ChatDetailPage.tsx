@@ -313,8 +313,14 @@ export default function ChatDetailPage() {
       for (const message of sanitizeMessages(base)) byId.set(message.id, message);
       for (const message of sanitizeMessages(incoming)) {
         const existing = byId.get(message.id);
-        // 服务端只返回密文；本地已有已解密展示稿时不能被 ciphertext 占位覆盖。
-        if (existing && existing.decryptionStatus === 'decrypted' && message.decryptionStatus === 'ciphertext') continue;
+        // Double Ratchet 的同一个信封只能消费一次。本地已有的已解密展示稿
+        // 绝不能被服务器密文、或刷新后二次解密失败的占位文案覆盖。
+        if (
+          existing?.isEncrypted &&
+          existing.decryptionStatus === 'decrypted' &&
+          message.isEncrypted &&
+          message.decryptionStatus !== 'decrypted'
+        ) continue;
         byId.set(message.id, message);
       }
       return Array.from(byId.values()).sort((a, b) => a.timestamp - b.timestamp);
@@ -344,13 +350,26 @@ export default function ChatDetailPage() {
         if (!data?.messages || cancelled) return;
 
         const serverMessages = Array.isArray(data.messages) ? data.messages : [];
+        // 已在本机持久化并解密过的消息不再进入解密队列。重复解密会推进
+        // Double Ratchet，从而使一次普通刷新看起来像“安全会话失效”。
+        const locallyDecryptedMessageIds = new Set(
+          cached
+            .filter(message => message.isEncrypted && message.decryptionStatus === 'decrypted')
+            .map(message => message.id),
+        );
         // Double Ratchet 必须按同一对端的时间顺序串行推进，不能对整批消息 Promise.all。
         const decryptResults = new Map<string, { plaintext?: string; error?: string; success: boolean }>();
         const bySender = new Map<string, Array<{ id: string; envelope: any }>>();
         for (const m of serverMessages) {
           if (!m?.id) continue;
           // 自己发出的密文优先使用本地解密副本；换机后没有副本时不伪造明文。
-          if (m.msgType !== 'encrypted' || !m.content || m.isRevoked || m.senderId === currentUserId) continue;
+          if (
+            m.msgType !== 'encrypted' ||
+            !m.content ||
+            m.isRevoked ||
+            m.senderId === currentUserId ||
+            locallyDecryptedMessageIds.has(m.id)
+          ) continue;
           try {
             const list = bySender.get(m.senderId) || [];
             list.push({ id: m.id, envelope: JSON.parse(m.content) });
