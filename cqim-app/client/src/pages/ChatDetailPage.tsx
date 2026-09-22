@@ -1660,6 +1660,15 @@ export default function ChatDetailPage() {
     if (!otherMember) return;
     setKeySyncing(true);
     try {
+      // 双端必须同时清除旧 Ratchet，否则对端仍会继续使用旧会话发送密文。
+      const ws = signalWs?.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: 'private_session_reset',
+          to: otherMember,
+          payload: { peerId: otherMember },
+        }));
+      }
       await e2ee.resetSession(otherMember);
       const bundle = await e2ee.fetchRemoteBundle(otherMember);
       await e2ee.establishSession(otherMember, bundle);

@@ -859,7 +859,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             chatId: m.chatId || chatId,
             cursor: m.id,
             senderId: m.senderId,
-            content: m.isRevoked ? '消息已撤回' : (m.msgType === 'encrypted' ? '🔒 加密消息' : (m.content || '')),
+            content: m.isRevoked ? '消息已撤回' : (m.msgType === 'encrypted' ? (m.senderId === ownerId ? '🔒 已发送加密消息' : '🔒 加密消息') : (m.content || '')),
             type: m.msgType === 'encrypted' ? 'text' : (m.msgType || 'text'),
             timestamp: m.createdAt || Date.now(),
             isEncrypted: m.msgType === 'encrypted',
@@ -868,11 +868,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
             reactions: {},
             status: m.status || 'sent',
             isRecalled: !!m.isRevoked,
+            encryptedEnvelope: m.msgType === 'encrypted' && !m.isRevoked
+              ? (() => { try { return JSON.parse(m.content); } catch { return undefined; } })()
+              : undefined,
           } as Message))
         : [];
       if (messages.length > 0) {
         dispatch({ type: 'SET_MESSAGES', chatId, messages });
         console.log(`[AppContext] 从服务端恢复会话 ${chatId} 的 ${messages.length} 条消息`);
+
+        // 历史接口返回的是密文信封；按时间顺序逐条解密，单条坏密文不能阻断整个会话显示。
+        void (async () => {
+          try {
+            const { E2EEManager } = await import('../lib/e2ee/E2EEManager');
+            const e2ee = E2EEManager.shared();
+            for (const message of messages) {
+              if (message.senderId === ownerId || !message.encryptedEnvelope || message.isRecalled) continue;
+              try {
+                const decryptedStr = e2eeProxy.isReady
+                  ? await e2eeProxy.signalDecrypt(message.senderId, message.encryptedEnvelope)
+                  : await e2ee.decrypt(message.senderId, message.encryptedEnvelope);
+                const decrypted = JSON.parse(decryptedStr);
+                message.content = decrypted.content || '';
+                message.type = decrypted.msgType || 'text';
+                message.decryptionStatus = 'decrypted';
+                message.decryptionFailed = false;
+                Object.assign(message, messageMediaPatch(decrypted.extra));
+              } catch (err) {
+                console.warn(`[E2EE] 历史消息解密失败: ${message.id}`, err);
+                message.content = '🔒 无法解密消息，请重置安全会话';
+                message.decryptionStatus = 'failed';
+                message.decryptionFailed = true;
+              }
+            }
+            dispatch({ type: 'SET_MESSAGES', chatId, messages: [...messages] });
+          } catch (err) {
+            console.warn('[E2EE] 历史消息解密初始化失败，保留密文列表:', err);
+          }
+        })();
       }
     };
     void restoreServerHistory().catch((err) => console.error('[AppContext] 服务端私聊历史恢复失败:', err));
@@ -1126,6 +1159,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
             notifyIncomingMessageRef.current(chatId, newMsg);
             window.dispatchEvent(new CustomEvent('bot_message_received', { detail: { chatId } }));
             console.log(`[AppContext] 收到 BOT 消息: chatId=${chatId} ${hasVoice ? '[语音] ' + voiceUrl : ''} ${content ? 'content=' + content.slice(0, 40) : ''}`);
+            return;
+          }
+
+          // ===== 私聊 E2EE 会话重置同步 =====
+          if (msg.type === 'private_session_reset') {
+            const peerId = msg.from || msg.payload?.peerId;
+            if (peerId) {
+              void import('../lib/e2ee/E2EEManager')
+                .then(({ E2EEManager }) => E2EEManager.shared().resetSession(peerId))
+                .then(() => console.log(`[E2EE] 已响应对端会话重置: ${peerId}`))
+                .catch(err => console.warn('[E2EE] 响应会话重置失败:', err));
+            }
             return;
           }
 
