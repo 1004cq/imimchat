@@ -1644,7 +1644,9 @@ export default function ChatDetailPage() {
     closeChat();
   }, [closeChat]);
 
-  const failedDecryptCount = messages.filter(message => message.decryptionFailed || message.decryptionStatus === 'failed').length;
+  const historicalFailedDecryptCount = messages.filter(message => message.decryptionFailed || message.decryptionStatus === 'failed').length;
+  // 会话重建后，旧会话密文仍可保留展示，但不应继续阻断当前新会话。
+  const failedDecryptCount = sessionEstablished ? 0 : historicalFailedDecryptCount;
   const showPrivateKeyBanner = !isGroupChat
     && !chat?.members?.includes('official')
     && !chat?.members?.includes('BOT')
