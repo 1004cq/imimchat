@@ -249,6 +249,15 @@ export default function ChatDetailPage() {
 
   const currentUserId = state.currentUser?.id || localStorage.getItem('user_id') || 'me';
   const otherMember = chat?.members?.find(m => m !== currentUserId) || chat?.members?.find(m => m !== 'me');
+  const sessionMarkerKey = otherMember ? `imim:e2ee-session-established:${currentUserId}:${otherMember}` : '';
+
+  useEffect(() => {
+    if (!sessionMarkerKey) {
+      setSessionEstablished(false);
+      return;
+    }
+    setSessionEstablished(localStorage.getItem(sessionMarkerKey) === '1');
+  }, [sessionMarkerKey]);
 
   // ===== 消息防篡改：派生 HMAC 完整性密钥 =====
   const [integrityKey, setIntegrityKey] = useState<ArrayBuffer | null>(null);
@@ -428,7 +437,7 @@ export default function ChatDetailPage() {
               } catch (err) {
                 console.error('[E2EE] 历史消息解密失败:', err);
                 trackE2EEFailure('decrypt', { chatId, msgType: m.msgType, error: err, direction: 'inbound' });
-                decryptedContent = '🔒 无法解密历史消息，请重新验证安全会话';
+                decryptedContent = '🔒 旧安全会话消息（无法恢复）';
                 decryptionFailed = true;
                 decryptionStatus = 'failed';
               }
@@ -514,10 +523,11 @@ export default function ChatDetailPage() {
       e2ee.getSessionInfo(otherMember).then(info => {
         if (info?.established) {
           setSessionEstablished(true);
+          if (sessionMarkerKey) localStorage.setItem(sessionMarkerKey, '1');
         }
       });
     }
-  }, [e2ee.isReady, otherMember]);
+  }, [e2ee.isReady, otherMember, sessionMarkerKey]);
 
   // 同步消失消息模式定时器
   useEffect(() => {
@@ -832,6 +842,7 @@ export default function ChatDetailPage() {
           const bundle = await e2ee.fetchRemoteBundle(otherMember);
           await e2ee.establishSession(otherMember, bundle);
           setSessionEstablished(true);
+          if (sessionMarkerKey) localStorage.setItem(sessionMarkerKey, '1');
         }
 
         // 2. 准备加密载荷（包含真实消息类型和内容）
@@ -1675,6 +1686,7 @@ export default function ChatDetailPage() {
       const bundle = await e2ee.fetchRemoteBundle(otherMember);
       await e2ee.establishSession(otherMember, bundle);
       setSessionEstablished(true);
+      if (sessionMarkerKey) localStorage.setItem(sessionMarkerKey, '1');
       setHistoryNonce(value => value + 1);
       toast.success('安全会话已重建，正在重新解密');
     } catch (err: any) {
@@ -1682,7 +1694,7 @@ export default function ChatDetailPage() {
     } finally {
       setKeySyncing(false);
     }
-  }, [otherMember, e2ee]);
+  }, [otherMember, e2ee, sessionMarkerKey]);
 
   const retryGroupKeySync = useCallback(async () => {
     await groupSync.retryMls();
