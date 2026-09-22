@@ -709,17 +709,17 @@ export class E2EEManager {
     if (!this._identityKeyPair) throw new Error('E2EE 未初始化');
 
     let sessionRecord = await this.store.getSession(peerId);
+    const previousSessionRecord = sessionRecord;
+    let replacedForPreKey = false;
 
     // PreKey 消息：作为响应方完成 X3DH（不可再走发起方 establishSession）
     if (envelope.type === 'prekey') {
       const shouldReplace =
         !sessionRecord || this.shouldReplaceSessionForPreKey(sessionRecord, envelope);
       if (shouldReplace) {
-        if (sessionRecord) {
-          console.log('[E2EE] 替换现有会话以处理对端 PreKey 消息');
-          await this.store.removeSession(peerId);
-        }
+        if (sessionRecord) console.log('[E2EE] 暂存现有会话并尝试处理对端 PreKey 消息');
         await this.establishSessionAsResponder(peerId, envelope);
+        replacedForPreKey = true;
         sessionRecord = await this.store.getSession(peerId);
       }
     }
@@ -728,26 +728,21 @@ export class E2EEManager {
       throw new Error(`没有与 ${peerId} 的加密会话`);
     }
 
-    const sessionData = JSON.parse(sessionRecord.sessionData);
-    const state: RatchetState = sessionData.ratchetState;
+    try {
+      const sessionData = JSON.parse(sessionRecord.sessionData);
+      const state: RatchetState = sessionData.ratchetState;
 
-    // 检查是否需要 DH 棘轮步骤
-    if (envelope.senderRatchetKey !== state.dhReceivingKey) {
-      await this.performDHRatchet(state, envelope.senderRatchetKey);
-    }
+      // 检查是否需要 DH 棘轮步骤。状态只会在认证解密成功后写回。
+      if (envelope.senderRatchetKey !== state.dhReceivingKey) {
+        await this.performDHRatchet(state, envelope.senderRatchetKey);
+      }
 
-    // 对称棘轮步骤：从 receiveChainKey 派生消息密钥
-    if (!state.receiveChainKey) {
-      // 首次接收，使用发送链密钥的镜像
-      const chainKey = base64ToBuffer(state.sendChainKey || state.rootKey);
+      const chainKey = base64ToBuffer(state.receiveChainKey || state.sendChainKey || state.rootKey);
       const { messageKey, nextChainKey } = await deriveMessageKeys(chainKey);
-      state.receiveChainKey = bufferToBase64(nextChainKey);
-
-      // 解密
       const plainBuf = await aesDecrypt(envelope.ciphertext, messageKey);
-      state.receiveCounter++;
 
-      // 保存
+      state.receiveChainKey = bufferToBase64(nextChainKey);
+      state.receiveCounter++;
       sessionData.ratchetState = state;
       await this.store.saveSession({
         peerId,
@@ -755,29 +750,21 @@ export class E2EEManager {
         updatedAt: Date.now(),
       });
 
+      // One-Time PreKey 只有在首条消息通过认证并成功解密后才能销毁。
+      if (replacedForPreKey && envelope.usedOneTimePreKeyId != null) {
+        await this.store.removePreKey(envelope.usedOneTimePreKeyId);
+      }
+
+      console.log(`[E2EE] 消息已解密 ← ${peerId}, counter: ${state.receiveCounter}`);
       return bufferToString(plainBuf);
+    } catch (error) {
+      // 错误的/过期的历史 PreKey 消息不能覆盖当前可用会话。
+      if (replacedForPreKey) {
+        if (previousSessionRecord) await this.store.saveSession(previousSessionRecord);
+        else await this.store.removeSession(peerId);
+      }
+      throw error;
     }
-
-    // 正常对称棘轮
-    const chainKey = base64ToBuffer(state.receiveChainKey);
-    const { messageKey, nextChainKey } = await deriveMessageKeys(chainKey);
-
-    // 解密
-    const plainBuf = await aesDecrypt(envelope.ciphertext, messageKey);
-
-    // 更新状态
-    state.receiveChainKey = bufferToBase64(nextChainKey);
-    state.receiveCounter++;
-
-    sessionData.ratchetState = state;
-    await this.store.saveSession({
-      peerId,
-      sessionData: JSON.stringify(sessionData),
-      updatedAt: Date.now(),
-    });
-
-    console.log(`[E2EE] 消息已解密 ← ${peerId}, counter: ${state.receiveCounter}`);
-    return bufferToString(plainBuf);
   }
 
   /**
@@ -917,10 +904,6 @@ export class E2EEManager {
       trusted: true,
       addedAt: Date.now(),
     });
-
-    if (oneTimePreKey) {
-      await this.store.removePreKey(oneTimePreKey.id);
-    }
 
     console.log('[E2EE] 响应方 X3DH 完成，会话已建立');
   }

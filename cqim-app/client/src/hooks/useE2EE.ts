@@ -21,7 +21,7 @@ interface UseE2EEReturn {
   /** E2EE 状态信息 */
   status: E2EEStatus | null;
   /** 加密消息 */
-  encrypt: (peerId: string, plaintext: string) => Promise<SignalEnvelope | null>;
+  encrypt: (peerId: string, plaintext: string) => Promise<SignalEnvelope>;
   /** 解密消息 */
   decrypt: (peerId: string, envelope: SignalEnvelope) => Promise<string | null>;
   /** 获取会话信息 */
@@ -91,9 +91,9 @@ export function useE2EE(): UseE2EEReturn {
     return () => { cancelled = true; };
   }, []);
 
-  const encrypt = useCallback(async (peerId: string, plaintext: string): Promise<SignalEnvelope | null> => {
+  const encrypt = useCallback(async (peerId: string, plaintext: string): Promise<SignalEnvelope> => {
     const manager = managerRef.current;
-    if (!manager?.isInitialized) return null;
+    if (!manager?.isInitialized) throw new Error('E2EE 未初始化');
     try {
       // 默认将 Signal X3DH/Double Ratchet 放入 Worker；只有 Worker 不可用时才降级。
       return e2eeProxy.isReady
@@ -102,7 +102,7 @@ export function useE2EE(): UseE2EEReturn {
     } catch (err) {
       console.error('[useE2EE] 加密失败:', err);
       trackE2EEFailure('encrypt', { error: err, chatId: peerId, direction: 'outbound' });
-      return null;
+      throw err;
     }
   }, []);
 

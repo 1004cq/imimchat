@@ -128,7 +128,7 @@ export default function ChatDetailPage() {
     closeChat, sendMessage, addReaction, startCall,
     markMessageRead, burnMessage, setEphemeralTimer, insertScreenshotNotice,
     insertCallRecord, recallMessage, setMessages, upsertChat,
-    muteChat, clearMessages, pinChat, showProfile, updateMessageStatus,
+    muteChat, clearMessages, pinChat, showProfile, replaceMessageId, updateMessageStatus,
   } = useAppActions();
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [chatMissing, setChatMissing] = useState(false);
@@ -145,7 +145,6 @@ export default function ChatDetailPage() {
   // 录音按下状态（按住录音模式）
   const [voicePressActive, setVoicePressActive] = useState(false);
   const [sessionEstablished, setSessionEstablished] = useState(false);
-  const [historyNonce, setHistoryNonce] = useState(0);
   const [keySyncing, setKeySyncing] = useState(false);
   const [encryptionLog, setEncryptionLog] = useState<string[]>([]);
   const messageListRef = useRef<VirtualMessageListHandle>(null);
@@ -317,7 +316,7 @@ export default function ChatDetailPage() {
         // 绝不能被服务器密文、或刷新后二次解密失败的占位文案覆盖。
         if (
           existing?.isEncrypted &&
-          existing.decryptionStatus === 'decrypted' &&
+          (existing.decryptionStatus === 'decrypted' || existing.decryptionStatus === 'failed') &&
           message.isEncrypted &&
           message.decryptionStatus !== 'decrypted'
         ) continue;
@@ -352,9 +351,13 @@ export default function ChatDetailPage() {
         const serverMessages = Array.isArray(data.messages) ? data.messages : [];
         // 已在本机持久化并解密过的消息不再进入解密队列。重复解密会推进
         // Double Ratchet，从而使一次普通刷新看起来像“安全会话失效”。
-        const locallyDecryptedMessageIds = new Set(
+        const locallySettledMessageIds = new Set(
           cached
-            .filter(message => message.isEncrypted && message.decryptionStatus === 'decrypted')
+            .filter(message => message.isEncrypted && (
+              message.decryptionStatus === 'decrypted'
+              || message.decryptionStatus === 'failed'
+              || message.decryptionStatus === 'legacy'
+            ))
             .map(message => message.id),
         );
         // Double Ratchet 必须按同一对端的时间顺序串行推进，不能对整批消息 Promise.all。
@@ -368,7 +371,7 @@ export default function ChatDetailPage() {
             !m.content ||
             m.isRevoked ||
             m.senderId === currentUserId ||
-            locallyDecryptedMessageIds.has(m.id)
+            locallySettledMessageIds.has(m.id)
           ) continue;
           try {
             const list = bySender.get(m.senderId) || [];
@@ -474,7 +477,7 @@ export default function ChatDetailPage() {
 
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatId, currentUserId, historyNonce]);
+  }, [chatId, currentUserId]);
 
   useEffect(() => {
     setChatMissing(false);
@@ -875,7 +878,7 @@ export default function ChatDetailPage() {
                 if (!r.ok) throw new Error(`send_${r.status}`);
                 return r.json();
               })
-              .then(data => { if (data?.message) dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId: encTempId, realId: data.message.id }); })
+              .then(data => { if (data?.message) replaceMessageId(chatId, encTempId, data.message.id); })
               .catch(err => {
                 updateMessageStatus(chatId, encTempId, 'failed');
                 trackEvent('message_send_failed', { chatId, msgType: 'encrypted', error: err, direction: 'outbound' });
@@ -897,7 +900,7 @@ export default function ChatDetailPage() {
 
     // 非私聊保留原有逻辑（降级/Mock）
     const detectedUrlFallback = extractUrl(text);
-  }, [inputText, chatId, sendMessage, chat, e2ee, otherMember, sessionEstablished, addLog, burnTimer, forwardRestricted, signalWs, currentUserId, dispatch, integrityKey, pendingMentions, replyingTo, isGroupChat, groupSync]);
+  }, [inputText, chatId, sendMessage, chat, e2ee, otherMember, sessionEstablished, addLog, burnTimer, forwardRestricted, signalWs, currentUserId, replaceMessageId, integrityKey, pendingMentions, replyingTo, isGroupChat, groupSync]);
 
   const handleSendEmoji = useCallback(async (emoji: string) => {
     if (!chatId) return;
@@ -1030,7 +1033,7 @@ export default function ChatDetailPage() {
               });
               if (!response.ok) throw new Error(`发送失败 ${response.status}`);
               const data = await response.json();
-              if (data?.message) dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId, realId: data.message.id });
+              if (data?.message) replaceMessageId(chatId, tempId, data.message.id);
             }
           } catch (error) {
             toast.error(error instanceof Error ? error.message : 'GIF 发送失败，安全会话异常');
@@ -1140,7 +1143,7 @@ export default function ChatDetailPage() {
       console.error('[pages/ChatDetailPage] 发送贴纸失败:', error, sticker);
       toast.error('发送失败，请重新选择一个贴纸');
     }
-  }, [chatId, sendMessage, currentUserId, signalWs, dispatch, chat, burnTimer, integrityKey, forwardRestricted, isGroupChat, groupSync, signMessage, handleSendEmoji]);
+  }, [chatId, sendMessage, currentUserId, signalWs, replaceMessageId, chat, burnTimer, integrityKey, forwardRestricted, isGroupChat, groupSync, signMessage, handleSendEmoji]);
 
   // ===== 图片/视频上传发送 =====
   const handleMediaUpload = useCallback(async (file: File, mediaType: 'image' | 'video') => {
@@ -1489,13 +1492,13 @@ export default function ChatDetailPage() {
         return;
       }
 
-      dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId, realId: data.message.id });
+      replaceMessageId(chatId, tempId, data.message.id);
       addLog(`✓ 语音消息加密完成 | 时长: ${payload.duration}s | 密文长度: ${payload.ciphertext.length}`);
     } catch (error) {
       console.error('[ChatDetail] 私聊语音发送失败:', error);
       toast.error('语音消息发送失败，请检查网络后重试');
     }
-  }, [voice, chatId, chat, burnTimer, forwardRestricted, sendMessage, addLog, currentUserId, dispatch, otherMember, e2ee]);
+  }, [voice, chatId, chat, burnTimer, forwardRestricted, sendMessage, addLog, currentUserId, replaceMessageId, otherMember, e2ee]);
 
   // 展示语音消息播放状态
   const handlePlayVoice = useCallback((messageId: string, payload: any) => {
@@ -1620,7 +1623,8 @@ export default function ChatDetailPage() {
   const showPrivateKeyBanner = !isGroupChat
     && !chat?.members?.includes('official')
     && !chat?.members?.includes('BOT')
-    && failedDecryptCount > 0;
+    && failedDecryptCount > 0
+    && !sessionEstablished;
   const showGroupKeyBanner = isGroupChat && (
     groupSync.mlsSyncing
     || !!groupSync.mlsError
@@ -1632,12 +1636,13 @@ export default function ChatDetailPage() {
     if (!otherMember) return;
     setKeySyncing(true);
     try {
-      await e2ee.resetSession(otherMember);
-      const bundle = await e2ee.fetchRemoteBundle(otherMember);
-      await e2ee.establishSession(otherMember, bundle);
+      const current = await e2ee.getSessionInfo(otherMember);
+      if (!current?.established) {
+        const bundle = await e2ee.fetchRemoteBundle(otherMember);
+        await e2ee.establishSession(otherMember, bundle);
+      }
       setSessionEstablished(true);
-      setHistoryNonce(value => value + 1);
-      toast.success('安全会话已重建，正在重新解密');
+      toast.success('安全会话已就绪；旧历史密文无法恢复，之后的新消息可正常加解密');
     } catch (err: any) {
       toast.error(err?.message || '重建安全会话失败');
     } finally {
@@ -1947,7 +1952,7 @@ export default function ChatDetailPage() {
                   body: JSON.stringify(wirePayload),
                 });
                 const res = await response.json().catch(() => null);
-                if (res?.message) dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId, realId: res.message.id });
+                if (res?.message) replaceMessageId(chatId, tempId, res.message.id);
               }
             }
             toast.success('位置消息已发送');

@@ -327,6 +327,36 @@ export async function persistPrivateMessages(messages: Message[], ownerId = 'leg
   await Promise.all(Array.from(byChat.keys()).map(chatId => trimPrivateMessages(chatId, ownerId)));
 }
 
+/**
+ * Move an optimistic private-message cache row to the real server ID.
+ * Leaving the temp primary key behind makes the plaintext optimistic row and
+ * the server ciphertext row appear as two messages after a refresh.
+ */
+export async function replacePrivateMessageIdInLocalDb(
+  chatId: string,
+  ownerId: string,
+  tempId: string,
+  realId: string,
+) {
+  if (!tempId || !realId || tempId === realId) return;
+  const db = await getDb();
+  const tempDoc = await db.privateMessages.findOne(tempId).exec();
+  if (!tempDoc) return;
+  const cached = tempDoc.toJSON() as PrivateMessageDoc;
+  if (cached.chatId !== chatId || (cached.ownerId && cached.ownerId !== ownerId)) return;
+
+  const message = denormalizePrivateMessage(cached);
+  await db.privateMessages.upsert(normalizePrivateMessage({
+    ...message,
+    id: realId,
+    status: 'sent',
+    direction: 'outbound',
+    decryptionStatus: 'decrypted',
+    decryptionFailed: false,
+  }, ownerId));
+  await tempDoc.remove();
+}
+
 export async function persistGroupMessages(groupId: string, messages: GroupMessageLike[], ownerId = 'legacy') {
   const db = await getDb();
   for (const message of messages) {

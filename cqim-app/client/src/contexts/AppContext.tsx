@@ -23,6 +23,7 @@ import {
   loadPrivateMessagesFromLocalDb,
   persistChats,
   persistPrivateMessages,
+  replacePrivateMessageIdInLocalDb,
   clearDecryptedMessageCache,
 } from '@/lib/localdb';
 import { e2eeProxy } from '@/lib/e2ee/WorkerProxy';
@@ -273,6 +274,13 @@ function reducer(state: AppState, action: Action): AppState {
       
       // 深度补齐发送者信息，解决“发信第一秒没头像”问题
       const enrichedMsg = { ...action.message };
+      if (enrichedMsg.isEncrypted) {
+        // SEND_MESSAGE 是本机乐观发送路径。明确保存已解密状态，避免刷新后
+        // 被服务端密文占位覆盖。
+        enrichedMsg.direction = 'outbound';
+        enrichedMsg.decryptionStatus = 'decrypted';
+        enrichedMsg.decryptionFailed = false;
+      }
       if (action.message.senderId === state.currentUser?.id) {
         enrichedMsg.senderProfile = {
           id: state.currentUser.id,
@@ -1116,6 +1124,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 console.warn(`[AppContext] 私聊发送失败: tempId=${tempId} error=${payload.error}`);
               } else if (id) {
                 dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId, realId: id });
+                void replacePrivateMessageIdInLocalDb(chatId, currentUserId, tempId, id)
+                  .catch((error) => console.warn('[AppContext] 本地消息 ID 替换失败:', error));
                 console.log(`[AppContext] 私聊消息确认: tempId=${tempId} -> realId=${id}`);
               }
             } else if (senderId !== currentUserId) {
@@ -1555,8 +1565,14 @@ export function useAppActions() {
       dispatch({ type: 'SET_MESSAGES', chatId, messages }), [dispatch]),
     upsertChat: useCallback((chat: Chat) =>
       dispatch({ type: 'UPSERT_CHAT', chat }), [dispatch]),
-    replaceMessageId: useCallback((chatId: string, tempId: string, realId: string) =>
-      dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId, realId }), [dispatch]),
+    replaceMessageId: useCallback((chatId: string, tempId: string, realId: string) => {
+      dispatch({ type: 'REPLACE_MESSAGE_ID', chatId, tempId, realId });
+      const ownerId = typeof localStorage !== 'undefined'
+        ? localStorage.getItem('user_id') || CURRENT_USER.id
+        : CURRENT_USER.id;
+      void replacePrivateMessageIdInLocalDb(chatId, ownerId, tempId, realId)
+        .catch((error) => console.warn('[AppContext] 本地消息 ID 替换失败:', error));
+    }, [dispatch]),
     updateMessageStatus: useCallback((chatId: string, messageId: string, status: Message['status']) =>
       dispatch({ type: 'UPDATE_MESSAGE_STATUS', chatId, messageId, status }), [dispatch]),
   };
