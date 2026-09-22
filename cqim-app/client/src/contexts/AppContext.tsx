@@ -1197,7 +1197,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (msg.type === 'private_session_reset') {
             const peerId = msg.from || msg.payload?.peerId;
             if (peerId) {
-              void import('../lib/e2ee/E2EEManager')
+              const resetWorker = e2eeProxy.isReady
+                ? e2eeProxy.signalResetSession(peerId)
+                : Promise.resolve();
+              void resetWorker
+                .then(() => import('../lib/e2ee/E2EEManager'))
                 .then(({ E2EEManager }) => E2EEManager.shared().resetSession(peerId))
                 .then(() => console.log(`[E2EE] 已响应对端会话重置: ${peerId}`))
                 .catch(err => console.warn('[E2EE] 响应会话重置失败:', err));

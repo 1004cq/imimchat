@@ -775,6 +775,12 @@ export class E2EEManager {
       if (state.remoteIdentityKey !== envelope.senderIdentityKey) return true;
       if (state.remoteRegistrationId !== envelope.senderRegistrationId) return true;
 
+      // 对端离线时可能收不到 private_session_reset。新的 X3DH PreKey
+      // 携带新的临时公钥，响应方应据此替换旧会话，而不是继续用旧棘轮解密。
+      if (sessionData.role === 'responder' && envelope.senderEphemeralKey) {
+        return sessionData.lastPreKeyEphemeralKey !== envelope.senderEphemeralKey;
+      }
+
       const isInitiatorOnly =
         (sessionData.role === 'initiator' || !!sessionData.ephemeralKey) &&
         state.receiveCounter === 0 &&
@@ -884,6 +890,7 @@ export class E2EEManager {
       sessionData: JSON.stringify({
         ratchetState,
         role: 'responder',
+        lastPreKeyEphemeralKey: envelope.senderEphemeralKey,
       }),
       updatedAt: Date.now(),
     });
