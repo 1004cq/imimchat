@@ -1,6 +1,11 @@
 package api
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -8,6 +13,19 @@ import (
 	"strings"
 	"testing"
 )
+
+func testP256SPKI(t *testing.T) string {
+	t.Helper()
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.StdEncoding.EncodeToString(der)
+}
 
 func TestResolveSigningPublicKey(t *testing.T) {
 	existing := `{"identityKey":"ik","signingPublicKey":"old-sign"}`
@@ -42,15 +60,37 @@ func TestVerifyHMAC(t *testing.T) {
 }
 
 func TestMergePreKeysDedupesByKeyID(t *testing.T) {
+	oldKey := testP256SPKI(t)
+	keepKey := testP256SPKI(t)
+	newKey := testP256SPKI(t)
+	addedKey := testP256SPKI(t)
 	merged := mergePreKeys(
-		[]e2eePreKey{{KeyID: 1.0, PublicKey: "old"}, {KeyID: 2.0, PublicKey: "keep"}},
-		[]e2eePreKey{{KeyID: 1.0, PublicKey: "new"}, {KeyID: 3.0, PublicKey: "added"}},
+		[]e2eePreKey{{KeyID: 1.0, PublicKey: oldKey}, {KeyID: 2.0, PublicKey: keepKey}},
+		[]e2eePreKey{{KeyID: 1.0, PublicKey: newKey}, {KeyID: 3.0, PublicKey: addedKey}},
 	)
 	if len(merged) != 3 {
 		t.Fatalf("got %d keys", len(merged))
 	}
-	if merged[0].PublicKey != "new" || merged[1].PublicKey != "keep" || merged[2].PublicKey != "added" {
+	if merged[0].PublicKey != newKey || merged[1].PublicKey != keepKey || merged[2].PublicKey != addedKey {
 		t.Fatalf("unexpected merge %#v", merged)
+	}
+}
+
+func TestP256PreKeyValidationFiltersLegacyRawKey(t *testing.T) {
+	valid := testP256SPKI(t)
+	legacyRaw := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	if !isValidP256SPKIPublicKey(valid) {
+		t.Fatal("expected generated P-256 SPKI to be valid")
+	}
+	if isValidP256SPKIPublicKey(legacyRaw) {
+		t.Fatal("expected legacy raw key to be rejected")
+	}
+	filtered := filterValidP256PreKeys([]e2eePreKey{
+		{KeyID: 1.0, PublicKey: legacyRaw},
+		{KeyID: 2.0, PublicKey: valid},
+	})
+	if len(filtered) != 1 || filtered[0].PublicKey != valid {
+		t.Fatalf("unexpected filtered keys %#v", filtered)
 	}
 }
 

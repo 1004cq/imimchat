@@ -5,8 +5,12 @@ package api
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -26,6 +30,38 @@ var (
 type e2eePreKey struct {
 	KeyID     any    `json:"keyId"`
 	PublicKey string `json:"publicKey"`
+}
+
+func isValidP256SPKIPublicKey(value string) bool {
+	der, err := base64.StdEncoding.Strict().DecodeString(value)
+	if err != nil || len(der) == 0 {
+		return false
+	}
+	parsed, err := x509.ParsePKIXPublicKey(der)
+	if err != nil {
+		return false
+	}
+	pub, ok := parsed.(*ecdsa.PublicKey)
+	return ok && pub.Curve != nil && pub.Curve.Params().Name == elliptic.P256().Params().Name
+}
+
+func filterValidP256PreKeys(keys []e2eePreKey) []e2eePreKey {
+	out := make([]e2eePreKey, 0, len(keys))
+	for _, item := range keys {
+		if item.KeyID != nil && isValidP256SPKIPublicKey(item.PublicKey) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func signedPreKeyPublicKey(value any) string {
+	item, ok := value.(map[string]any)
+	if !ok {
+		return ""
+	}
+	publicKey, _ := item["publicKey"].(string)
+	return publicKey
 }
 
 func (s *Server) registerCryptoRoutes(mux *http.ServeMux) {
@@ -112,6 +148,9 @@ func mergePreKeys(existing, incoming []e2eePreKey) []e2eePreKey {
 	seen := map[string]int{}
 	out := make([]e2eePreKey, 0, len(existing)+len(incoming))
 	add := func(item e2eePreKey) {
+		if item.KeyID == nil || !isValidP256SPKIPublicKey(item.PublicKey) {
+			return
+		}
 		id, _ := json.Marshal(item.KeyID)
 		key := string(id)
 		if i, ok := seen[key]; ok {
@@ -262,11 +301,16 @@ func (s *Server) cryptoRegisterBundle(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "注册 Bundle 失败"})
 		return
 	}
+	storedSigningPublicKey := resolveSigningPublicKey(in.SigningPublicKey, in.IdentityKey, existing)
+	if !isValidP256SPKIPublicKey(in.IdentityKey) || !isValidP256SPKIPublicKey(signedPreKeyPublicKey(in.SignedPreKey)) || storedSigningPublicKey == nil || !isValidP256SPKIPublicKey(*storedSigningPublicKey) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "E2EE Bundle 公钥格式无效"})
+		return
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	bundle := map[string]any{
 		"registrationId":   in.RegistrationID,
 		"identityKey":      in.IdentityKey,
-		"signingPublicKey": resolveSigningPublicKey(in.SigningPublicKey, in.IdentityKey, existing),
+		"signingPublicKey": storedSigningPublicKey,
 		"signedPreKey":     in.SignedPreKey,
 		"updatedAt":        now,
 	}
@@ -286,12 +330,17 @@ func (s *Server) cryptoRegisterBundle(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "注册 Bundle 失败"})
 		return
 	}
-	if len(in.PreKeys) > 0 {
-		if _, err := s.mergeStoredPreKeys(r.Context(), in.UserID, in.PreKeys); err != nil {
-			log.Printf("[Crypto] 注册 Bundle 失败: %v", err)
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "注册 Bundle 失败"})
-			return
+	keepExisting := false
+	if existing != "" {
+		var previous struct {
+			IdentityKey string `json:"identityKey"`
 		}
+		keepExisting = json.Unmarshal([]byte(existing), &previous) == nil && previous.IdentityKey == in.IdentityKey
+	}
+	if _, err := s.mergeStoredPreKeys(r.Context(), in.UserID, in.PreKeys, keepExisting); err != nil {
+		log.Printf("[Crypto] 注册 Bundle 失败: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "注册 Bundle 失败"})
+		return
 	}
 	log.Printf("[Crypto] 用户 %s 注册 PreKey Bundle 成功, preKeys: %d", in.UserID, len(in.PreKeys))
 	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
@@ -318,6 +367,12 @@ func (s *Server) cryptoGetBundle(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "获取 Bundle 失败"})
 		return
 	}
+	identityKey, _ := bundle["identityKey"].(string)
+	signingPublicKey, _ := bundle["signingPublicKey"].(string)
+	if !isValidP256SPKIPublicKey(identityKey) || !isValidP256SPKIPublicKey(signingPublicKey) || !isValidP256SPKIPublicKey(signedPreKeyPublicKey(bundle["signedPreKey"])) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "E2EE Bundle 格式无效，请重新注册"})
+		return
+	}
 	var oneTime any
 	preRaw, preFound, err := s.systemConfigValue(r.Context(), "e2ee:prekeys:"+userID)
 	if err != nil {
@@ -332,15 +387,19 @@ func (s *Server) cryptoGetBundle(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "获取 Bundle 失败"})
 			return
 		}
-		if len(preKeys) > 0 {
-			oneTime = preKeys[0]
-			remaining, _ := json.Marshal(preKeys[1:])
-			if err := s.upsertSystemConfig(r.Context(), "e2ee:prekeys:"+userID, string(remaining)); err != nil {
-				log.Printf("[Crypto] 获取 Bundle 失败: %v", err)
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "获取 Bundle 失败"})
-				return
-			}
-			log.Printf("[Crypto] 消费用户 %s 的 PreKey #%v, 剩余: %d", userID, preKeys[0].KeyID, len(preKeys)-1)
+		validPreKeys := filterValidP256PreKeys(preKeys)
+		if len(validPreKeys) > 0 {
+			oneTime = validPreKeys[0]
+			validPreKeys = validPreKeys[1:]
+		}
+		remaining, _ := json.Marshal(validPreKeys)
+		if err := s.upsertSystemConfig(r.Context(), "e2ee:prekeys:"+userID, string(remaining)); err != nil {
+			log.Printf("[Crypto] 获取 Bundle 失败: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "获取 Bundle 失败"})
+			return
+		}
+		if oneTime != nil {
+			log.Printf("[Crypto] 消费用户 %s 的合法 PreKey, 剩余: %d", userID, len(validPreKeys))
 		}
 	}
 	signing := bundle["signingPublicKey"]
@@ -370,9 +429,9 @@ func (s *Server) cryptoPreKeyCount(w http.ResponseWriter, r *http.Request) {
 	}
 	count := 0
 	if found && raw != "" {
-		var preKeys []any
+		var preKeys []e2eePreKey
 		if json.Unmarshal([]byte(raw), &preKeys) == nil {
-			count = len(preKeys)
+			count = len(filterValidP256PreKeys(preKeys))
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"count": count})
@@ -387,22 +446,31 @@ func (s *Server) cryptoReplenishPreKeys(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少必要参数"})
 		return
 	}
-	merged, err := s.mergeStoredPreKeys(r.Context(), in.UserID, in.PreKeys)
+	validIncoming := filterValidP256PreKeys(in.PreKeys)
+	if len(validIncoming) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "没有有效的 P-256 PreKey"})
+		return
+	}
+	merged, err := s.mergeStoredPreKeys(r.Context(), in.UserID, validIncoming, true)
 	if err != nil {
 		log.Printf("[Crypto] 补充 PreKeys 失败: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "补充失败"})
 		return
 	}
-	log.Printf("[Crypto] 用户 %s 补充 %d 个 PreKeys, 总计: %d", in.UserID, len(in.PreKeys), len(merged))
+	log.Printf("[Crypto] 用户 %s 补充 %d 个 PreKeys, 总计: %d", in.UserID, len(validIncoming), len(merged))
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "totalCount": len(merged)})
 }
 
-func (s *Server) mergeStoredPreKeys(ctx context.Context, userID string, incoming []e2eePreKey) ([]e2eePreKey, error) {
+func (s *Server) mergeStoredPreKeys(ctx context.Context, userID string, incoming []e2eePreKey, keepExisting bool) ([]e2eePreKey, error) {
 	raw, _, err := s.systemConfigValue(ctx, "e2ee:prekeys:"+userID)
 	if err != nil {
 		return nil, err
 	}
-	merged := mergePreKeys(parsePreKeys(raw), incoming)
+	var existing []e2eePreKey
+	if keepExisting {
+		existing = parsePreKeys(raw)
+	}
+	merged := mergePreKeys(existing, incoming)
 	out, err := json.Marshal(merged)
 	if err != nil {
 		return nil, err
