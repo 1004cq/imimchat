@@ -24,6 +24,8 @@ interface UseE2EEReturn {
   encrypt: (peerId: string, plaintext: string) => Promise<SignalEnvelope | null>;
   /** 解密消息 */
   decrypt: (peerId: string, envelope: SignalEnvelope) => Promise<string | null>;
+  /** 使用旧会话快照解密历史消息 */
+  decryptFromArchivedSessions: (peerId: string, envelope: SignalEnvelope) => Promise<string | null>;
   /** 获取会话信息 */
   getSessionInfo: (peerId: string) => Promise<SessionInfo | null>;
   /** 获取真实远端 Bundle，不允许 Mock 回退 */
@@ -123,6 +125,19 @@ export function useE2EE(): UseE2EEReturn {
     }
   }, []);
 
+  const decryptFromArchivedSessions = useCallback(async (peerId: string, envelope: SignalEnvelope): Promise<string | null> => {
+    const manager = managerRef.current;
+    if (!manager?.isInitialized) return null;
+    try {
+      return e2eeProxy.isReady
+        ? await e2eeProxy.signalDecryptArchived(peerId, envelope)
+        : await manager.decryptFromArchivedSessions(peerId, envelope);
+    } catch (err) {
+      console.warn('[useE2EE] 旧会话解密失败:', err);
+      return null;
+    }
+  }, []);
+
   const getSessionInfo = useCallback(async (peerId: string): Promise<SessionInfo | null> => {
     const manager = managerRef.current;
     if (!manager?.isInitialized) return null;
@@ -188,6 +203,7 @@ export function useE2EE(): UseE2EEReturn {
     status,
     encrypt,
     decrypt,
+    decryptFromArchivedSessions,
     getSessionInfo,
     fetchRemoteBundle,
     establishSession,

@@ -46,6 +46,12 @@ export interface SessionRecord {
   updatedAt: number;
 }
 
+/** 旧会话快照：重置后仍用于解密历史密文 */
+export interface ArchivedSessionRecord extends SessionRecord {
+  archiveId: string;
+  archivedAt: number;
+}
+
 /** 本地注册信息 */
 export interface LocalRegistration {
   registrationId: number;
@@ -59,7 +65,7 @@ export interface LocalRegistration {
 // ============================================================
 
 const DB_NAME = 'imim-signal-store';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 const STORES = {
   LOCAL_REG: 'localRegistration',
@@ -67,6 +73,7 @@ const STORES = {
   SIGNED_PREKEY: 'signedPreKeys',
   PREKEY: 'preKeys',
   SESSION: 'sessions',
+  SESSION_ARCHIVE: 'sessionArchives',
 } as const;
 
 // ============================================================
@@ -108,6 +115,10 @@ export class SignalStore {
         // Session
         if (!db.objectStoreNames.contains(STORES.SESSION)) {
           db.createObjectStore(STORES.SESSION, { keyPath: 'peerId' });
+        }
+        if (!db.objectStoreNames.contains(STORES.SESSION_ARCHIVE)) {
+          const store = db.createObjectStore(STORES.SESSION_ARCHIVE, { keyPath: 'archiveId' });
+          store.createIndex('peerId', 'peerId');
         }
       },
     });
@@ -251,6 +262,34 @@ export class SignalStore {
     await db.clear(STORES.SESSION);
   }
 
+  async saveArchivedSession(record: ArchivedSessionRecord): Promise<void> {
+    const db = this.ensureDB();
+    await db.put(STORES.SESSION_ARCHIVE, record);
+  }
+
+  async getArchivedSessions(peerId: string): Promise<ArchivedSessionRecord[]> {
+    const db = this.ensureDB();
+    const records = await db.getAllFromIndex(STORES.SESSION_ARCHIVE, 'peerId', peerId);
+    return records.sort((a, b) => b.archivedAt - a.archivedAt);
+  }
+
+  async saveArchivedSessionState(archiveId: string, sessionData: string): Promise<void> {
+    const db = this.ensureDB();
+    const record = await db.get(STORES.SESSION_ARCHIVE, archiveId);
+    if (record) await db.put(STORES.SESSION_ARCHIVE, { ...record, sessionData, updatedAt: Date.now() });
+  }
+
+  async removeArchivedSession(archiveId: string): Promise<void> {
+    const db = this.ensureDB();
+    await db.delete(STORES.SESSION_ARCHIVE, archiveId);
+  }
+
+  async removeArchivedSessions(peerId: string): Promise<void> {
+    const db = this.ensureDB();
+    const records = await this.getArchivedSessions(peerId);
+    await Promise.all(records.map(record => db.delete(STORES.SESSION_ARCHIVE, record.archiveId)));
+  }
+
   // --------------------------------------------------------
   // 全部清除（退出登录时调用）
   // --------------------------------------------------------
@@ -263,6 +302,7 @@ export class SignalStore {
       db.clear(STORES.SIGNED_PREKEY),
       db.clear(STORES.PREKEY),
       db.clear(STORES.SESSION),
+      db.clear(STORES.SESSION_ARCHIVE),
     ]);
   }
 }

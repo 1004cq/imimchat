@@ -54,6 +54,17 @@ ctx.onmessage = async (event: MessageEvent) => {
         ctx.postMessage({ id, type: 'signal_decrypt_ok', payload: await e2eeManager.decrypt(payload.peerId, payload.envelope) });
         return;
 
+      case 'signal_decrypt_archived':
+        if (!e2eeManager) throw new Error('E2EE Worker 未初始化');
+        ctx.postMessage({ id, type: 'signal_decrypt_archived_ok', payload: await e2eeManager.decryptFromArchivedSessions(payload.peerId, payload.envelope) });
+        return;
+
+      case 'signal_reset_session':
+        if (!e2eeManager) throw new Error('E2EE Worker 未初始化');
+        await e2eeManager.resetSession(payload.peerId);
+        ctx.postMessage({ id, type: 'signal_reset_session_ok', payload: true });
+        return;
+
       case 'signal_encrypt_file': {
         if (!e2eeManager) throw new Error('E2EE Worker 未初始化');
         const encrypted = await e2eeManager.encryptFile(payload.fileBuffer);
@@ -67,7 +78,12 @@ ctx.onmessage = async (event: MessageEvent) => {
         // 必须按消息时间顺序串行解密；Double Ratchet 不能 Promise.all 并发推进。
         for (const message of payload.messages || []) {
           try {
-            const plaintext = await e2eeManager.decrypt(payload.peerId, message.envelope);
+            let plaintext: string;
+            try {
+              plaintext = await e2eeManager.decrypt(payload.peerId, message.envelope);
+            } catch (currentError) {
+              plaintext = await e2eeManager.decryptFromArchivedSessions(payload.peerId, message.envelope);
+            }
             results.push({ id: message.id, plaintext, success: true });
           } catch (error) {
             results.push({ id: message.id, error: error instanceof Error ? error.message : String(error), success: false });

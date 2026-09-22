@@ -10,7 +10,7 @@
  * 参考唐僧叨叨 E2EEManager 设计，使用 Web Crypto API 实现真实密码学。
  */
 
-import { SignalStore, type KeyPairB64, type PreKeyRecord, type SessionRecord } from './SignalStore';
+import { SignalStore, type KeyPairB64, type PreKeyRecord, type SessionRecord, type ArchivedSessionRecord } from './SignalStore';
 import { clearDecryptedMessageCache } from '@/lib/localdb';
 import { e2eeProxy } from './WorkerProxy';
 import {
@@ -120,6 +120,9 @@ export interface SessionInfo {
   messagesSent: number;
   messagesReceived: number;
 }
+
+// 每个对端保留最近的状态快照；快照位于 IndexedDB，仅本机可读。
+const MAX_ARCHIVED_SESSIONS_PER_PEER = 512;
 
 // ============================================================
 // E2EEManager 单例
@@ -622,6 +625,7 @@ export class E2EEManager {
 
     const sessionData = JSON.parse(sessionRecord!.sessionData);
     const state: RatchetState = sessionData.ratchetState;
+    await this.archiveSession(peerId, sessionRecord!);
 
     // 响应方首次回复时尚无发送链：先对当前对端棘轮密钥做一次发送侧 DH 棘轮
     if (!state.sendChainKey) {
@@ -694,6 +698,7 @@ export class E2EEManager {
       if (shouldReplace) {
         if (sessionRecord) {
           console.log('[E2EE] 替换现有会话以处理对端 PreKey 消息');
+          await this.archiveSession(peerId, sessionRecord);
           await this.store.removeSession(peerId);
         }
         await this.establishSessionAsResponder(peerId, envelope);
@@ -704,6 +709,9 @@ export class E2EEManager {
     if (!sessionRecord) {
       throw new Error(`没有与 ${peerId} 的加密会话`);
     }
+
+    // 在推进接收链前保存快照，未来重置会话后仍可按消息恢复旧链。
+    await this.archiveSession(peerId, sessionRecord);
 
     const sessionData = JSON.parse(sessionRecord.sessionData);
     const state: RatchetState = sessionData.ratchetState;
@@ -757,6 +765,43 @@ export class E2EEManager {
     return bufferToString(plainBuf);
   }
 
+  /** 使用归档会话尝试解密历史消息，并把推进后的状态写回同一归档。 */
+  async decryptFromArchivedSessions(peerId: string, envelope: SignalEnvelope): Promise<string> {
+    const archives = await this.store.getArchivedSessions(peerId);
+    let lastError: unknown = new Error('没有可用的旧安全会话');
+    for (const archive of archives) {
+      try {
+        const result = await this.decryptWithArchivedRecord(archive, envelope);
+        await this.store.saveArchivedSessionState(archive.archiveId, result.sessionData);
+        return result.plaintext;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError;
+  }
+
+  private async decryptWithArchivedRecord(
+    archive: ArchivedSessionRecord,
+    envelope: SignalEnvelope,
+  ): Promise<{ plaintext: string; sessionData: string }> {
+    if (envelope.type === 'prekey') throw new Error('归档会话不处理 PreKey 消息');
+    const sessionData = JSON.parse(archive.sessionData);
+    const state: RatchetState = sessionData.ratchetState;
+    if (!state) throw new Error('归档会话状态无效');
+    if (envelope.senderRatchetKey !== state.dhReceivingKey) {
+      await this.performDHRatchet(state, envelope.senderRatchetKey);
+    }
+    if (!state.receiveChainKey) throw new Error('归档会话缺少接收链');
+    const chainKey = base64ToBuffer(state.receiveChainKey);
+    const { messageKey, nextChainKey } = await deriveMessageKeys(chainKey);
+    const plainBuf = await aesDecrypt(envelope.ciphertext, messageKey);
+    state.receiveChainKey = bufferToBase64(nextChainKey);
+    state.receiveCounter++;
+    sessionData.ratchetState = state;
+    return { plaintext: bufferToString(plainBuf), sessionData: JSON.stringify(sessionData) };
+  }
+
   /**
    * 判断收到 PreKey 时是否应丢弃本地会话并改为响应方 X3DH。
    * - 对端 identity / registrationId 变化（重装/重置密钥）→ 替换
@@ -774,6 +819,12 @@ export class E2EEManager {
 
       if (state.remoteIdentityKey !== envelope.senderIdentityKey) return true;
       if (state.remoteRegistrationId !== envelope.senderRegistrationId) return true;
+
+      // 对端离线时可能收不到 private_session_reset。新的 X3DH PreKey
+      // 携带新的临时公钥，响应方应据此替换旧会话，而不是继续用旧棘轮解密。
+      if (sessionData.role === 'responder' && envelope.senderEphemeralKey) {
+        return sessionData.lastPreKeyEphemeralKey !== envelope.senderEphemeralKey;
+      }
 
       const isInitiatorOnly =
         (sessionData.role === 'initiator' || !!sessionData.ephemeralKey) &&
@@ -884,6 +935,7 @@ export class E2EEManager {
       sessionData: JSON.stringify({
         ratchetState,
         role: 'responder',
+        lastPreKeyEphemeralKey: envelope.senderEphemeralKey,
       }),
       updatedAt: Date.now(),
     });
@@ -1049,8 +1101,22 @@ export class E2EEManager {
 
   /** 重置与对端的会话 */
   async resetSession(peerId: string): Promise<void> {
+    const current = await this.store.getSession(peerId);
+    if (current) await this.archiveSession(peerId, current);
     await this.store.removeSession(peerId);
     console.log('[E2EE] 已重置与', peerId, '的会话');
+  }
+
+  async archiveSession(peerId: string, session?: SessionRecord): Promise<string | null> {
+    const current = session || await this.store.getSession(peerId);
+    if (!current) return null;
+    const archiveId = `${peerId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+    await this.store.saveArchivedSession({ ...current, archiveId, archivedAt: Date.now() });
+    const archives = await this.store.getArchivedSessions(peerId);
+    for (const old of archives.slice(MAX_ARCHIVED_SESSIONS_PER_PEER)) {
+      await this.store.removeArchivedSession(old.archiveId);
+    }
+    return archiveId;
   }
 
   /** 重置所有数据（退出登录） */
