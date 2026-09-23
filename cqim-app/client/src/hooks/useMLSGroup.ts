@@ -238,7 +238,7 @@ export function useMLSGroup(options: UseMLSGroupOptions): UseMLSGroupReturn {
       setStatus(await manager.getGroupStatus(groupId));
 
       // 通知服务器群组已启用 MLS
-      await fetch('/api/mls/enable-group', {
+      const enableResp = await fetch('/api/mls/enable-group', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -249,6 +249,7 @@ export function useMLSGroup(options: UseMLSGroupOptions): UseMLSGroupReturn {
           members: state.members,
         }),
       });
+      if (!enableResp.ok) throw new Error('群 MLS 状态同步失败');
 
       console.log(`[useMLSGroup] 群组 ${groupId} MLS 已启用`);
     } catch (err: any) {

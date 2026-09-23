@@ -379,36 +379,51 @@ export function useGroupSync(options: UseGroupSyncOptions) {
             // 群创建接口已经把成员写入 GroupMember，但这些成员尚未收到 MLS Welcome。
             // 群主首次打开群聊时为已有成员补发 Welcome/Commit，避免新建群只能自己发消息。
             const membersResp = await fetch(`/api/group/members?groupId=${encodeURIComponent(groupId)}&pageSize=500`);
-            if (membersResp.ok) {
-              const memberData = await membersResp.json();
-              for (const member of memberData.members || []) {
+            if (!membersResp.ok) throw new Error('读取群成员失败，MLS Welcome 尚未同步');
+            const memberData = await membersResp.json();
+            const bootstrapFailures: string[] = [];
+            for (const member of memberData.members || []) {
                 const targetUserId = member?.userId;
                 if (!targetUserId || targetUserId === userId) continue;
+                let memberAddedLocally = false;
                 try {
                   const keyResp = await fetch(`/api/mls/get-key-package?userId=${encodeURIComponent(targetUserId)}`);
-                  if (!keyResp.ok) continue;
+                  if (!keyResp.ok) {
+                    bootstrapFailures.push(`${targetUserId}: 没有可用 KeyPackage`);
+                    continue;
+                  }
                   const keyData = await keyResp.json();
                   const added = await manager.addMember(groupId, targetUserId, keyData.keyPackage);
+                  memberAddedLocally = true;
                   const senderIdentityKey = manager.getIdentityPublicKey();
-                  await fetch('/api/mls/send-welcome', {
+                  const welcomeResp = await fetch('/api/mls/send-welcome', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ groupId, targetUserId, welcome: added.welcome, senderIdentityKey }),
                   });
-                  await fetch('/api/mls/broadcast-commit', {
+                  if (!welcomeResp.ok) throw new Error('Welcome 保存失败');
+                  const commitResp = await fetch('/api/mls/broadcast-commit', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ groupId, commit: added.commit, commitType: 'add' }),
                   });
-                  await fetch('/api/mls/update-group-state', {
+                  if (!commitResp.ok) throw new Error('Commit 保存失败');
+                  const stateResp = await fetch('/api/mls/update-group-state', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ groupId, epoch: added.commit.epoch, members: added.welcome.members, commitType: 'add' }),
                   });
+                  if (!stateResp.ok) throw new Error('群 MLS 状态保存失败');
                 } catch (memberError) {
+                  if (memberAddedLocally) {
+                    await manager.removeMember(groupId, targetUserId).catch(() => {});
+                  }
+                  bootstrapFailures.push(`${targetUserId}: ${memberError instanceof Error ? memberError.message : '同步失败'}`);
                   console.warn(`[GroupSync] 为成员 ${targetUserId} 补发 MLS Welcome 失败:`, memberError);
                 }
-              }
+            }
+            if (bootstrapFailures.length > 0) {
+              throw new Error(`MLS 成员同步未完成：${bootstrapFailures.join('；')}`);
             }
             result = { ready: true, recoveredVia: 'owner-bootstrap' };
           }
