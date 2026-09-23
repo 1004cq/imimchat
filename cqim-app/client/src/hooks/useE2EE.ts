@@ -153,6 +153,9 @@ export function useE2EE(): UseE2EEReturn {
   const establishSession = useCallback(async (peerId: string, bundle: PreKeyBundle): Promise<void> => {
     const manager = managerRef.current;
     if (!manager?.isInitialized) throw new Error('E2EE 未初始化');
+    // 会话必须和后续 encrypt/decrypt 落在同一个 Worker 队列里，否则主线程写出的棘轮
+    // 可能和 Worker 读到的 IndexedDB 快照分叉。
+    if (e2eeProxy.isReady) return e2eeProxy.signalEstablishSession(peerId, bundle);
     return manager.establishSession(peerId, bundle);
   }, []);
 
@@ -185,7 +188,8 @@ export function useE2EE(): UseE2EEReturn {
   const resetSession = useCallback(async (peerId: string): Promise<void> => {
     const manager = managerRef.current;
     if (!manager?.isInitialized) return;
-    await manager.resetSession(peerId);
+    if (e2eeProxy.isReady) await e2eeProxy.signalResetSession(peerId);
+    else await manager.resetSession(peerId);
     const s = await manager.getStatus();
     setStatus(s);
   }, []);
