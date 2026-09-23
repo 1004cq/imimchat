@@ -12,7 +12,7 @@ export function KeySyncBanner({ kind, syncing, error, onRetry }: KeySyncBannerPr
   const title = kind === 'group' ? '群安全会话未就绪' : '安全会话需要重新验证';
   const detail = error
     || (kind === 'group'
-      ? '重装或换机后本地 MLS 密钥会丢失。可重试同步 Welcome/Commit；若仍失败，需要群成员重新邀请。'
+      ? '群消息仍保存在服务器，但当前设备没有可用的本地 MLS 密钥。可重试同步 Welcome/Commit；若仍失败，需要群成员重新邀请。'
       : '历史密文无法在新设备解开。重试将重建会话，之后的新消息可以正常加解密。');
 
   return (

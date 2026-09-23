@@ -96,9 +96,6 @@ export function useMLSGroup(options: UseMLSGroupOptions): UseMLSGroupReturn {
         // 初始化 MLS 管理器
         await manager.initialize(userId);
 
-        // 上传 KeyPackage（如果还没有）
-        await manager.uploadKeyPackage().catch(() => {});
-
         const recovered = await manager.recoverFromServer(groupId);
 
         if (!cancelled) {

@@ -311,8 +311,10 @@ export default function ChatDetailPage() {
   }, [otherMember, chatId]);
 
   // ===== 本地秒开 + 后台同步私聊历史 =====
+  // 群聊由 useGroupSync 通过 /api/group/messages 加载；不能把 group_<id>
+  // 当作私聊 chatId 请求 /api/chat/<id>/messages，否则会误显示“会话不存在”。
   useEffect(() => {
-    if (!chatId || chatId === 'c0' || chatId === 'cBOT') return;
+    if (!chatId || !chat || chat.type !== 'private' || chatId === 'c0' || chatId === 'cBOT') return;
     const token = localStorage.getItem('user_token');
     if (!token) return;
     let cancelled = false;
@@ -511,7 +513,7 @@ export default function ChatDetailPage() {
 
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatId, currentUserId, historyNonce]);
+  }, [chatId, chat?.type, currentUserId, historyNonce]);
 
   useEffect(() => {
     setChatMissing(false);
@@ -1666,7 +1668,6 @@ export default function ChatDetailPage() {
     groupSync.mlsSyncing
     || !!groupSync.mlsError
     || failedDecryptCount > 0
-    || (messages.length === 0 && !groupSync.loading && !groupSync.mlsReady && !loadingMessages)
   );
 
   const retryPrivateKeySync = useCallback(async () => {

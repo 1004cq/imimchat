@@ -376,6 +376,7 @@ class BatchMessageQueue {
               senderName: item.payload.senderName || item.payload.senderId,
               msgType: mType,
               content: item.payload.content,
+              mlsEncrypted: mType === 'mls_encrypted',
               replyToId: item.payload.replyToId,
               extra: item.payload.extra ? JSON.stringify(item.payload.extra) : null,
             };
@@ -422,6 +423,7 @@ class BatchMessageQueue {
               senderName: item.payload.senderName || item.payload.senderId,
               msgType: mType,
               content: item.payload.content,
+              mlsEncrypted: mType === 'mls_encrypted',
               replyToId: item.payload.replyToId,
               extra: item.payload.extra ? JSON.stringify(item.payload.extra) : null,
             },
