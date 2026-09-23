@@ -21,7 +21,8 @@ async function ensureManagers(userId?: string) {
 
   if (!e2eeManager) {
     e2eeManager = E2EEManager.shared();
-    await e2eeManager.initialize();
+    // Worker 只读主线程已经持久化的密钥，避免并发轮换 Signed PreKey。
+    await e2eeManager.initialize({ manageKeys: false });
   }
   if (!mlsManager) {
     mlsManager = MLSGroupManager.shared();
@@ -57,6 +58,12 @@ ctx.onmessage = async (event: MessageEvent) => {
       case 'signal_decrypt_archived':
         if (!e2eeManager) throw new Error('E2EE Worker 未初始化');
         ctx.postMessage({ id, type: 'signal_decrypt_archived_ok', payload: await e2eeManager.decryptFromArchivedSessions(payload.peerId, payload.envelope) });
+        return;
+
+      case 'signal_establish_session':
+        if (!e2eeManager) throw new Error('E2EE Worker 未初始化');
+        await e2eeManager.establishSession(payload.peerId, payload.bundle);
+        ctx.postMessage({ id, type: 'signal_establish_session_ok', payload: true });
         return;
 
       case 'signal_reset_session':

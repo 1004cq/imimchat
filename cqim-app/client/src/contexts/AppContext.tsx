@@ -28,6 +28,7 @@ import {
 import { e2eeProxy } from '@/lib/e2ee/WorkerProxy';
 import { formatChatListPreview, preferLocalChatPreview, sanitizePreviewText } from '@/lib/chatPreview';
 import { messageMediaPatch } from '@/lib/mediaFields';
+import { mergePrivateMessages as mergeMessages } from '@/lib/messageMerge';
 import { PRESENCE_HEARTBEAT_MS, reportPresence, resolvePresenceState } from '@/lib/presence';
 
 export interface AuthUser {
@@ -51,28 +52,6 @@ interface AppState {
   showProfile: string | null;
   /** 当前在线用户 ID 集合 */
   onlineUsers: Set<string>;
-}
-
-function mergeMessages(existing: Message[], incoming: Message[]): Message[] {
-  const byId = new Map(existing.map(message => [message.id, message]));
-  for (const message of incoming) {
-    const previous = byId.get(message.id);
-    if (!previous) {
-      byId.set(message.id, message);
-      continue;
-    }
-
-    // 本地已经解密的消息不能被服务器返回的密文占位覆盖。
-    const previousIsDecrypted = previous.decryptionStatus === 'decrypted' && !previous.decryptionFailed;
-    const incomingIsCiphertext = message.decryptionStatus === 'ciphertext';
-    byId.set(message.id, previousIsDecrypted && incomingIsCiphertext
-      ? { ...message, ...previous }
-      : { ...previous, ...message });
-  }
-  return Array.from(byId.values()).sort((a, b) => {
-    const timeDiff = Number(a.timestamp || 0) - Number(b.timestamp || 0);
-    return timeDiff || a.id.localeCompare(b.id);
-  });
 }
 
 type Action =
@@ -905,38 +884,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           } as Message))
         : [];
       if (messages.length > 0) {
+        // 这里只放密文占位。真正解密只在聊天页进行一次，避免和页面重复推进 Double Ratchet。
         dispatch({ type: 'MERGE_MESSAGES', chatId, messages });
         console.log(`[AppContext] 从服务端恢复会话 ${chatId} 的 ${messages.length} 条消息`);
-
-        // 历史接口返回的是密文信封；按时间顺序逐条解密，单条坏密文不能阻断整个会话显示。
-        void (async () => {
-          try {
-            const { E2EEManager } = await import('../lib/e2ee/E2EEManager');
-            const e2ee = E2EEManager.shared();
-            for (const message of messages) {
-              if (message.senderId === ownerId || !message.encryptedEnvelope || message.isRecalled) continue;
-              try {
-                const decryptedStr = e2eeProxy.isReady
-                  ? await e2eeProxy.signalDecrypt(message.senderId, message.encryptedEnvelope)
-                  : await e2ee.decrypt(message.senderId, message.encryptedEnvelope);
-                const decrypted = JSON.parse(decryptedStr);
-                message.content = decrypted.content || '';
-                message.type = decrypted.msgType || 'text';
-                message.decryptionStatus = 'decrypted';
-                message.decryptionFailed = false;
-                Object.assign(message, messageMediaPatch(decrypted.extra));
-              } catch (err) {
-                console.warn(`[E2EE] 历史消息解密失败: ${message.id}`, err);
-                message.content = '🔒 无法解密消息，请重置安全会话';
-                message.decryptionStatus = 'failed';
-                message.decryptionFailed = true;
-              }
-            }
-            dispatch({ type: 'MERGE_MESSAGES', chatId, messages: [...messages] });
-          } catch (err) {
-            console.warn('[E2EE] 历史消息解密初始化失败，保留密文列表:', err);
-          }
-        })();
       }
     };
     void restoreServerHistory().catch((err) => console.error('[AppContext] 服务端私聊历史恢复失败:', err));
@@ -1197,12 +1147,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (msg.type === 'private_session_reset') {
             const peerId = msg.from || msg.payload?.peerId;
             if (peerId) {
-              const resetWorker = e2eeProxy.isReady
+              const reset = e2eeProxy.isReady
                 ? e2eeProxy.signalResetSession(peerId)
-                : Promise.resolve();
-              void resetWorker
-                .then(() => import('../lib/e2ee/E2EEManager'))
-                .then(({ E2EEManager }) => E2EEManager.shared().resetSession(peerId))
+                : import('../lib/e2ee/E2EEManager').then(({ E2EEManager }) => E2EEManager.shared().resetSession(peerId));
+              void reset
                 .then(() => console.log(`[E2EE] 已响应对端会话重置: ${peerId}`))
                 .catch(err => console.warn('[E2EE] 响应会话重置失败:', err));
             }

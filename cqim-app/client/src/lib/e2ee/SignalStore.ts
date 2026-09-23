@@ -6,6 +6,7 @@
  * 所有私钥永不离开浏览器。
  */
 import { openDB, type IDBPDatabase } from 'idb';
+import { nextPreKeyStart } from './prekeyIds';
 
 // ============================================================
 // 类型定义
@@ -65,7 +66,7 @@ export interface LocalRegistration {
 // ============================================================
 
 const DB_NAME = 'imim-signal-store';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 const STORES = {
   LOCAL_REG: 'localRegistration',
@@ -74,7 +75,11 @@ const STORES = {
   PREKEY: 'preKeys',
   SESSION: 'sessions',
   SESSION_ARCHIVE: 'sessionArchives',
+  META: 'meta',
 } as const;
+
+const META_PUBLISHED_PREKEYS = 'publishedPreKeyIds';
+const META_NEXT_PREKEY_ID = 'nextPreKeyId';
 
 // ============================================================
 // SignalStore 类
@@ -119,6 +124,9 @@ export class SignalStore {
         if (!db.objectStoreNames.contains(STORES.SESSION_ARCHIVE)) {
           const store = db.createObjectStore(STORES.SESSION_ARCHIVE, { keyPath: 'archiveId' });
           store.createIndex('peerId', 'peerId');
+        }
+        if (!db.objectStoreNames.contains(STORES.META)) {
+          db.createObjectStore(STORES.META);
         }
       },
     });
@@ -233,6 +241,33 @@ export class SignalStore {
     return db.count(STORES.PREKEY);
   }
 
+  async getPublishedPreKeyIds(): Promise<Set<number>> {
+    const db = this.ensureDB();
+    const ids = await db.get(STORES.META, META_PUBLISHED_PREKEYS);
+    return new Set(Array.isArray(ids) ? ids.filter(id => typeof id === 'number') : []);
+  }
+
+  async markPreKeysPublished(ids: number[]): Promise<void> {
+    if (ids.length === 0) return;
+    const db = this.ensureDB();
+    const published = await this.getPublishedPreKeyIds();
+    ids.forEach(id => published.add(id));
+    await db.put(STORES.META, Array.from(published), META_PUBLISHED_PREKEYS);
+  }
+
+  /** 分配一段不会回绕的 One-Time PreKey id，已删除的旧 id 也不会被复用。 */
+  async allocatePreKeyIdRange(count: number): Promise<number> {
+    const db = this.ensureDB();
+    const allocatedNext = await db.get(STORES.META, META_NEXT_PREKEY_ID);
+    const existing = await db.getAll(STORES.PREKEY);
+    const start = nextPreKeyStart(
+      existing.map(record => record.id),
+      typeof allocatedNext === 'number' ? allocatedNext : 1,
+    );
+    await db.put(STORES.META, start + count, META_NEXT_PREKEY_ID);
+    return start;
+  }
+
   // --------------------------------------------------------
   // Session
   // --------------------------------------------------------
@@ -303,6 +338,7 @@ export class SignalStore {
       db.clear(STORES.PREKEY),
       db.clear(STORES.SESSION),
       db.clear(STORES.SESSION_ARCHIVE),
+      db.clear(STORES.META),
     ]);
   }
 }

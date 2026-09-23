@@ -137,6 +137,8 @@ export class E2EEManager {
 
   // 已彻底禁用 Mock Bundle，强制使用服务器获取真实凭证
 
+  private _initPromise: Promise<void> | null = null;
+
   private static _instance: E2EEManager | null = null;
 
   static shared(): E2EEManager {
@@ -172,12 +174,24 @@ export class E2EEManager {
    * - 检查是否已有本地注册信息
    * - 如果没有，生成新的 Identity Key、Signed PreKey、One-Time PreKeys
    */
-  async initialize(): Promise<void> {
+  async initialize(options?: { manageKeys?: boolean }): Promise<void> {
     if (this._initialized) return;
+    if (this._initPromise) return this._initPromise;
+    this._initPromise = this.initializeInner(options).catch(error => {
+      this._initPromise = null;
+      throw error;
+    });
+    return this._initPromise;
+  }
 
+  /**
+   * manageKeys=false 用于 Worker：只读取主线程已经写好的密钥，不能再生成或轮换 Signed PreKey。
+   * 主线程和 Worker 若同时轮换，服务端公布的公钥会和本地私钥对不上。
+   */
+  private async initializeInner(options?: { manageKeys?: boolean }): Promise<void> {
+    const manageKeys = options?.manageKeys !== false;
     await this.store.init();
 
-    // 检查已有注册
     const existing = await this.store.getLocalRegistration();
     if (existing) {
       this._registrationId = existing.registrationId;
@@ -188,26 +202,34 @@ export class E2EEManager {
       this._signingKeyPair = existing.signingKeyPair
         ?? (existing.identityKeyPair as KeyPairB64 & { signingKeyPair?: KeyPairB64 }).signingKeyPair
         ?? null;
-      await this.ensureSigningKeyPair();
-      await this.ensureSignedPreKeyMatchesSigningKey();
+      if (manageKeys) {
+        await this.ensureSigningKeyPair();
+        await this.ensureSignedPreKeyMatchesSigningKey();
+      } else if (!this._signingKeyPair) {
+        throw new Error('E2EE Worker 缺少签名密钥');
+      }
       this._initialized = true;
-      
-      // 启动 Worker 代理（极致优化：计算密集型任务后台化）。
-      // Worker 不可用时继续保留主线程实现，不能阻断登录。
-      await this.initializeWorkerIfAvailable();
-
+      if (manageKeys) await this.initializeWorkerIfAvailable();
       console.log('[E2EE] 已加载本地密钥，Registration ID:', this._registrationId);
       return;
     }
 
-    // 生成新的密钥材料
+    if (!manageKeys) throw new Error('E2EE 密钥尚未生成');
+
     await this.generateLocalKeys();
     this._initialized = true;
-    
-    // 启动 Worker 代理（极致优化：计算密集型任务后台化）。
     await this.initializeWorkerIfAvailable();
-
     console.log('[E2EE] 密钥生成完成，Registration ID:', this._registrationId);
+  }
+
+  private cryptoAuthHeaders(json = false): Record<string, string> {
+    const headers: Record<string, string> = {};
+    if (json) headers['Content-Type'] = 'application/json';
+    if (typeof localStorage !== 'undefined') {
+      const token = localStorage.getItem('user_token');
+      if (token) headers.Authorization = `Bearer ${token}`;
+    }
+    return headers;
   }
 
   private async initializeWorkerIfAvailable(): Promise<void> {
@@ -244,8 +266,9 @@ export class E2EEManager {
     // 4. 生成 Signed PreKey
     await this.generateSignedPreKey();
 
-    // 5. 生成一批 One-Time PreKeys
-    await this.generatePreKeys(0, 20);
+    // 5. 生成一批 One-Time PreKeys。id 单调递增，避免回绕后被服务端上限丢掉。
+    const startId = await this.store.allocatePreKeyIdRange(20);
+    await this.generatePreKeys(startId, 20);
   }
 
   /** 确保本地有 ECDSA 签名密钥，并写回 IndexedDB（平滑升级旧客户端） */
@@ -358,14 +381,16 @@ export class E2EEManager {
     try {
       const bundle = await this.getLocalPreKeyBundle();
       const preKeys = await this.store.getAllPreKeys();
-      const preKeysPayload = preKeys.map(pk => ({
+      const published = await this.store.getPublishedPreKeyIds();
+      const unpublished = preKeys.filter(pk => !published.has(pk.id));
+      const preKeysPayload = unpublished.map(pk => ({
         keyId: pk.id,
         publicKey: pk.keyPair.pubKey,
       }));
 
       const resp = await fetch('/api/crypto/register-bundle', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.cryptoAuthHeaders(true),
         body: JSON.stringify({
           userId,
           registrationId: bundle.registrationId,
@@ -381,9 +406,10 @@ export class E2EEManager {
       });
 
       if (resp.ok) {
+        await this.store.markPreKeysPublished(preKeysPayload.map(pk => pk.keyId));
         console.log('[E2EE] Bundle 已注册到服务器');
       } else {
-        console.error('[E2EE] Bundle 注册失败:', await resp.text());
+        console.error('[E2EE] Bundle 注册失败:', resp.status, await resp.text());
       }
     } catch (err) {
       console.error('[E2EE] Bundle 注册网络错误:', err);
@@ -430,27 +456,40 @@ export class E2EEManager {
    */
   async checkAndReplenishServerPreKeys(userId: string, threshold: number = 5): Promise<void> {
     try {
-      const resp = await fetch(`/api/crypto/prekey-count?userId=${encodeURIComponent(userId)}`);
-      if (!resp.ok) return;
-      const { count } = await resp.json();
-
-      if (count < threshold) {
-        // 生成新的 PreKeys
-        const startId = Date.now() % 100000;
-        await this.generatePreKeys(startId, 20);
-        const newPreKeys = await this.store.getAllPreKeys();
-        const preKeysPayload = newPreKeys.slice(-20).map(pk => ({
-          keyId: pk.id,
-          publicKey: pk.keyPair.pubKey,
-        }));
-
-        await fetch('/api/crypto/replenish-prekeys', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId, preKeys: preKeysPayload }),
-        });
-        console.log(`[E2EE] 已补充 ${preKeysPayload.length} 个 PreKeys 到服务器`);
+      const resp = await fetch(`/api/crypto/prekey-count?userId=${encodeURIComponent(userId)}`, {
+        headers: this.cryptoAuthHeaders(),
+      });
+      if (!resp.ok) {
+        console.warn('[E2EE] PreKey 数量查询失败:', resp.status);
+        return;
       }
+      const { count } = await resp.json();
+      if (typeof count !== 'number' || count >= threshold) return;
+
+      const published = await this.store.getPublishedPreKeyIds();
+      let fresh = (await this.store.getAllPreKeys()).filter(pk => !published.has(pk.id));
+      if (fresh.length < 20) {
+        const startId = await this.store.allocatePreKeyIdRange(20);
+        await this.generatePreKeys(startId, 20);
+        fresh = (await this.store.getAllPreKeys()).filter(pk => !published.has(pk.id));
+      }
+      const preKeysPayload = fresh.slice(0, 20).map(pk => ({
+        keyId: pk.id,
+        publicKey: pk.keyPair.pubKey,
+      }));
+      if (preKeysPayload.length === 0) return;
+
+      const upload = await fetch('/api/crypto/replenish-prekeys', {
+        method: 'POST',
+        headers: this.cryptoAuthHeaders(true),
+        body: JSON.stringify({ userId, preKeys: preKeysPayload }),
+      });
+      if (!upload.ok) {
+        console.warn('[E2EE] PreKey 补充失败:', upload.status, await upload.text());
+        return;
+      }
+      await this.store.markPreKeysPublished(preKeysPayload.map(pk => pk.keyId));
+      console.log(`[E2EE] 已补充 ${preKeysPayload.length} 个 PreKeys 到服务器`);
     } catch (err) {
       console.warn('[E2EE] 检查/补充 PreKeys 失败:', err);
     }
@@ -710,9 +749,7 @@ export class E2EEManager {
       throw new Error(`没有与 ${peerId} 的加密会话`);
     }
 
-    // 在推进接收链前保存快照，未来重置会话后仍可按消息恢复旧链。
-    await this.archiveSession(peerId, sessionRecord);
-
+    const previousRecord = sessionRecord;
     const sessionData = JSON.parse(sessionRecord.sessionData);
     const state: RatchetState = sessionData.ratchetState;
 
@@ -728,18 +765,10 @@ export class E2EEManager {
       const { messageKey, nextChainKey } = await deriveMessageKeys(chainKey);
       state.receiveChainKey = bufferToBase64(nextChainKey);
 
-      // 解密
       const plainBuf = await aesDecrypt(envelope.ciphertext, messageKey);
       state.receiveCounter++;
-
-      // 保存
       sessionData.ratchetState = state;
-      await this.store.saveSession({
-        peerId,
-        sessionData: JSON.stringify(sessionData),
-        updatedAt: Date.now(),
-      });
-
+      await this.commitSession(peerId, previousRecord, sessionData);
       return bufferToString(plainBuf);
     }
 
@@ -750,19 +779,23 @@ export class E2EEManager {
     // 解密
     const plainBuf = await aesDecrypt(envelope.ciphertext, messageKey);
 
-    // 更新状态
     state.receiveChainKey = bufferToBase64(nextChainKey);
     state.receiveCounter++;
-
     sessionData.ratchetState = state;
+    await this.commitSession(peerId, previousRecord, sessionData);
+
+    console.log(`[E2EE] 消息已解密 ← ${peerId}, counter: ${state.receiveCounter}`);
+    return bufferToString(plainBuf);
+  }
+
+  /** 解密成功后才归档旧棘轮。失败的尝试不能把当前会话反复写进归档并把真正的历史快照挤掉。 */
+  private async commitSession(peerId: string, previous: SessionRecord, sessionData: unknown): Promise<void> {
+    await this.archiveSession(peerId, previous);
     await this.store.saveSession({
       peerId,
       sessionData: JSON.stringify(sessionData),
       updatedAt: Date.now(),
     });
-
-    console.log(`[E2EE] 消息已解密 ← ${peerId}, counter: ${state.receiveCounter}`);
-    return bufferToString(plainBuf);
   }
 
   /** 使用归档会话尝试解密历史消息，并把推进后的状态写回同一归档。 */

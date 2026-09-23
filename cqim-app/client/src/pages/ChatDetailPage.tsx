@@ -45,6 +45,7 @@ import Composer from '@/components/chat/Composer';
 import { ChatSkeleton, MemoizedChatBubble, shouldShowTimeGroup } from '@/components/chat/ChatBubble';
 import MessageListErrorBoundary from '@/components/chat/MessageListErrorBoundary';
 import { sanitizeMessages } from '@/lib/messageListUtils';
+import { isUsableDecryptedMessage, mergePrivateMessages } from '@/lib/messageMerge';
 import { formatChatListPreview, isOpaquePreview } from '@/lib/chatPreview';
 import { messageMediaPatch } from '@/lib/mediaFields';
 import { authFetch } from '@/lib/authFetch';
@@ -127,7 +128,7 @@ export default function ChatDetailPage() {
   const {
     closeChat, sendMessage, addReaction, startCall,
     markMessageRead, burnMessage, setEphemeralTimer, insertScreenshotNotice,
-    insertCallRecord, recallMessage, setMessages, upsertChat,
+    insertCallRecord, recallMessage, upsertChat,
     muteChat, clearMessages, pinChat, showProfile, updateMessageStatus,
   } = useAppActions();
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -319,26 +320,16 @@ export default function ChatDetailPage() {
     if (!token) return;
     let cancelled = false;
 
-    const mergeMessages = (base: Message[], incoming: Message[]) => {
-      const byId = new Map<string, Message>();
-      for (const message of sanitizeMessages(base)) byId.set(message.id, message);
-      for (const message of sanitizeMessages(incoming)) {
-        const existing = byId.get(message.id);
-        // 服务端只返回密文；本地已有已解密展示稿时不能被 ciphertext 占位覆盖。
-        if (existing && existing.decryptionStatus === 'decrypted' && message.decryptionStatus === 'ciphertext') continue;
-        byId.set(message.id, message);
-      }
-      return Array.from(byId.values()).sort((a, b) => a.timestamp - b.timestamp);
-    };
-
     (async () => {
       let serverMessages: any[] = [];
       try {
         const localMessages = await loadPrivateMessagesFromLocalDb(chatId, currentUserId);
         if (cancelled) return;
-        const current = state.messages[chatId] || [];
-        const cached = localMessages.length > 0 ? mergeMessages(current, localMessages) : current;
-        if (localMessages.length > 0 && current.length === 0) setMessages(chatId, cached);
+        const current = sanitizeMessages(state.messages[chatId] || []);
+        const cached = mergePrivateMessages(current, sanitizeMessages(localMessages));
+        if (cached.length > 0 && current.length === 0) {
+          dispatch({ type: 'MERGE_MESSAGES', chatId, messages: cached });
+        }
         setLoadingMessages(cached.length === 0);
 
         const response = await fetch(`/api/chat/${chatId}/messages?limit=50`, {
@@ -356,31 +347,36 @@ export default function ChatDetailPage() {
         if (!data?.messages || cancelled) return;
 
         serverMessages = Array.isArray(data.messages) ? data.messages : [];
-        // 先把服务端历史写入列表，解密失败也不能让整个聊天界面变空。
-        if (!cancelled && serverMessages.length > 0) {
-          setMessages(chatId, serverMessages.filter(m => m?.id).map(m => ({
-            id: m.id,
-            chatId: m.chatId || chatId,
-            cursor: m.id,
-            senderId: m.senderId || 'unknown',
-            content: m.isRevoked ? '消息已撤回' : (m.msgType === 'encrypted' ? '🔒 加密消息' : (m.content || '')),
-            type: m.msgType === 'encrypted' ? 'text' : (m.msgType || 'text'),
-            timestamp: m.createdAt || Date.now(),
-            isEncrypted: m.msgType === 'encrypted',
-            decryptionStatus: m.msgType === 'encrypted' ? 'ciphertext' : 'decrypted',
-            direction: m.senderId === currentUserId ? 'outbound' as const : 'inbound' as const,
-            reactions: {},
-            status: m.status || 'sent',
-            isRecalled: m.isRevoked || false,
-          })));
+        const placeholders: Message[] = serverMessages.filter(m => m?.id).map(m => ({
+          id: m.id,
+          chatId: m.chatId || chatId,
+          cursor: m.id,
+          senderId: m.senderId || 'unknown',
+          content: m.isRevoked ? '消息已撤回' : (m.msgType === 'encrypted' ? '🔒 加密消息' : (m.content || '')),
+          type: m.msgType === 'encrypted' ? 'text' : (m.msgType || 'text'),
+          timestamp: m.createdAt || Date.now(),
+          isEncrypted: m.msgType === 'encrypted',
+          decryptionStatus: m.msgType === 'encrypted' ? 'ciphertext' : 'decrypted',
+          direction: m.senderId === currentUserId ? 'outbound' as const : 'inbound' as const,
+          reactions: {},
+          status: m.status || 'sent',
+          isRecalled: m.isRevoked || false,
+        }));
+        // 密文占位只能补洞，不能替换本地已经解密的历史。
+        if (!cancelled && placeholders.length > 0) {
+          dispatch({ type: 'MERGE_MESSAGES', chatId, messages: placeholders });
         }
+        if (!e2ee.isReady) return;
         // Double Ratchet 必须按同一对端的时间顺序串行推进，不能对整批消息 Promise.all。
         const decryptResults = new Map<string, { plaintext?: string; error?: string; success: boolean }>();
         const bySender = new Map<string, Array<{ id: string; envelope: any }>>();
+        const cachedById = new Map(cached.map(message => [message.id, message]));
         for (const m of serverMessages) {
           if (!m?.id) continue;
           // 自己发出的密文优先使用本地解密副本；换机后没有副本时不伪造明文。
+          // 已经解密过的历史也不再推进棘轮，否则刷新会把同一条密文再解一次并失败。
           if (m.msgType !== 'encrypted' || !m.content || m.isRevoked || m.senderId === currentUserId) continue;
+          if (isUsableDecryptedMessage(cachedById.get(m.id))) continue;
           try {
             const list = bySender.get(m.senderId) || [];
             list.push({ id: m.id, envelope: JSON.parse(m.content) });
@@ -399,7 +395,9 @@ export default function ChatDetailPage() {
                   const fallbackResults: Array<{ id: string; plaintext?: string; error?: string; success: boolean }> = [];
                   for (const item of encryptedMessages) {
                     try {
-                      fallbackResults.push({ id: item.id, plaintext: await e2ee.decrypt(senderId, item.envelope), success: true });
+                      const plaintext = await e2ee.decrypt(senderId, item.envelope);
+                      if (!plaintext) throw new Error('decrypt_failed');
+                      fallbackResults.push({ id: item.id, plaintext, success: true });
                     } catch (error) {
                       fallbackResults.push({ id: item.id, error: error instanceof Error ? error.message : String(error), success: false });
                     }
@@ -425,6 +423,14 @@ export default function ChatDetailPage() {
           let decryptionStatus: Message['decryptionStatus'] = 'decrypted';
 
           if (m.msgType === 'encrypted' && m.content && !m.isRevoked) {
+            const cachedMessage = cachedById.get(m.id);
+            if (cachedMessage && isUsableDecryptedMessage(cachedMessage)) {
+              return {
+                ...cachedMessage,
+                status: m.status || cachedMessage.status,
+                isRecalled: false,
+              };
+            }
             if (m.senderId === currentUserId) {
               decryptedContent = '🔒 [本地加密消息]';
               decryptionStatus = 'ciphertext';
@@ -472,8 +478,8 @@ export default function ChatDetailPage() {
         });
 
         if (!cancelled) {
-          const merged = mergeMessages(cached, msgs);
-          setMessages(chatId, merged);
+          const merged = mergePrivateMessages(cached, msgs);
+          dispatch({ type: 'MERGE_MESSAGES', chatId, messages: merged });
           setHasMoreMessages(data.hasMore || false);
           const lastVisible = [...merged].reverse().find(item => !item.isRecalled);
           if (lastVisible && chat) {
@@ -485,27 +491,7 @@ export default function ChatDetailPage() {
           trackEvent('private_history_sync', { chatId, count: msgs.length, direction: 'inbound' });
         }
       } catch (err) {
-        if (!cancelled) {
-          console.error('[ChatDetail] 加载消息失败:', err);
-          if (serverMessages.length > 0) {
-            setMessages(chatId, serverMessages.filter(m => m?.id).map(m => ({
-              id: m.id,
-              chatId: m.chatId || chatId,
-              cursor: m.id,
-              senderId: m.senderId || 'unknown',
-              content: m.isRevoked ? '消息已撤回' : (m.msgType === 'encrypted' ? '🔒 加密消息' : (m.content || '')),
-              type: m.msgType === 'encrypted' ? 'text' : (m.msgType || 'text'),
-              timestamp: m.createdAt || Date.now(),
-              isEncrypted: m.msgType === 'encrypted',
-              decryptionStatus: m.msgType === 'encrypted' ? 'failed' : 'decrypted',
-              decryptionFailed: m.msgType === 'encrypted',
-              direction: m.senderId === currentUserId ? 'outbound' as const : 'inbound' as const,
-              reactions: {},
-              status: m.status || 'sent',
-              isRecalled: m.isRevoked || false,
-            })));
-          }
-        }
+        if (!cancelled) console.error('[ChatDetail] 加载消息失败:', err);
       } finally {
         if (!cancelled) setLoadingMessages(false);
       }
@@ -513,7 +499,7 @@ export default function ChatDetailPage() {
 
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatId, chat?.type, currentUserId, historyNonce]);
+  }, [chatId, chat?.type, currentUserId, historyNonce, e2ee.isReady]);
 
   useEffect(() => {
     setChatMissing(false);
