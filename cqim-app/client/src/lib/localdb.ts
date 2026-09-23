@@ -1,6 +1,7 @@
 import { createRxDatabase } from 'rxdb';
 import { getRxStorageDexie } from 'rxdb/plugins/storage-dexie';
 import type { Chat, Message } from './store';
+import { isUsableDecryptedMessage, mergePrivateMessages } from './messageMerge';
 
 export interface GroupMessageLike {
   id: string;
@@ -216,8 +217,10 @@ function writeFallbackMessages(messages: Message[], chatId: string, ownerId: str
     const existing = readFallbackMessages(chatId, ownerId);
     const byId = new Map(existing.map(message => [message.id, message]));
     for (const message of messages) {
-      // 只缓存已经解密的本地展示稿，不把服务端密文当作明文缓存。
-      if (message.decryptionStatus === 'ciphertext') continue;
+      // 密文占位和失败占位不能覆盖已经解密的展示稿。
+      if (message.decryptionStatus === 'ciphertext' || message.decryptionStatus === 'failed' || message.decryptionFailed) continue;
+      const previous = byId.get(message.id);
+      if (previous && isUsableDecryptedMessage(previous) && !isUsableDecryptedMessage(message)) continue;
       byId.set(message.id, message);
     }
     localStorage.setItem(fallbackCacheKey(chatId, ownerId), JSON.stringify(
@@ -371,7 +374,9 @@ export async function persistPrivateMessages(messages: Message[], ownerId = 'leg
   const db = await withTimeout(getDb());
   const byChat = new Map<string, Message[]>();
   for (const message of messages) {
-    await db.privateMessages.upsert(normalizePrivateMessage(message, ownerId));
+    const doc = normalizePrivateMessage(message, ownerId);
+    if (doc.decryptionStatus === 'ciphertext' || doc.decryptionStatus === 'failed' || message.decryptionFailed) continue;
+    await db.privateMessages.upsert(doc);
     const list = byChat.get(message.chatId) || [];
     list.push(message);
     byChat.set(message.chatId, list);
@@ -402,7 +407,9 @@ export async function loadPrivateMessagesFromLocalDb(chatId: string, ownerId = '
     const local = docs
       .map((doc: any) => denormalizePrivateMessage(doc.toJSON() as PrivateMessageDoc))
       .sort((a: Message, b: Message) => a.timestamp - b.timestamp);
-    return local.length > 0 ? local : readFallbackMessages(chatId, ownerId);
+    const fallback = readFallbackMessages(chatId, ownerId).filter(isUsableDecryptedMessage);
+    const merged = mergePrivateMessages(local, fallback);
+    return merged.length > 0 ? merged : fallback;
   } catch {
     return readFallbackMessages(chatId, ownerId);
   }

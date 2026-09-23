@@ -28,6 +28,7 @@ import {
 import { e2eeProxy } from '@/lib/e2ee/WorkerProxy';
 import { formatChatListPreview, preferLocalChatPreview, sanitizePreviewText } from '@/lib/chatPreview';
 import { messageMediaPatch } from '@/lib/mediaFields';
+import { mergePrivateMessages as mergeMessages } from '@/lib/messageMerge';
 import { PRESENCE_HEARTBEAT_MS, reportPresence, resolvePresenceState } from '@/lib/presence';
 
 export interface AuthUser {
@@ -110,6 +111,8 @@ type Action =
   | { type: 'SET_CHATS'; chats: Chat[] }
   /** 设置某个会话的消息列表（从 API 加载） */
   | { type: 'SET_MESSAGES'; chatId: string; messages: Message[] }
+  /** 合并本地缓存、历史接口和实时消息，避免异步来源互相覆盖 */
+  | { type: 'MERGE_MESSAGES'; chatId: string; messages: Message[] }
   /** 插入或更新一个会话（创建新会话或更新现有会话） */
   | { type: 'UPSERT_CHAT'; chat: Chat }
   /** 替换临时消息ID为服务器真实ID */
@@ -288,7 +291,7 @@ function reducer(state: AppState, action: Action): AppState {
       );
       return {
         ...state,
-        messages: { ...state.messages, [action.chatId]: [...msgs, enrichedMsg] },
+        messages: { ...state.messages, [action.chatId]: mergeMessages(msgs, [enrichedMsg]) },
         chats: newChats,
       };
     }
@@ -308,7 +311,7 @@ function reducer(state: AppState, action: Action): AppState {
       );
       return {
         ...state,
-        messages: { ...state.messages, [action.chatId]: [...msgs, action.message] },
+        messages: { ...state.messages, [action.chatId]: mergeMessages(msgs, [action.message]) },
         chats: newChats,
       };
     }
@@ -552,6 +555,13 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         messages: { ...state.messages, [action.chatId]: action.messages },
+      };
+    }
+    case 'MERGE_MESSAGES': {
+      const current = state.messages[action.chatId] || [];
+      return {
+        ...state,
+        messages: { ...state.messages, [action.chatId]: mergeMessages(current, action.messages) },
       };
     }
     case 'UPSERT_CHAT': {
@@ -859,7 +869,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             chatId: m.chatId || chatId,
             cursor: m.id,
             senderId: m.senderId,
-            content: m.isRevoked ? '消息已撤回' : (m.msgType === 'encrypted' ? '🔒 加密消息' : (m.content || '')),
+            content: m.isRevoked ? '消息已撤回' : (m.msgType === 'encrypted' ? (m.senderId === ownerId ? '🔒 已发送加密消息' : '🔒 加密消息') : (m.content || '')),
             type: m.msgType === 'encrypted' ? 'text' : (m.msgType || 'text'),
             timestamp: m.createdAt || Date.now(),
             isEncrypted: m.msgType === 'encrypted',
@@ -868,10 +878,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
             reactions: {},
             status: m.status || 'sent',
             isRecalled: !!m.isRevoked,
+            encryptedEnvelope: m.msgType === 'encrypted' && !m.isRevoked
+              ? (() => { try { return JSON.parse(m.content); } catch { return undefined; } })()
+              : undefined,
           } as Message))
         : [];
       if (messages.length > 0) {
-        dispatch({ type: 'SET_MESSAGES', chatId, messages });
+        // 这里只放密文占位。真正解密只在聊天页进行一次，避免和页面重复推进 Double Ratchet。
+        dispatch({ type: 'MERGE_MESSAGES', chatId, messages });
         console.log(`[AppContext] 从服务端恢复会话 ${chatId} 的 ${messages.length} 条消息`);
       }
     };
@@ -880,7 +894,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     void loadPrivateMessagesFromLocalDb(chatId, ownerId)
       .then((localMessages) => {
         if (localMessages.length > 0) {
-          dispatch({ type: 'SET_MESSAGES', chatId, messages: localMessages });
+          dispatch({ type: 'MERGE_MESSAGES', chatId, messages: localMessages });
           console.log(`[AppContext] 已从本地 NoSQL 恢复会话 ${chatId} 的 ${localMessages.length} 条消息`);
         }
       })
@@ -1126,6 +1140,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
             notifyIncomingMessageRef.current(chatId, newMsg);
             window.dispatchEvent(new CustomEvent('bot_message_received', { detail: { chatId } }));
             console.log(`[AppContext] 收到 BOT 消息: chatId=${chatId} ${hasVoice ? '[语音] ' + voiceUrl : ''} ${content ? 'content=' + content.slice(0, 40) : ''}`);
+            return;
+          }
+
+          // ===== 私聊 E2EE 会话重置同步 =====
+          if (msg.type === 'private_session_reset') {
+            const peerId = msg.from || msg.payload?.peerId;
+            if (peerId) {
+              const reset = e2eeProxy.isReady
+                ? e2eeProxy.signalResetSession(peerId)
+                : import('../lib/e2ee/E2EEManager').then(({ E2EEManager }) => E2EEManager.shared().resetSession(peerId));
+              void reset
+                .then(() => console.log(`[E2EE] 已响应对端会话重置: ${peerId}`))
+                .catch(err => console.warn('[E2EE] 响应会话重置失败:', err));
+            }
             return;
           }
 

@@ -352,7 +352,83 @@ export function useGroupSync(options: UseGroupSyncOptions) {
       const { MLSGroupManager } = await import('@/lib/e2ee/MLSGroupManager');
       const manager = MLSGroupManager.shared();
       if (!manager.isInitialized) await manager.initialize(userId);
-      const result = await manager.recoverFromServer(groupId);
+      let result = await manager.recoverFromServer(groupId);
+
+      // 群创建接口先落库群成员，MLS 根状态由群主的浏览器生成。
+      // 首次打开新群时若本地状态尚未写入，群主可以安全地自动 bootstrap；
+      // 普通成员仍必须通过 Welcome 恢复，不能伪造群密钥。
+      if (!result.ready) {
+        const infoResp = await fetch(`/api/group/info?groupId=${encodeURIComponent(groupId)}`);
+        if (infoResp.ok) {
+          const info = await infoResp.json();
+          if (info?.ownerId === userId && !(await manager.hasMLSState(groupId))) {
+            const state = await manager.createGroup(groupId);
+            const enableResp = await fetch('/api/mls/enable-group', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                groupId,
+                userId,
+                epoch: state.epoch,
+                treeSnapshot: state.tree.map(node => ({ publicKey: node.publicKey })),
+                members: state.members,
+              }),
+            });
+            if (!enableResp.ok) throw new Error('群 MLS 状态同步失败');
+
+            // 群创建接口已经把成员写入 GroupMember，但这些成员尚未收到 MLS Welcome。
+            // 群主首次打开群聊时为已有成员补发 Welcome/Commit，避免新建群只能自己发消息。
+            const membersResp = await fetch(`/api/group/members?groupId=${encodeURIComponent(groupId)}&pageSize=500`);
+            if (!membersResp.ok) throw new Error('读取群成员失败，MLS Welcome 尚未同步');
+            const memberData = await membersResp.json();
+            const bootstrapFailures: string[] = [];
+            for (const member of memberData.members || []) {
+                const targetUserId = member?.userId;
+                if (!targetUserId || targetUserId === userId) continue;
+                let memberAddedLocally = false;
+                try {
+                  const keyResp = await fetch(`/api/mls/get-key-package?userId=${encodeURIComponent(targetUserId)}`);
+                  if (!keyResp.ok) {
+                    bootstrapFailures.push(`${targetUserId}: 没有可用 KeyPackage`);
+                    continue;
+                  }
+                  const keyData = await keyResp.json();
+                  const added = await manager.addMember(groupId, targetUserId, keyData.keyPackage);
+                  memberAddedLocally = true;
+                  const senderIdentityKey = manager.getIdentityPublicKey();
+                  const welcomeResp = await fetch('/api/mls/send-welcome', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ groupId, targetUserId, welcome: added.welcome, senderIdentityKey }),
+                  });
+                  if (!welcomeResp.ok) throw new Error('Welcome 保存失败');
+                  const commitResp = await fetch('/api/mls/broadcast-commit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ groupId, commit: added.commit, commitType: 'add' }),
+                  });
+                  if (!commitResp.ok) throw new Error('Commit 保存失败');
+                  const stateResp = await fetch('/api/mls/update-group-state', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ groupId, epoch: added.commit.epoch, members: added.welcome.members, commitType: 'add' }),
+                  });
+                  if (!stateResp.ok) throw new Error('群 MLS 状态保存失败');
+                } catch (memberError) {
+                  if (memberAddedLocally) {
+                    await manager.removeMember(groupId, targetUserId).catch(() => {});
+                  }
+                  bootstrapFailures.push(`${targetUserId}: ${memberError instanceof Error ? memberError.message : '同步失败'}`);
+                  console.warn(`[GroupSync] 为成员 ${targetUserId} 补发 MLS Welcome 失败:`, memberError);
+                }
+            }
+            if (bootstrapFailures.length > 0) {
+              throw new Error(`MLS 成员同步未完成：${bootstrapFailures.join('；')}`);
+            }
+            result = { ready: true, recoveredVia: 'owner-bootstrap' };
+          }
+        }
+      }
       setMlsReady(result.ready);
       setMlsError(result.ready ? null : (result.error || '群安全会话未就绪'));
     } catch (error) {
@@ -403,6 +479,7 @@ export function useGroupSync(options: UseGroupSyncOptions) {
         // 使用 IndexedDB cursor
       }
       if (cached.length > 0) initialSeq = Math.max(initialSeq, cached[cached.length - 1].seq);
+      else initialSeq = 0;
       localSeqRef.current = initialSeq;
 
       await retryMls();
