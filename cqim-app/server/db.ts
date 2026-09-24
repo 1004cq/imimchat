@@ -102,14 +102,23 @@ export async function initDatabase() {
 
     const adminCount = await prisma.adminAccount.count();
     if (adminCount === 0) {
+      // ★ 不再使用硬编码弱口令 admin123：
+      // 优先读取 ADMIN_INITIAL_PASSWORD 环境变量；未设置则生成随机强口令并在日志中一次性打印
+      const envPassword = process.env.ADMIN_INITIAL_PASSWORD?.trim();
+      const initialPassword = envPassword || generateToken(24);
       await prisma.adminAccount.create({
         data: {
           username: 'admin',
-          password: hashPassword('admin123'),
+          password: hashPassword(initialPassword),
           role: 'superadmin',
         },
       });
-      console.log('[DB] 已创建默认管理员账号: admin / admin123');
+      if (envPassword) {
+        console.log('[DB] 已创建默认管理员账号: admin（密码来自 ADMIN_INITIAL_PASSWORD）');
+      } else {
+        console.log('[DB] 已创建默认管理员账号: admin');
+        console.log(`[DB] ★★★ 初始管理员密码（仅显示一次，请立即保存并登录后修改）: ${initialPassword}`);
+      }
     }
 
     const configKeys = [
