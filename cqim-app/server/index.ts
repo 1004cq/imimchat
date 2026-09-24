@@ -1807,8 +1807,10 @@ app.use("/api/home", homeRouter);
    * POST /api/ai-chat
    * 代理 OpenAI API，实现 BOT 聊天回复
    * Body: { messages: [{ role: 'user'|'assistant', content: string }] }
+   *
+   * ★ 需要登录：防止匿名调用盗刷服务端的 OpenAI 额度
    */
-  app.post('/api/ai-chat', async (req, res) => {
+  app.post('/api/ai-chat', userAuth, async (req, res) => {
     try {
       const { messages } = req.body as {
         messages: Array<{ role: string; content: string }>;
@@ -2447,14 +2449,18 @@ app.use("/api/home", homeRouter);
   /**
    * POST /api/push-to-onebot
    * 前端发送消息时，主动将消息推送给 AstrBot
-   * Body: { chatId, senderId, content, nickname, isGroup, groupId, voiceUrl?, isVoice? }
+   * Body: { chatId, content, nickname, isGroup, groupId, voiceUrl?, isVoice? }
+   *
+   * ★ 需要登录，且 senderId 强制取登录身份：防止伪造任意用户身份给 Bot 发消息
    */
-  app.post('/api/push-to-onebot', (req, res) => {
+  app.post('/api/push-to-onebot', userAuth, (req, res) => {
     if (onebotClients.size === 0) {
       return res.json({ ok: false, reason: 'no_astrbot_connected' });
     }
 
-    const { chatId, senderId, content, nickname, isGroup, groupId, voiceUrl, isVoice } = req.body;
+    // ★ 发送者身份以登录态为准，不再信任 body 里的 senderId
+    const senderId = (req as any).user.id;
+    const { chatId, content, nickname, isGroup, groupId, voiceUrl, isVoice } = req.body;
     const msgId = `im-${Date.now()}`;
 
     if (isVoice && voiceUrl) {
