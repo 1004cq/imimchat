@@ -14,6 +14,8 @@
  * - 删除后覆盖内存中的明文
  */
 
+import { authFetch } from '../authFetch.js';
+
 // ============================================================
 // 类型定义
 // ============================================================
@@ -287,7 +289,7 @@ export class BurnAfterReadManager {
         ? '/api/group/burn-message'
         : '/api/chat/burn-message';
 
-      await fetch(endpoint, {
+      await authFetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messageId, chatId }),
