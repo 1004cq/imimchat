@@ -105,16 +105,71 @@ const WS_BACKPRESSURE_THRESHOLD = parseInt(process.env.WS_BACKPRESSURE_THRESHOLD
 /** 扇出分片大小：每片包含的用户数 */
 const FANOUT_SHARD_SIZE = parseInt(process.env.FANOUT_SHARD_SIZE || '200');
 
-// ============ 序列号生成器（原子互斥） ============
+// ============ 序列号生成器（多节点安全） ============
 
+/**
+ * ★ 多节点安全的 seq 生成：使用 Redis INCR/INCRBY 原子递增。
+ *
+ * 初始化：进程首次为某群生成 seq 时，用 SET NX 从 DB lastMsgSeq 恢复基准；
+ * 多节点并发初始化时只有一个节点的基准写入成功，后续 INCR 都基于它，
+ * 保证多节点下 seq 全局唯一且严格递增。
+ *
+ * Redis 不可用时回退到进程内锁（getNextSeqLocal），计数器以
+ * max(内存高水位, DB lastMsgSeq) 为起点，尽可能避免回退重复。
+ */
+const SEQ_REDIS_KEY_PREFIX = 'group:seq:';
+const seqInitialized = new Set<string>();
 const seqCounters = new Map<string, bigint>();
 const seqLocks = new Map<string, Promise<void>>();
 
-/**
- * 原子递增序列号生成器
- * 使用 Promise 链实现互斥锁，保证同一群内 seq 严格递增
- */
+async function ensureSeqInitialized(groupId: string): Promise<void> {
+  if (seqInitialized.has(groupId)) return;
+  const group = await prisma.group.findUnique({
+    where: { id: groupId },
+    select: { lastMsgSeq: true },
+  }).catch(() => null);
+  const base = group?.lastMsgSeq ?? BigInt(0);
+  // NX：只有 key 不存在时才写入基准，多节点并发时只有一个生效
+  await redis.set(SEQ_REDIS_KEY_PREFIX + groupId, base.toString(), 'NX');
+  seqInitialized.add(groupId);
+}
+
 async function getNextSeq(groupId: string): Promise<bigint> {
+  try {
+    await ensureSeqInitialized(groupId);
+    const next = await redis.incr(SEQ_REDIS_KEY_PREFIX + groupId);
+    const seq = BigInt(next);
+    seqCounters.set(groupId, seq); // 记录高水位，供 Redis 故障回退使用
+    return seq;
+  } catch (err) {
+    seqInitialized.delete(groupId);
+    console.warn(`[GroupMsg] Redis seq 失败，回退进程内锁: groupId=${groupId}`, (err as Error)?.message);
+    return getNextSeqLocal(groupId);
+  }
+}
+
+/**
+ * 批量获取连续序列号（用于批量消息场景）
+ */
+async function getNextSeqBatch(groupId: string, count: number): Promise<bigint[]> {
+  try {
+    await ensureSeqInitialized(groupId);
+    const last = await redis.incrby(SEQ_REDIS_KEY_PREFIX + groupId, count);
+    const seqs: bigint[] = [];
+    for (let i = count - 1; i >= 0; i--) {
+      seqs.unshift(BigInt(last - i));
+    }
+    seqCounters.set(groupId, BigInt(last));
+    return seqs;
+  } catch (err) {
+    seqInitialized.delete(groupId);
+    console.warn(`[GroupMsg] Redis seq batch 失败，回退进程内锁: groupId=${groupId}`, (err as Error)?.message);
+    return getNextSeqBatchLocal(groupId, count);
+  }
+}
+
+/** Redis 故障时的回退实现：进程内 Promise 链互斥（单节点语义） */
+async function getNextSeqLocal(groupId: string): Promise<bigint> {
   // 等待当前锁释放
   const currentLock = seqLocks.get(groupId);
   let releaseLock: () => void;
@@ -141,10 +196,8 @@ async function getNextSeq(groupId: string): Promise<bigint> {
   }
 }
 
-/**
- * 批量获取连续序列号（用于批量消息场景）
- */
-async function getNextSeqBatch(groupId: string, count: number): Promise<bigint[]> {
+/** 批量获取的回退实现 */
+async function getNextSeqBatchLocal(groupId: string, count: number): Promise<bigint[]> {
   const currentLock = seqLocks.get(groupId);
   let releaseLock: () => void;
   const newLock = new Promise<void>(resolve => { releaseLock = resolve; });

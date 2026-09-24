@@ -655,7 +655,12 @@ const WS_BACKPRESSURE_LIMIT = 65536;
 const _serializeCache = new WeakMap<object, string>();
 
 function sendTo(userId: string, msg: SignalMessage) {
-  trySendTo(userId, msg);
+  // ★ 跨节点投递（S12）：本机投递失败且本机根本没有该用户的连接时，
+  // 通过 Redis 发布，由持有该用户 /signal 连接的节点完成投递。
+  // （本机有连接但被背压时不发布——其他节点也没有该连接，发了也投递不了）
+  if (!trySendTo(userId, msg) && !clients.has(userId)) {
+    publishImPush(userId, msg);
+  }
 }
 
 /** 尝试 WS 投递；返回是否成功写入 socket（用于决定是否需要离线推送） */
@@ -2242,13 +2247,10 @@ app.use("/api/home", homeRouter);
       msg.voiceUrl = voiceData.voiceUrl;
       msg.duration = voiceData.duration || 0;
     }
-    // 向群成员推送
+    // 向群成员推送（★ 跨节点：sendTo 本机 miss 时走 Redis 发布）
     if (group) {
       group.memberIds.forEach(uid => {
-        const client = clients.get(uid);
-        if (client && client.ws.readyState === WebSocket.OPEN) {
-          client.ws.send(JSON.stringify(msg));
-        }
+        sendTo(uid, msg);
       });
     }
     console.log(`[OneBot] BOT 群消息已推送到 chatId=${chatId}${voiceData ? ' [语音]' : ''}`);
@@ -2258,7 +2260,6 @@ app.use("/api/home", homeRouter);
    * 将 BOT 回复推送给指定用户
    */
   function broadcastBotMessageToUser(userId: string, text: string, voiceData?: { voiceUrl: string; duration?: number }) {
-    const client = clients.get(userId);
     const msg: any = {
       type: 'bot_message',
       chatId: 'cBOT',
@@ -2273,9 +2274,8 @@ app.use("/api/home", homeRouter);
       msg.voiceUrl = voiceData.voiceUrl;
       msg.duration = voiceData.duration || 0;
     }
-    if (client && client.ws.readyState === WebSocket.OPEN) {
-      client.ws.send(JSON.stringify(msg));
-    }
+    // ★ 跨节点：sendTo 本机 miss 时走 Redis 发布
+    sendTo(userId, msg);
     console.log(`[OneBot] BOT 私聊已推送到 userId=${userId}${voiceData ? ' [语音]' : ''}`);
   }
 

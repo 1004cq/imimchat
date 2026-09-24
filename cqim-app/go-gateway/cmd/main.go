@@ -110,6 +110,9 @@ func main() {
 
 	gw.ShutdownPresence(shutdownCtx)
 
+	// ★ S17：排空消息落库队列，已入队的消息同步刷盘后再退出
+	msgSvc.Shutdown()
+
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("[Main] 服务器关闭失败: %v", err)
 	}
