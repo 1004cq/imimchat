@@ -253,7 +253,9 @@ export function GroupMessageProvider({ children, userId }: { children: ReactNode
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
-    const wsUrl = `${protocol}//${host}/signal?userId=${encodeURIComponent(userId)}`;
+    // ★ /signal 强制鉴权：token 必填，服务端以 session.userId 为准
+    const wsToken = localStorage.getItem('user_token') || '';
+    const wsUrl = `${protocol}//${host}/signal?userId=${encodeURIComponent(userId)}&token=${encodeURIComponent(wsToken)}`;
     let reconnectTimer: ReturnType<typeof setTimeout>;
 
     const connect = () => {
