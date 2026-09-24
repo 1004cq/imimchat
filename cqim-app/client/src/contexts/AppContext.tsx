@@ -1040,7 +1040,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const currentUserId = state.currentUser?.id || 'me';
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
-    const wsUrl = `${protocol}//${host}/signal?userId=${encodeURIComponent(currentUserId)}`;
+    // ★ /signal 强制鉴权：token 必填，服务端以 session.userId 为准
+    const wsToken = localStorage.getItem('user_token') || '';
+    const wsUrl = `${protocol}//${host}/signal?userId=${encodeURIComponent(currentUserId)}&token=${encodeURIComponent(wsToken)}`;
 
     let closedByEffect = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
