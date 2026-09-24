@@ -12,6 +12,7 @@
 
 import { Router } from 'express';
 import prisma from './db';
+import { userAuth, optionalAuth } from './auth.js';
 import { avatarToProxy } from './cos-signer.js';
 import { publicUrl } from './public-url.js';
 import {
@@ -36,11 +37,13 @@ const channelRouter = Router();
  * - maxMembers 设为 0 表示无限
  * - 默认类型为 channel
  */
-channelRouter.post('/create', async (req, res) => {
+channelRouter.post('/create', userAuth, async (req, res) => {
   try {
-    const { name, ownerId, username, description, isPublic = true } = req.body;
-    if (!name || !ownerId) {
-      return res.status(400).json({ error: '缺少必要参数：name, ownerId' });
+    // ★ 身份以登录态为准，不再信任 body 里的 ownerId
+    const ownerId = (req as any).user.id;
+    const { name, username, description, isPublic = true } = req.body;
+    if (!name) {
+      return res.status(400).json({ error: '缺少必要参数：name' });
     }
 
     // 验证 username 格式
@@ -115,7 +118,7 @@ channelRouter.post('/create', async (req, res) => {
 /**
  * 获取频道详情
  */
-channelRouter.get('/info', async (req, res) => {
+channelRouter.get('/info', optionalAuth, async (req, res) => {
   try {
     const { channelId } = req.query as { channelId: string };
     if (!channelId) return res.status(400).json({ error: '缺少 channelId' });
@@ -123,8 +126,8 @@ channelRouter.get('/info', async (req, res) => {
     const info = await getGroupInfo(channelId);
     if (!info) return res.status(404).json({ error: '频道不存在' });
 
-    // 判断请求者是否是订阅者
-    const userId = req.query.userId as string | undefined;
+    // 判断请求者是否是订阅者：优先用登录身份，匿名访问时才看 userId 参数
+    const userId = (req as any).user?.id || (req.query.userId as string | undefined);
     let isSubscribed = false;
     let memberRole: string | null = null;
 
@@ -197,11 +200,13 @@ channelRouter.get('/resolve', async (req, res) => {
  * - 私有频道也可以直接加入（频道本质是广播，不需要审批）
  * - 加入后 lastAckSeq 设为当前最新 seq（不标记历史为未读）
  */
-channelRouter.post('/subscribe', async (req, res) => {
+channelRouter.post('/subscribe', userAuth, async (req, res) => {
   try {
-    const { channelId, userId } = req.body;
-    if (!channelId || !userId) {
-      return res.status(400).json({ error: '缺少必要参数：channelId, userId' });
+    // ★ 身份以登录态为准
+    const userId = (req as any).user.id;
+    const { channelId } = req.body;
+    if (!channelId) {
+      return res.status(400).json({ error: '缺少必要参数：channelId' });
     }
 
     // 检查频道是否存在
@@ -246,11 +251,13 @@ channelRouter.post('/subscribe', async (req, res) => {
 /**
  * 取消订阅频道（退出）
  */
-channelRouter.post('/unsubscribe', async (req, res) => {
+channelRouter.post('/unsubscribe', userAuth, async (req, res) => {
   try {
-    const { channelId, userId } = req.body;
-    if (!channelId || !userId) {
-      return res.status(400).json({ error: '缺少必要参数：channelId, userId' });
+    // ★ 身份以登录态为准
+    const userId = (req as any).user.id;
+    const { channelId } = req.body;
+    if (!channelId) {
+      return res.status(400).json({ error: '缺少必要参数：channelId' });
     }
 
     const member = await prisma.groupMember.findUnique({
@@ -291,11 +298,13 @@ channelRouter.post('/unsubscribe', async (req, res) => {
 /**
  * 发布消息到频道（仅 owner/admin 可发送）
  */
-channelRouter.post('/post', async (req, res) => {
+channelRouter.post('/post', userAuth, async (req, res) => {
   try {
-    const { channelId, senderId, senderName, msgType, content, replyToId, extra } = req.body;
-    if (!channelId || !senderId || !content) {
-      return res.status(400).json({ error: '缺少必要参数：channelId, senderId, content' });
+    // ★ 发送者身份以登录态为准，不再信任 body 里的 senderId
+    const senderId = (req as any).user.id;
+    const { channelId, senderName, msgType, content, replyToId, extra } = req.body;
+    if (!channelId || !content) {
+      return res.status(400).json({ error: '缺少必要参数：channelId, content' });
     }
 
     // 权限验证：仅 owner/admin 可发布
@@ -337,11 +346,13 @@ channelRouter.post('/post', async (req, res) => {
 /**
  * 拉取频道历史消息
  */
-channelRouter.get('/messages', async (req, res) => {
+channelRouter.get('/messages', userAuth, async (req, res) => {
   try {
-    const { channelId, userId, afterSeq, beforeSeq, limit } = req.query as Record<string, string>;
-    if (!channelId || !userId) {
-      return res.status(400).json({ error: '缺少 channelId 或 userId' });
+    // ★ 身份以登录态为准；pullGroupMessages 内部会校验成员身份
+    const userId = (req as any).user.id;
+    const { channelId, afterSeq, beforeSeq, limit } = req.query as Record<string, string>;
+    if (!channelId) {
+      return res.status(400).json({ error: '缺少 channelId' });
     }
 
     // 验证频道类型
@@ -371,10 +382,10 @@ channelRouter.get('/messages', async (req, res) => {
 /**
  * 获取用户订阅的频道列表
  */
-channelRouter.get('/my', async (req, res) => {
+channelRouter.get('/my', userAuth, async (req, res) => {
   try {
-    const { userId } = req.query as { userId: string };
-    if (!userId) return res.status(400).json({ error: '缺少 userId' });
+    // ★ 身份以登录态为准
+    const userId = (req as any).user.id;
 
     const memberships = await prisma.groupMember.findMany({
       where: {
@@ -480,10 +491,18 @@ channelRouter.get('/search', async (req, res) => {
 /**
  * 获取频道订阅者列表（分页）
  */
-channelRouter.get('/subscribers', async (req, res) => {
+channelRouter.get('/subscribers', userAuth, async (req, res) => {
   try {
     const { channelId, page, pageSize } = req.query as Record<string, string>;
     if (!channelId) return res.status(400).json({ error: '缺少 channelId' });
+
+    // ★ 仅订阅者可查看订阅者列表（私有频道的成员名单不对外公开）
+    const requesterId = (req as any).user.id;
+    const requesterMember = await prisma.groupMember.findUnique({
+      where: { groupId_userId: { groupId: channelId, userId: requesterId } },
+      select: { id: true },
+    });
+    if (!requesterMember) return res.status(403).json({ error: '未订阅此频道' });
 
     const result = await getGroupMembers(
       channelId,
@@ -501,10 +520,12 @@ channelRouter.get('/subscribers', async (req, res) => {
 /**
  * 添加管理员
  */
-channelRouter.post('/admin/add', async (req, res) => {
+channelRouter.post('/admin/add', userAuth, async (req, res) => {
   try {
-    const { channelId, ownerId, targetUserId } = req.body;
-    if (!channelId || !ownerId || !targetUserId) {
+    // ★ 操作者身份以登录态为准
+    const ownerId = (req as any).user.id;
+    const { channelId, targetUserId } = req.body;
+    if (!channelId || !targetUserId) {
       return res.status(400).json({ error: '缺少必要参数' });
     }
 
@@ -556,10 +577,12 @@ channelRouter.post('/admin/add', async (req, res) => {
 /**
  * 移除管理员
  */
-channelRouter.post('/admin/remove', async (req, res) => {
+channelRouter.post('/admin/remove', userAuth, async (req, res) => {
   try {
-    const { channelId, ownerId, targetUserId } = req.body;
-    if (!channelId || !ownerId || !targetUserId) {
+    // ★ 操作者身份以登录态为准
+    const ownerId = (req as any).user.id;
+    const { channelId, targetUserId } = req.body;
+    if (!channelId || !targetUserId) {
       return res.status(400).json({ error: '缺少必要参数' });
     }
 
@@ -597,10 +620,12 @@ channelRouter.post('/admin/remove', async (req, res) => {
 /**
  * 更新频道信息（名称、描述、头像）
  */
-channelRouter.put('/update', async (req, res) => {
+channelRouter.put('/update', userAuth, async (req, res) => {
   try {
-    const { channelId, userId, name, announcement, avatar } = req.body;
-    if (!channelId || !userId) {
+    // ★ 操作者身份以登录态为准
+    const userId = (req as any).user.id;
+    const { channelId, name, announcement, avatar } = req.body;
+    if (!channelId) {
       return res.status(400).json({ error: '缺少必要参数' });
     }
 
@@ -663,10 +688,12 @@ channelRouter.put('/update', async (req, res) => {
 /**
  * 删除频道（仅 owner）
  */
-channelRouter.delete('/delete', async (req, res) => {
+channelRouter.delete('/delete', userAuth, async (req, res) => {
   try {
-    const { channelId, userId } = req.body;
-    if (!channelId || !userId) {
+    // ★ 操作者身份以登录态为准
+    const userId = (req as any).user.id;
+    const { channelId } = req.body;
+    if (!channelId) {
       return res.status(400).json({ error: '缺少必要参数' });
     }
 
@@ -692,10 +719,12 @@ channelRouter.delete('/delete', async (req, res) => {
 /**
  * 频道消息已读回执
  */
-channelRouter.post('/ack', async (req, res) => {
+channelRouter.post('/ack', userAuth, async (req, res) => {
   try {
-    const { channelId, userId, lastAckSeq } = req.body;
-    if (!channelId || !userId || lastAckSeq === undefined) {
+    // ★ 身份以登录态为准
+    const userId = (req as any).user.id;
+    const { channelId, lastAckSeq } = req.body;
+    if (!channelId || lastAckSeq === undefined) {
       return res.status(400).json({ error: '缺少必要参数' });
     }
     const result = await ackGroupMessages({ groupId: channelId, userId, lastAckSeq });
@@ -710,10 +739,10 @@ channelRouter.post('/ack', async (req, res) => {
 /**
  * 获取频道未读消息数
  */
-channelRouter.get('/unread', async (req, res) => {
+channelRouter.get('/unread', userAuth, async (req, res) => {
   try {
-    const { userId } = req.query as { userId: string };
-    if (!userId) return res.status(400).json({ error: '缺少 userId' });
+    // ★ 身份以登录态为准
+    const userId = (req as any).user.id;
 
     const allUnread = await getGroupUnreadCounts(userId);
 
