@@ -811,6 +811,20 @@ async function handleMessage(client: SignalClient, raw: string) {
     case "group_join": {
       const { groupId } = msg.payload || {};
       if (groupId) {
+        // ★ 成员校验：非群成员禁止订阅群实时消息，防止窃听
+        const member = await prisma.groupMember.findUnique({
+          where: { groupId_userId: { groupId, userId: client.userId } },
+          select: { id: true },
+        }).catch(() => null);
+        if (!member) {
+          console.warn(`[GroupSignal] 非成员 ${client.userId} 尝试订阅群 ${groupId}，已拒绝`);
+          sendTo(client.userId, {
+            type: 'group_message' as any,
+            groupId,
+            payload: { error: '非群成员，无权订阅该群消息' },
+          });
+          break;
+        }
         joinGroupOnline(groupId, client.userId);
         console.log(`[GroupSignal] ${client.userId} 加入群在线: ${groupId}`);
       }
@@ -829,6 +843,20 @@ async function handleMessage(client: SignalClient, raw: string) {
     case "group_send": {
       const { groupId, content, msgType, senderName, replyToId, extra, localId } = msg.payload || {};
       if (groupId && content) {
+        // ★ 成员校验：非群成员禁止发送，防止向任意群注入消息
+        const member = await prisma.groupMember.findUnique({
+          where: { groupId_userId: { groupId, userId: client.userId } },
+          select: { id: true },
+        }).catch(() => null);
+        if (!member) {
+          console.warn(`[GroupSignal] 非成员 ${client.userId} 尝试向群 ${groupId} 发送消息，已拒绝`);
+          sendTo(client.userId, {
+            type: 'group_message' as any,
+            groupId,
+            payload: { ack: true, groupId, seq: -1, timestamp: Date.now(), localId: localId || '', error: '非群成员，无权发送消息' },
+          });
+          return;
+        }
         // 强制 MLS：业务消息必须是 mls_encrypted，拒绝明文 text
         const effectiveMsgType = msgType || 'mls_encrypted';
         if (effectiveMsgType !== 'mls_encrypted' && effectiveMsgType !== 'system') {
