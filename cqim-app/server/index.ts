@@ -1453,6 +1453,20 @@ async function handleMessage(client: SignalClient, raw: string) {
       if (bdChatId && bdMsgId) {
         (async () => {
           try {
+            // ★ 授权校验：消息必须存在且归属该会话，调用者必须是会话参与者
+            const burnMsg = await prisma.privateMessage.findUnique({
+              where: { id: bdMsgId },
+              select: { id: true, chatId: true },
+            });
+            if (!burnMsg || burnMsg.chatId !== bdChatId) return;
+            const chat = await prisma.chat.findUnique({
+              where: { id: bdChatId },
+              select: { participantA: true, participantB: true },
+            });
+            if (!chat || (chat.participantA !== client.userId && chat.participantB !== client.userId)) {
+              console.warn(`[BurnAfterRead] 非会话参与者 ${client.userId} 尝试销毁消息 ${bdMsgId}，已拒绝`);
+              return;
+            }
             // 从数据库彻底删除消息
             await prisma.privateMessage.delete({ where: { id: bdMsgId } }).catch(() => {});
             // 通知对方也删除
@@ -1477,8 +1491,26 @@ async function handleMessage(client: SignalClient, raw: string) {
       // payload: { groupId, messageId, seq }
       const { groupId: recallGroupId, messageId: recallGroupMsgId, seq: recallSeq } = msg.payload || {};
       if (recallGroupId && recallGroupMsgId) {
+        // ★ 授权校验：消息必须归属该群；仅发送者本人或群管理员/群主可撤回
+        const targetMsg = await prisma.groupMessage.findUnique({
+          where: { id: recallGroupMsgId },
+          select: { id: true, groupId: true, senderId: true },
+        }).catch(() => null);
+        if (!targetMsg || targetMsg.groupId !== recallGroupId) break;
+        let canRecall = targetMsg.senderId === client.userId;
+        if (!canRecall) {
+          const recallMember = await prisma.groupMember.findUnique({
+            where: { groupId_userId: { groupId: recallGroupId, userId: client.userId } },
+            select: { role: true },
+          }).catch(() => null);
+          canRecall = !!recallMember && (recallMember.role === 'owner' || recallMember.role === 'admin');
+        }
+        if (!canRecall) {
+          console.warn(`[GroupRecall] ${client.userId} 无权撤回群 ${recallGroupId} 的消息 ${recallGroupMsgId}，已拒绝`);
+          break;
+        }
         // 尝试在数据库标记为已撤回
-        prisma.groupMessage.updateMany({
+        prisma.groupMessage.update({
           where: { id: recallGroupMsgId },
           data: { isRevoked: true },
         }).catch(err => console.error('[GroupRecall] DB更新失败:', err));
