@@ -35,6 +35,13 @@ type Client struct {
 
 // writePump 写协程：从 send 通道读取消息并写入 WebSocket
 func (c *Client) writePump() {
+	// ★ S14：兜底 recover，单个连接的 panic 不拖垮整个网关进程
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[Gateway] writePump panic 已恢复 user=%s: %v", c.userID, r)
+		}
+	}()
+
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
@@ -50,12 +57,9 @@ func (c *Client) writePump() {
 				return
 			}
 
-			// ★ 背压控制：检测缓冲区积压
-			if len(c.send) > cap(c.send)*3/4 {
-				log.Printf("[Gateway] 用户 %s 发送缓冲区积压，丢弃消息", c.userID)
-				continue
-			}
-
+			// ★ S15：删除原来的"出队后按积压丢弃"逻辑。
+			// 出队后的消息必须写入 socket；背压只在入队侧控制
+			// （PushToUser/sendToClient 的非阻塞发送），拥堵时越丢越多是错的。
 			if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 				return
 			}
@@ -166,6 +170,24 @@ func (gw *Gateway) SetMsgService(svc *msgservice.Service) {
 
 // ============ ConnectionManager 接口实现 ============
 
+// safeSend 非阻塞发送；channel 已关闭时返回 false 而不是 panic。
+// ★ S14：register/unregister 的 close(send) 与并发的 PushToUser/sendToClient
+// 之间存在竞态，Go 向已关闭 channel 发送（即使 select-default）也会 panic。
+// 所有向 client.send 的发送都必须走这里。
+func safeSend(ch chan []byte, msg []byte) (ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	select {
+	case ch <- msg:
+		return true
+	default:
+		return false
+	}
+}
+
 // PushToUser 推送消息给指定用户
 func (gw *Gateway) PushToUser(userID string, serializedMsg []byte) bool {
 	gw.mu.RLock()
@@ -176,28 +198,39 @@ func (gw *Gateway) PushToUser(userID string, serializedMsg []byte) bool {
 		return false
 	}
 
-	// 非阻塞写入，避免慢消费者阻塞扇出
-	select {
-	case client.send <- serializedMsg:
-		return true
-	default:
-		log.Printf("[Gateway] 用户 %s 发送缓冲区已满，丢弃消息", userID)
+	// 非阻塞写入，避免慢消费者阻塞扇出；
+	// ★ safeSend：连接可能正在被 register/unregister 关闭，关闭时返回 false 而非 panic（S14）
+	if !safeSend(client.send, serializedMsg) {
+		log.Printf("[Gateway] 用户 %s 发送失败（缓冲区满或连接已关闭），丢弃消息", userID)
 		return false
 	}
+	return true
 }
 
 // GetGroupOnlineMembers 获取群在线成员列表
+// ★ S18：返回 本机集合 ∪ Redis 全局集合（group:online:{groupId}）的并集，
+// 多实例下挂在其他节点上的成员也能被扇出覆盖（不在线的节点走 PublishImPush）。
 func (gw *Gateway) GetGroupOnlineMembers(groupID string) []string {
-	gw.mu.RLock()
-	defer gw.mu.RUnlock()
+	seen := make(map[string]struct{})
 
-	members, ok := gw.groupOnline[groupID]
-	if !ok {
-		return nil
+	gw.mu.RLock()
+	if members, ok := gw.groupOnline[groupID]; ok {
+		for uid := range members {
+			seen[uid] = struct{}{}
+		}
+	}
+	gw.mu.RUnlock()
+
+	if ids, err := gw.rdb.SMembers(gw.ctx, "group:online:"+groupID).Result(); err == nil {
+		for _, uid := range ids {
+			seen[uid] = struct{}{}
+		}
+	} else {
+		log.Printf("[Gateway] 读取 Redis 群在线集合失败 group=%s: %v", groupID, err)
 	}
 
-	result := make([]string, 0, len(members))
-	for uid := range members {
+	result := make([]string, 0, len(seen))
+	for uid := range seen {
 		result = append(result, uid)
 	}
 	return result
@@ -524,10 +557,8 @@ func (gw *Gateway) sendToClient(c *Client, data any) {
 	if err != nil {
 		return
 	}
-	select {
-	case c.send <- b:
-	default:
-	}
+	// ★ S14：走 safeSend，channel 关闭时不 panic
+	safeSend(c.send, b)
 }
 
 func (gw *Gateway) sendError(c *Client, errMsg string) {

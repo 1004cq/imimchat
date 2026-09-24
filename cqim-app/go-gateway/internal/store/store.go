@@ -138,8 +138,11 @@ func (s *Store) BatchInsertMessages(msgs []GroupMessage) error {
 	}
 
 	// 更新群最新序列号
+	// ★ S16：多 batch 可能并发刷盘，用 MAX() 做单调更新，防止小序号批次后提交
+	// 把 lastMsgSeq 回写成旧值（否则重启后 seq 生成器从旧值重发导致重复/主键冲突）。
+	// lastMsgTime 以 ISO8601 文本存储，字典序即时间序，同样用 MAX() 保证单调。
 	_, err = tx.Exec(
-		`UPDATE "Group" SET lastMsgSeq = ?, lastMsgTime = ? WHERE id = ?`,
+		`UPDATE "Group" SET lastMsgSeq = MAX(lastMsgSeq, ?), lastMsgTime = MAX(lastMsgTime, ?) WHERE id = ?`,
 		maxSeq, msgs[len(msgs)-1].CreatedAt.UTC().Format("2006-01-02T15:04:05.000Z"), msgs[0].GroupID,
 	)
 	if err != nil {
