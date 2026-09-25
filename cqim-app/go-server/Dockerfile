@@ -9,7 +9,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o cqim-server ./cmd/server
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata && \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata wget && \
     rm -rf /var/lib/apt/lists/* && \
     groupadd -r appuser && useradd -r -g appuser appuser
 ENV TZ=Asia/Shanghai
