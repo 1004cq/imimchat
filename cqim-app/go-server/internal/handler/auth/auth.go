@@ -487,6 +487,7 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 	token := middleware.SessionTokenFrom(r)
+	h.d.Auth.InvalidateSession(r.Context(), token)
 	_, _ = h.d.DB.Exec(r.Context(), `DELETE FROM "UserSession" WHERE "token"=$1`, token)
 	util.WriteJSON(w, 200, map[string]any{"success": true})
 }
@@ -533,8 +534,10 @@ func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 清除其他会话
+	// 清除其他会话（先清缓存再删 DB 行）
 	currentToken := middleware.SessionTokenFrom(r)
+	h.d.Auth.InvalidateUserSessions(ctx, u.Id)
+	// 当前会话的 DB 行保留，下次请求时缓存会从 DB 重建（仅一次缓存未命中）
 	_, _ = h.d.DB.Exec(ctx, `DELETE FROM "UserSession" WHERE "userId"=$1 AND "token"<>$2`, u.Id, currentToken)
 
 	util.WriteJSON(w, 200, map[string]any{"success": true, "message": "密码修改成功"})
@@ -598,7 +601,8 @@ func (h *Handler) resetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	_, _ = h.d.DB.Exec(ctx, `UPDATE "User" SET "password"=$2 WHERE "id"=$1`, user.Id, newHash)
 
-	// 清除所有会话
+	// 清除所有会话（先清缓存再删 DB 行）
+	h.d.Auth.InvalidateUserSessions(ctx, user.Id)
 	_, _ = h.d.DB.Exec(ctx, `DELETE FROM "UserSession" WHERE "userId"=$1`, user.Id)
 
 	util.WriteJSON(w, 200, map[string]any{"success": true, "message": "密码重置成功，请重新登录"})
@@ -878,7 +882,13 @@ func (h *Handler) deleteSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
+	// 先查出 token 以便清缓存
+	var tk string
+	_ = h.d.DB.Pool.QueryRow(r.Context(), `SELECT "token" FROM "UserSession" WHERE "id"=$1 AND "userId"=$2`, id, u.Id).Scan(&tk)
 	_, _ = h.d.DB.Exec(r.Context(), `DELETE FROM "UserSession" WHERE "id"=$1 AND "userId"=$2`, id, u.Id)
+	if tk != "" {
+		h.d.Auth.InvalidateSession(r.Context(), tk)
+	}
 	util.WriteJSON(w, 200, map[string]any{"success": true})
 }
 

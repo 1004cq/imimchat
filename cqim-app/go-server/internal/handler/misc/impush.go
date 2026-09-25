@@ -9,10 +9,13 @@ package misc
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
 	"strconv"
 	"time"
 
 	"github.com/1004cq/imim.chat/cqim-app/go-server/internal/handler"
+	"github.com/1004cq/imim.chat/cqim-app/go-server/internal/util"
 )
 
 // IMPushChannel 跨节点 IM 推送频道（与 publish-im.ts IM_PUSH_CHANNEL 一致）。
@@ -43,38 +46,108 @@ func PublishImPush(d *handler.Deps, userID string, payload any) error {
 }
 
 const (
-	onlinePrefix = "online:"        // redis.ts ONLINE_PREFIX
+	onlinePrefix = "online:"      // redis.ts ONLINE_PREFIX（保留做兼容读取）
 	onlineTTL    = 90 * time.Second // redis.ts ONLINE_TTL
+
+	// onlineConnsPrefix 按连接跟踪在线状态：SET online:conns:{userId} = {connID...}
+	// 解决多连接/多节点互相踩：某连接断开时只移除自己的条目，集合为空才算离线。
+	onlineConnsPrefix = "online:conns:"
 )
 
+// nodeID 本节点标识（进程启动时生成，用于区分多节点连接）
+var nodeID = func() string {
+	h, _ := os.Hostname()
+	return fmt.Sprintf("%s-%d", h, os.Getpid())
+}()
+
+// NodeID 返回本节点标识。
+func NodeID() string { return nodeID }
+
+// NewConnID 生成连接唯一标识（节点ID + 随机ID）
+func NewConnID() string {
+	return nodeID + ":" + util.NewID()
+}
+
 // SetUserOnline 标记用户在线（SETEX 90 秒）；Redis 异常静默忽略（与 TS 一致）。
+//
+// connID 为空时沿用旧语义（直接写 online:{userId}）；非空时写入连接集合。
 func SetUserOnline(d *handler.Deps, userID string) {
+	setUserOnlineConn(d, userID, "")
+}
+
+// SetUserOnlineConn 标记指定连接在线。
+func SetUserOnlineConn(d *handler.Deps, userID, connID string) {
+	setUserOnlineConn(d, userID, connID)
+}
+
+func setUserOnlineConn(d *handler.Deps, userID, connID string) {
 	if d.Redis == nil || userID == "" {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_ = d.Redis.SetEX(ctx, onlinePrefix+userID, strconv.FormatInt(time.Now().UnixMilli(), 10), onlineTTL)
+	if connID == "" {
+		_ = d.Redis.SetEX(ctx, onlinePrefix+userID, strconv.FormatInt(time.Now().UnixMilli(), 10), onlineTTL)
+		return
+	}
+	_ = d.Redis.SAdd(ctx, onlineConnsPrefix+userID, connID)
+	_ = d.Redis.Expire(ctx, onlineConnsPrefix+userID, onlineTTL)
+	// 同步写旧 key，保持 IsUserOnline 的兼容读取
+	_ = d.Redis.SetEX(ctx, onlinePrefix+userID, "1", onlineTTL)
 }
 
 // RefreshUserOnline 心跳续期（EXPIRE 90 秒）；Redis 异常静默忽略。
 func RefreshUserOnline(d *handler.Deps, userID string) {
+	refreshUserOnlineConn(d, userID, "")
+}
+
+// RefreshUserOnlineConn 为指定连接续期。
+func RefreshUserOnlineConn(d *handler.Deps, userID, connID string) {
+	refreshUserOnlineConn(d, userID, connID)
+}
+
+func refreshUserOnlineConn(d *handler.Deps, userID, connID string) {
 	if d.Redis == nil || userID == "" {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	if connID == "" {
+		_ = d.Redis.Expire(ctx, onlinePrefix+userID, onlineTTL)
+		return
+	}
+	// 重新 SADD（防止集合因 TTL 过期被删后条目丢失）+ 续期
+	_ = d.Redis.SAdd(ctx, onlineConnsPrefix+userID, connID)
+	_ = d.Redis.Expire(ctx, onlineConnsPrefix+userID, onlineTTL)
 	_ = d.Redis.Expire(ctx, onlinePrefix+userID, onlineTTL)
 }
 
 // SetUserOffline 标记用户离线（DEL）；Redis 异常静默忽略。
 func SetUserOffline(d *handler.Deps, userID string) {
+	setUserOfflineConn(d, userID, "")
+}
+
+// SetUserOfflineConn 移除指定连接；集合为空时才删 online:{userId}。
+func SetUserOfflineConn(d *handler.Deps, userID, connID string) {
+	setUserOfflineConn(d, userID, connID)
+}
+
+func setUserOfflineConn(d *handler.Deps, userID, connID string) {
 	if d.Redis == nil || userID == "" {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_ = d.Redis.Del(ctx, onlinePrefix+userID)
+	if connID == "" {
+		_ = d.Redis.Del(ctx, onlinePrefix+userID)
+		return
+	}
+	_ = d.Redis.SRem(ctx, onlineConnsPrefix+userID, connID)
+	// 集合为空 → 用户真正离线，删旧 key
+	members, _ := d.Redis.SMembers(ctx, onlineConnsPrefix+userID)
+	if len(members) == 0 {
+		_ = d.Redis.Del(ctx, onlineConnsPrefix+userID, onlinePrefix+userID)
+	}
 }
 
 // IsUserOnline 检查用户是否在线（EXISTS online:{userId}）；Redis 异常降级为 false。

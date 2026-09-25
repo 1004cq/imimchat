@@ -394,9 +394,9 @@ func (h *Handler) updateUser(w http.ResponseWriter, r *http.Request) {
 		}
 		add("password", hash)
 		changes = append(changes, "密码已重置")
-		// 清除该用户所有会话，强制重新登录
-		_, _ = h.db().Exec(ctx, `DELETE FROM "UserSession" WHERE "userId"=$1`, id)
+		// 清除该用户所有会话，强制重新登录（先清缓存再删 DB 行）
 		h.deps.Auth.InvalidateUserSessions(ctx, id)
+		_, _ = h.db().Exec(ctx, `DELETE FROM "UserSession" WHERE "userId"=$1`, id)
 	}
 
 	if len(sets) == 0 {
@@ -459,10 +459,10 @@ func (h *Handler) banUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 封禁时清除该用户所有会话，强制下线
+	// 封禁时清除该用户所有会话，强制下线（先清缓存再删 DB 行）
 	if req.Ban {
-		_, _ = h.db().Exec(ctx, `DELETE FROM "UserSession" WHERE "userId"=$1`, id)
 		h.deps.Auth.InvalidateUserSessions(ctx, id)
+		_, _ = h.db().Exec(ctx, `DELETE FROM "UserSession" WHERE "userId"=$1`, id)
 	}
 
 	detail := ""

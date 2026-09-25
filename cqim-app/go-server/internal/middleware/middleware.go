@@ -133,17 +133,45 @@ type limitEntry struct {
 	resetAt time.Time
 }
 
-// RateLimiter 固定窗口计数器。
+// RateLimiter 分布式固定窗口计数器（Redis Lua 原子实现）。
+//
+// 多节点部署时，所有节点的限流计数共享同一份 Redis 数据，
+// 避免进程内 map 导致的多节点限流失效（每个节点各自放行 max 次）。
+// Redis 不可用时降级为进程内计数（fail-open，保证服务可用）。
 type RateLimiter struct {
 	mu     sync.Mutex
 	store  map[string]*limitEntry
 	window time.Duration
 	max    int
 	stopCh chan struct{}
+	name   string // Redis key 前缀
 }
 
-func NewRateLimiter(window time.Duration, max int) *RateLimiter {
-	rl := &RateLimiter{store: make(map[string]*limitEntry), window: window, max: max, stopCh: make(chan struct{})}
+// redisClient 由 main.go 通过 SetRedisClient 注入；为 nil 时用纯进程内模式。
+var redisClient *redisx.Client
+
+// SetRedisClient 注入 Redis 客户端供分布式限流使用。
+func SetRedisClient(c *redisx.Client) {
+	redisClient = c
+}
+
+// 固定窗口限流 Lua：INCR + 首次设置过期，返回 {allowed, remaining, ttl秒}
+const rateLimitLua = `
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+	redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+local ttl = redis.call('TTL', KEYS[1])
+local max = tonumber(ARGV[2])
+local allowed = 0
+if count <= max then allowed = 1 end
+local remaining = max - count
+if remaining < 0 then remaining = 0 end
+return {allowed, remaining, ttl}
+`
+
+func NewRateLimiter(name string, window time.Duration, max int) *RateLimiter {
+	rl := &RateLimiter{name: "ratelimit:" + name + ":", store: make(map[string]*limitEntry), window: window, max: max, stopCh: make(chan struct{})}
 	go func() {
 		t := time.NewTicker(window)
 		if window > time.Minute {
@@ -175,7 +203,60 @@ type limitResult struct {
 	resetAt   time.Time
 }
 
+// Allow 计数+1，返回是否在限额内（供外部模块使用的便捷方法）。
+func (rl *RateLimiter) Allow(key string) bool {
+	return rl.check(key).allowed
+}
+
 func (rl *RateLimiter) check(key string) limitResult {
+	// 优先走 Redis 分布式计数
+	if redisClient != nil {
+		if res, ok := rl.checkRedis(key); ok {
+			return res
+		}
+		// Redis 异常 → 降级为进程内计数（fail-open）
+	}
+	return rl.checkLocal(key)
+}
+
+// checkRedis 通过 Lua 脚本原子递增计数。
+func (rl *RateLimiter) checkRedis(key string) (limitResult, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	rkey := rl.name + key
+	windowSec := int(rl.window.Seconds())
+	if windowSec < 1 {
+		windowSec = 1
+	}
+	v, err := redisClient.Eval(ctx, rateLimitLua, []string{rkey}, windowSec, rl.max)
+	if err != nil {
+		return limitResult{}, false
+	}
+	arr, ok := v.([]any)
+	if !ok || len(arr) != 3 {
+		return limitResult{}, false
+	}
+	toInt := func(x any) int {
+		switch n := x.(type) {
+		case int64:
+			return int(n)
+		case int:
+			return n
+		default:
+			return 0
+		}
+	}
+	allowed := toInt(arr[0]) == 1
+	remaining := toInt(arr[1])
+	ttlSec := toInt(arr[2])
+	resetAt := time.Now().Add(time.Duration(ttlSec) * time.Second)
+	if ttlSec < 0 {
+		resetAt = time.Now().Add(rl.window)
+	}
+	return limitResult{allowed: allowed, remaining: remaining, resetAt: resetAt}, true
+}
+
+func (rl *RateLimiter) checkLocal(key string) limitResult {
 	now := time.Now()
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
@@ -194,17 +275,23 @@ func (rl *RateLimiter) check(key string) limitResult {
 }
 
 func (rl *RateLimiter) Reset(key string) {
+	// 同时清 Redis 与本地
+	if redisClient != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		_ = redisClient.Del(ctx, rl.name+key)
+	}
 	rl.mu.Lock()
 	delete(rl.store, key)
 	rl.mu.Unlock()
 }
 
 var (
-	globalLimiter  = NewRateLimiter(time.Minute, 120)
-	loginLimiter   = NewRateLimiter(15*time.Minute, 10)
-	accountLimiter = NewRateLimiter(15*time.Minute, 5)
-	codeLimiter    = NewRateLimiter(time.Hour, 10)
-	adminLimiter   = NewRateLimiter(15*time.Minute, 5)
+	globalLimiter  = NewRateLimiter("global", time.Minute, 120)
+	loginLimiter   = NewRateLimiter("login", 15*time.Minute, 10)
+	accountLimiter = NewRateLimiter("account", 15*time.Minute, 5)
+	codeLimiter    = NewRateLimiter("code", time.Hour, 10)
+	adminLimiter   = NewRateLimiter("admin", 15*time.Minute, 5)
 )
 
 // recordIllegal 记异常请求（IllegalRequest 表），失败静默。
@@ -402,9 +489,29 @@ func (a *AuthContext) InvalidateSession(ctx context.Context, token string) {
 }
 
 // InvalidateUserSessions 使用户所有 session 缓存失效。
+//
+// 先查出该用户所有 token，逐个清内存+Redis 缓存，再删辅助键。
+// 调用方应在调用前/后自行删除 DB 中的 UserSession 行。
 func (a *AuthContext) InvalidateUserSessions(ctx context.Context, userID string) {
-	// 内存缓存按 token 存，无法按 user 批量删：删 DB 行 + Redis user 键，内存条目靠 TTL 自然过期
-	// （与 Node 版 deleteUserSessionCache 语义一致：删 Redis 侧 user 键）
+	if a.DB != nil {
+		rows, err := a.DB.Pool.Query(ctx, `SELECT "token" FROM "UserSession" WHERE "userId"=$1`, userID)
+		if err == nil {
+			var tokens []string
+			for rows.Next() {
+				var tk string
+				if rows.Scan(&tk) == nil {
+					tokens = append(tokens, tk)
+				}
+			}
+			rows.Close()
+			for _, tk := range tokens {
+				sessionMemCache.Delete(tk)
+				if a.Redis != nil {
+					_ = a.Redis.Del(ctx, "session:"+tk)
+				}
+			}
+		}
+	}
 	if a.Redis != nil {
 		_ = a.Redis.Del(ctx, "user:session:"+userID)
 	}

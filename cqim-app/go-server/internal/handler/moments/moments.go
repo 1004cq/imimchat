@@ -668,7 +668,7 @@ func (h *Handler) publish(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, 401, "未登录")
 		return
 	}
-	if !publishLimiter.check("publish:" + me.Id) {
+	if !checkLimit(publishLimiter, "publish:" + me.Id) {
 		util.WriteError(w, 429, "发布过于频繁，请稍后再试")
 		return
 	}
@@ -991,7 +991,7 @@ func (h *Handler) like(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, 401, "未登录")
 		return
 	}
-	if !likeLimiter.check("like:" + me.Id) {
+	if !checkLimit(likeLimiter, "like:" + me.Id) {
 		util.WriteError(w, 429, "操作过于频繁，请稍后再试")
 		return
 	}
@@ -1074,7 +1074,7 @@ func (h *Handler) postComment(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, 400, "评论内容超出长度限制（1000 字）")
 		return
 	}
-	if !commentLimiter.check("comment:" + me.Id) {
+	if !checkLimit(commentLimiter, "comment:" + me.Id) {
 		util.WriteError(w, 429, "评论过于频繁，请稍后再试")
 		return
 	}

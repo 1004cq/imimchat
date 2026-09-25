@@ -21,6 +21,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -30,6 +31,7 @@ import (
 	"time"
 
 	"github.com/1004cq/imim.chat/cqim-app/go-server/internal/db"
+	"github.com/1004cq/imim.chat/cqim-app/go-server/internal/handler"
 )
 
 // mediaKinds 与 TS 的 MEDIA_KINDS 一致。
@@ -416,4 +418,27 @@ func (h *Handler) resolveMedia(ctx context.Context, id string) (*db.MediaFile, i
 		return nil, 0, nil, err
 	}
 	return row, size, stream, nil
+}
+
+// SaveImageForGroup 供群模块保存群头像：上传到对象存储 + MediaFile 入库，返回公开 URL。
+// 与 TS 版 persistGroupAvatar 一致。
+func SaveImageForGroup(ctx context.Context, d *handler.Deps, groupID string, buffer []byte, mime, filename string) (string, error) {
+	h := &Handler{deps: d, s3: newS3Client()}
+	row, err := h.saveMedia(ctx, saveMediaOptions{
+		ownerID:  nil,
+		kind:     "image",
+		buffer:   buffer,
+		mime:     mime,
+		filename: &filename,
+	})
+	if err != nil {
+		return "", err
+	}
+	if row.PublicPath != nil && *row.PublicPath != "" {
+		return *row.PublicPath, nil
+	}
+	if row.Url != "" {
+		return row.Url, nil
+	}
+	return "", errors.New("媒体保存失败：无可用 URL")
 }

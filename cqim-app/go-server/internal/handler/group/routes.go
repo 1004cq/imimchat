@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"net/url"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/1004cq/imim.chat/cqim-app/go-server/internal/db"
 	"github.com/1004cq/imim.chat/cqim-app/go-server/internal/handler"
+	"github.com/1004cq/imim.chat/cqim-app/go-server/internal/handler/media"
 	"github.com/1004cq/imim.chat/cqim-app/go-server/internal/util"
 )
 
@@ -193,7 +195,7 @@ func getPeerTypeByDialogID(dialogID string) string {
 
 // persistGroupAvatar 群头像持久化（MinIO）。Go 版 media 模块尚未移植，暂返回未实现错误。
 func persistGroupAvatar(groupID string, data []byte, ext, mimeType string) (string, error) {
-	return "", errString("群头像存储尚未在 Go 服务中实现")
+	return "", errors.New("persistGroupAvatar 已废弃，请使用 media.SaveImageForGroup")
 }
 
 // sysMessage 异步发送系统消息（不阻塞请求，与 TS .catch 语义一致）。
@@ -1199,7 +1201,8 @@ func (h *Handler) updateAvatar(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, 400, "头像文件过大，最大 5MB")
 		return
 	}
-	avatarURL, err := persistGroupAvatar(req.GroupID, buf, ext, mime)
+	avatarURL, err := media.SaveImageForGroup(ctx, h.deps, req.GroupID, buf, mime,
+		"group_"+req.GroupID+"_avatar"+ext)
 	if err != nil {
 		writeErr(w, err)
 		return

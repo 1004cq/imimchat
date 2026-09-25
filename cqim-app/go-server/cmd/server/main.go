@@ -57,6 +57,8 @@ func main() {
 	} else {
 		log.Println("[Redis] 已连接")
 	}
+	// 分布式限流注入 Redis
+	middleware.SetRedisClient(rdb)
 
 	// ---- S13：确保默认管理员 ----
 	ensureAdmin(ctx, database, cfg)

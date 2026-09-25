@@ -4,6 +4,8 @@ import (
 	"log"
 	"os"
 	"strings"
+
+	"github.com/1004cq/imim.chat/cqim-app/go-server/internal/handler/media"
 )
 
 // CDN 预热触发（对应 sticker.ts 中对 cdn-preheat.ts 的调用点）。
@@ -79,7 +81,13 @@ func preheatCdnResources(rawURLs []string) {
 	if len(urls) == 0 {
 		return
 	}
-	// TODO(cdn-preheat): 接入腾讯云 PushUrlsCache 实际预热调用（含 TC3-HMAC-SHA256 签名、
-	// 批量/限流/去重/日配额）。当前保留触发语义：启用时后台触发，不阻塞响应。
-	log.Printf("[Sticker] CDN 预热已触发（cdn-preheat 移植后实际执行）：%d 个 URL", len(urls))
+	// 接入 media 包的真实腾讯云 PushUrlsCache 预热实现（后台异步，不阻塞响应）
+	go func() {
+		result := media.PreheatURLs(urls, media.PreheatOptions{Source: "sticker"})
+		if !result.Success {
+			log.Printf("[Sticker] CDN 预热失败: %v", result.Errors)
+		} else {
+			log.Printf("[Sticker] CDN 预热已提交: %d 个 URL, tasks=%v", result.PreheatedCount, result.TaskIDs)
+		}
+	}()
 }

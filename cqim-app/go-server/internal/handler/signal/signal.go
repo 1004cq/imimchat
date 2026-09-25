@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -32,18 +33,20 @@ const (
 
 // Client 单个 /signal 连接。
 type Client struct {
-	userID   string
-	conn     *websocket.Conn
-	send     chan []byte
-	lastSeen int64 // unix milli
-	roomID   string
-	deviceID string
-	done     chan struct{}
-	once     sync.Once
+	userID      string
+	conn        *websocket.Conn
+	send        chan []byte
+	pendingByte atomic.Int64 // 真实待发送字节数（原子操作）
+	lastSeen    atomic.Int64 // unix milli（原子操作，消除读写 race）
+	roomID      string
+	deviceID    string
+	connID      string // 连接唯一标识，用于多连接在线状态跟踪
+	done        chan struct{}
+	once        sync.Once
 }
 
 func (c *Client) touch() {
-	c.lastSeen = time.Now().UnixMilli()
+	c.lastSeen.Store(time.Now().UnixMilli())
 }
 
 // Server /signal WebSocket 服务。
@@ -156,6 +159,7 @@ func (s *Server) addClient(userID string, conn *websocket.Conn, r *http.Request)
 		conn:   conn,
 		send:   make(chan []byte, 256),
 		done:   make(chan struct{}),
+		connID: misc.NewConnID(),
 	}
 	c.touch()
 	c.deviceID = userID + "_" + itoa(time.Now().UnixMilli())
@@ -169,7 +173,7 @@ func (s *Server) addClient(userID string, conn *websocket.Conn, r *http.Request)
 	s.mu.Unlock()
 
 	ctx := context.Background()
-	misc.SetUserOnline(s.deps, userID)
+	misc.SetUserOnlineConn(s.deps, userID, c.connID)
 	// 设备信息（简化：UA + IP）
 	ua := r.UserAgent()
 	ip := r.Header.Get("X-Forwarded-For")
@@ -209,14 +213,25 @@ func (c *Client) close(code int, reason string) {
 	})
 }
 
-// enqueue 非阻塞入队，队列满则丢弃（由调用方决定降级策略）。
+// enqueue 非阻塞入队，队列满则丢弃并返回 false。
 func (c *Client) enqueue(b []byte) bool {
 	select {
 	case c.send <- b:
+		c.pendingByte.Add(int64(len(b)))
 		return true
 	default:
 		return false
 	}
+}
+
+// dequeuePending 出队时扣减 pending 字节（仅 writePump 调用）。
+func (c *Client) dequeuePending(b []byte) {
+	c.pendingByte.Add(-int64(len(b)))
+}
+
+// pendingBytes 返回真实待发送字节数。
+func (c *Client) pendingBytes() int64 {
+	return c.pendingByte.Load()
 }
 
 func (c *Client) writePump() {
@@ -226,6 +241,7 @@ func (c *Client) writePump() {
 		case <-c.done:
 			return
 		case b := <-c.send:
+			c.dequeuePending(b)
 			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := c.conn.WriteMessage(websocket.TextMessage, b); err != nil {
 				return
@@ -283,7 +299,7 @@ func (s *Server) removeClient(c *Client) {
 	s.mu.Unlock()
 
 	ctx := context.Background()
-	misc.SetUserOffline(s.deps, userID)
+	misc.SetUserOfflineConn(s.deps, userID, c.connID)
 	_ = s.deps.Redis.HDel(ctx, "user:devices:"+userID, c.deviceID)
 	log.Printf("[Signal] 用户断开: %s", userID)
 	s.broadcastExcept(userID, mustJSON(map[string]any{"type": "friend_offline", "from": userID, "payload": map[string]any{"userId": userID}}))
@@ -310,19 +326,14 @@ func (s *Server) trySendTo(userID string, raw []byte) bool {
 	s.mu.RUnlock()
 	if ok {
 		// 背压保护：待发送字节超限则转 Redis 投递，避免单连接拖垮
-		if len(c.send) < cap(c.send) && pendingBytes(c) < wsBackpressureLimit {
+		if int64(len(c.send)) < int64(cap(c.send)) && c.pendingBytes() < wsBackpressureLimit {
 			c.enqueue(raw)
 			return true
 		}
 	}
-	// 本机无连接或背压：跨节点投递
+	// 本机无连接或背压：跨节点投递（带源节点标记，打破回投循环）
 	_ = s.publishImPush(userID, raw)
 	return false
-}
-
-func pendingBytes(c *Client) int {
-	// 近似：队列长度 * 平均消息大小（用 channel 长度估算）
-	return len(c.send) * 512
 }
 
 // sendRaw 发送已序列化的载荷（profile 广播等用）。
@@ -381,7 +392,7 @@ func (s *Server) publishImPush(userID string, payload any) error {
 		}
 		raw = b
 	}
-	env, _ := json.Marshal(map[string]any{"userId": userID, "payload": raw})
+	env, _ := json.Marshal(map[string]any{"userId": userID, "payload": raw, "srcNode": misc.NodeID()})
 	if err := s.deps.Redis.Publish(context.Background(), imPushChannel, string(env)); err != nil {
 		log.Printf("[IM Push] PUBLISH 失败 userId=%s: %v", userID, err)
 	}
@@ -408,7 +419,7 @@ func (s *Server) heartbeatLoop(ctx context.Context) {
 			}
 			s.mu.RUnlock()
 			for _, c := range clients {
-				lastSeen := c.lastSeen
+				lastSeen := c.lastSeen.Load()
 				if lastSeen > 0 && now-lastSeen > 90000 {
 					log.Printf("[Signal] 空闲超时断开: %s idle=%dms", c.userID, now-lastSeen)
 					s.removeClient(c)
@@ -416,7 +427,7 @@ func (s *Server) heartbeatLoop(ctx context.Context) {
 					continue
 				}
 				_ = c.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second))
-				misc.RefreshUserOnline(s.deps, c.userID)
+				misc.RefreshUserOnlineConn(s.deps, c.userID, c.connID)
 			}
 		}
 	}
@@ -441,6 +452,7 @@ func (s *Server) subscribeImPush(ctx context.Context) {
 			var env struct {
 				UserID  string          `json:"userId"`
 				Payload json.RawMessage `json:"payload"`
+				SrcNode string          `json:"srcNode"`
 			}
 			if err := json.Unmarshal([]byte(m.Payload), &env); err != nil || env.UserID == "" {
 				continue
@@ -450,7 +462,18 @@ func (s *Server) subscribeImPush(ctx context.Context) {
 			c, ok := s.clients[env.UserID]
 			s.mu.RUnlock()
 			if ok && len(env.Payload) > 0 {
-				c.enqueue(env.Payload)
+				// 回投循环保护：消息源自本节点且本地仍背压时直接丢弃（避免无限回投）
+				if env.SrcNode != "" && env.SrcNode == misc.NodeID() &&
+					(int64(len(c.send)) >= int64(cap(c.send)) || c.pendingBytes() >= wsBackpressureLimit) {
+					log.Printf("[Signal] 回投丢弃(本地背压): %s", env.UserID)
+					continue
+				}
+				if !c.enqueue(env.Payload) {
+					// 慢消费者：队列满则断开，由客户端重连后从 DB 拉取
+					log.Printf("[Signal] 慢消费者断开: %s", env.UserID)
+					s.removeClient(c)
+					c.close(4002, "slow consumer")
+				}
 			}
 		}
 	}
