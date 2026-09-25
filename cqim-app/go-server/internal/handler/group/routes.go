@@ -293,12 +293,13 @@ func (h *Handler) userBriefMap(ctx context.Context, userIDs []string) map[string
 	if len(userIDs) == 0 {
 		return m
 	}
-	users, err := db.QueryToStructs[db.User](ctx, h.deps.DB,
-		`SELECT "id","nickname","username","avatar" FROM "User" WHERE "id"=ANY($1)`, userIDs)
+	users, err := db.QueryToStructs[db.UserBrief](ctx, h.deps.DB,
+		`SELECT "id","username","nickname","avatar" FROM "User" WHERE "id"=ANY($1)`, userIDs)
 	if err != nil {
 		return m
 	}
-	for _, u := range users {
+	for _, b := range users {
+		u := b.ToUser()
 		m[u.Id] = u
 	}
 	return m

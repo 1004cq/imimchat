@@ -334,24 +334,15 @@ func (h *Handler) batchUsers(ctx context.Context, ids []string) map[string]*db.U
 	if len(ids) == 0 {
 		return m
 	}
-	// 使用精简 struct，避免 pgx RowToStructByName 因缺列报错。
-	type userBrief struct {
-		Id            string  `db:"id"`
-		Username      string  `db:"username"`
-		Nickname      *string `db:"nickname"`
-		Avatar        *string `db:"avatar"`
-		BackgroundUrl *string `db:"backgroundUrl"`
-		Bio           *string `db:"bio"`
-	}
-	rows, err := db.QueryToStructs[userBrief](ctx, h.deps.DB,
+	// 用 UserBrief 精简 struct，避免 pgx RowToStructByName 因缺列报错。
+	rows, err := db.QueryToStructs[db.UserBrief](ctx, h.deps.DB,
 		`SELECT "id","username","nickname","avatar","backgroundUrl","bio" FROM "User" WHERE "id"=ANY($1)`, ids)
 	if err != nil {
 		return m
 	}
 	for i := range rows {
-		r := rows[i]
-		u := &db.User{Id: r.Id, Username: r.Username, Nickname: r.Nickname, Avatar: r.Avatar, BackgroundUrl: r.BackgroundUrl, Bio: r.Bio}
-		m[u.Id] = u
+		u := rows[i].ToUser()
+		m[u.Id] = &u
 	}
 	return m
 }

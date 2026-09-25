@@ -491,3 +491,18 @@ type InviteLink struct {
 
 // InviteLinkColumns 供 SQL 拼接使用。
 var InviteLinkColumns = []string{"id", "hash", "groupId", "creatorId", "name", "expireAt", "maxUses", "usedCount", "isRevoked", "createdAt"}
+
+// UserBrief 用户精简信息，用于 pgx 查询（避免用完整 User struct 查部分列报错）。
+type UserBrief struct {
+	Id            string  `db:"id" json:"id"`
+	Username      string  `db:"username" json:"username"`
+	Nickname      *string `db:"nickname" json:"nickname"`
+	Avatar        *string `db:"avatar" json:"avatar"`
+	BackgroundUrl *string `db:"backgroundUrl" json:"backgroundUrl"`
+	Bio           *string `db:"bio" json:"bio"`
+}
+
+// ToUser 转为完整 User（仅填充已查询字段）。
+func (b UserBrief) ToUser() User {
+	return User{Id: b.Id, Username: b.Username, Nickname: b.Nickname, Avatar: b.Avatar, BackgroundUrl: b.BackgroundUrl, Bio: b.Bio}
+}

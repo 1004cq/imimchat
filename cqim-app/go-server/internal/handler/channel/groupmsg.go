@@ -104,11 +104,12 @@ func getGroupMembers(ctx context.Context, d *handler.Deps, groupID string, page,
 	userIDs := uniqueStrings(members, func(m db.GroupMember) string { return m.UserId })
 	userMap := map[string]*db.User{}
 	if len(userIDs) > 0 {
-		users, err := db.QueryToStructs[db.User](ctx, d.DB,
-			`SELECT "id","nickname","username","avatar" FROM "User" WHERE "id" = ANY($1)`, userIDs)
+		users, err := db.QueryToStructs[db.UserBrief](ctx, d.DB,
+			`SELECT "id","username","nickname","avatar" FROM "User" WHERE "id" = ANY($1)`, userIDs)
 		if err == nil {
 			for i := range users {
-				userMap[users[i].Id] = &users[i]
+				u := users[i].ToUser()
+				userMap[u.Id] = &u
 			}
 		}
 	}
