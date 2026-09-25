@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -13,12 +14,21 @@ type DB struct {
 	Pool *pgxpool.Pool
 }
 
+// sanitizeDSN 去掉 Prisma 风格的查询参数（如 ?schema=public），pgx 不识别这些参数，
+// 会把它们当成 PostgreSQL 配置项下发导致连接失败。public 本就是默认 schema，去掉不影响。
+func sanitizeDSN(dsn string) string {
+	if i := strings.Index(dsn, "?"); i >= 0 {
+		return dsn[:i]
+	}
+	return dsn
+}
+
 // New 创建连接池。DATABASE_URL 为空时返回错误。
 func New(ctx context.Context, databaseURL string) (*DB, error) {
 	if databaseURL == "" {
 		return nil, errMissingDSN
 	}
-	cfg, err := pgxpool.ParseConfig(databaseURL)
+	cfg, err := pgxpool.ParseConfig(sanitizeDSN(databaseURL))
 	if err != nil {
 		return nil, err
 	}
