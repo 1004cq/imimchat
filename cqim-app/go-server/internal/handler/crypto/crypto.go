@@ -38,17 +38,20 @@ func RegisterRoutes(mux *http.ServeMux, d *handler.Deps) {
 	}
 
 	// ---- /api/crypto ----
+	// 注意：Node 版 /api/crypto 整体公开挂载。按 Signal 协议设计，PreKey Bundle
+	// 是公开的（任何人获取后才能与你建立加密会话）；只有注册/上传类接口需要鉴权。
 	auth("POST /api/crypto/register-key", h.registerKey)
-	auth("GET /api/crypto/get-key", h.getKey)
+	mux.Handle("GET /api/crypto/get-key", http.HandlerFunc(h.getKey))
 	auth("POST /api/crypto/verify-message", h.verifyMessage)
 	auth("POST /api/crypto/register-bundle", h.registerBundle)
-	auth("GET /api/crypto/get-bundle", h.getBundle)
+	mux.Handle("GET /api/crypto/get-bundle", http.HandlerFunc(h.getBundle))
 	auth("GET /api/crypto/prekey-count", h.prekeyCount)
 	auth("POST /api/crypto/replenish-prekeys", h.replenishPreKeys)
 
 	// ---- /api/mls ----
+	// 同理：KeyPackage 公开可获取（MLS 协议设计），上传/状态变更需要鉴权。
 	auth("POST /api/mls/upload-key-package", h.uploadKeyPackage)
-	auth("GET /api/mls/get-key-package", h.getKeyPackage)
+	mux.Handle("GET /api/mls/get-key-package", http.HandlerFunc(h.getKeyPackage))
 	auth("GET /api/mls/key-package-count", h.keyPackageCount)
 	auth("POST /api/mls/enable-group", h.enableGroup)
 	auth("GET /api/mls/group-state", h.groupState)
