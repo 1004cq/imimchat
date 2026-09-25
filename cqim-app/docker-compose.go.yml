@@ -1,0 +1,53 @@
+# Go 服务端部署覆盖文件（测试环境用）
+#
+# 用法：在测试服务器上
+#   docker compose -f docker-compose.yml -f docker-compose.go.yml up -d --build go-server
+#
+# 说明：
+# - 新增 go-server 服务（Go 重写版），监听 3000
+# - 不改动原 cqim（Node）服务，方便回滚：出问题时把 nginx 切回 cqim 即可
+# - nginx 默认仍指向 cqim；验证 Go 时手动把 nginx/default.conf 的 upstream 切到 go-server:3000
+
+services:
+  go-server:
+    build:
+      context: ./go-server
+      dockerfile: Dockerfile
+    image: cqim-go:latest
+    container_name: cqim-go
+    restart: unless-stopped
+    expose:
+      - "3000"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      PORT: 3000
+      DATABASE_URL: ${DATABASE_URL:-postgresql://cqim:cqim@postgres:5432/cqim?schema=public}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio}
+      MINIO_PORT: ${MINIO_PORT:-9000}
+      MINIO_USE_SSL: ${MINIO_USE_SSL:-false}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+      MINIO_BUCKET: ${MINIO_BUCKET:-cqim-media}
+      MINIO_REGION: ${MINIO_REGION:-us-east-1}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://im.cq.je}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://im.cq.je,http://im.cq.je}
+      STATIC_DIR: /app/static
+    volumes:
+      # Web 前端构建产物（与 Node 版 client/dist 对应）
+      - ./client/dist:/app/static:ro
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
