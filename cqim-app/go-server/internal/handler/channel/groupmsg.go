@@ -24,7 +24,7 @@ import (
 
 // joinGroup 加入群/频道：lastAckSeq 初始化为当前最新 seq；频道不发送入群系统消息。
 func joinGroup(ctx context.Context, d *handler.Deps, groupID, userID string) error {
-	g, err := db.QueryRowToStruct[db.Group](ctx, d.DB,
+	g, err := db.QueryRowToStruct[db.GroupSeqBrief](ctx, d.DB,
 		`SELECT "lastMsgSeq","type" FROM "Group" WHERE "id"=$1`, groupID)
 	if err != nil {
 		if db.IsNotFound(err) {
@@ -105,7 +105,7 @@ func getGroupMembers(ctx context.Context, d *handler.Deps, groupID string, page,
 	userMap := map[string]*db.User{}
 	if len(userIDs) > 0 {
 		users, err := db.QueryToStructs[db.UserBrief](ctx, d.DB,
-			`SELECT "id","username","nickname","avatar" FROM "User" WHERE "id" = ANY($1)`, userIDs)
+			`SELECT "id","username","nickname","avatar","backgroundUrl","bio" FROM "User" WHERE "id" = ANY($1)`, userIDs)
 		if err == nil {
 			for i := range users {
 				u := users[i].ToUser()

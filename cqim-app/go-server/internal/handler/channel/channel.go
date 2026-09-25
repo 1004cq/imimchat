@@ -68,7 +68,7 @@ func (h *Handler) memberRole(r *http.Request, channelID, userID string) (string,
 
 // channelTypeOf 查询频道类型；不存在返回 ("", false, nil)。
 func (h *Handler) channelTypeOf(r *http.Request, channelID string) (string, bool, error) {
-	g, err := db.QueryRowToStruct[db.Group](r.Context(), h.d.DB,
+	g, err := db.QueryRowToStruct[db.GroupTypeBrief](r.Context(), h.d.DB,
 		`SELECT "type" FROM "Group" WHERE "id"=$1`, channelID)
 	if err != nil {
 		if db.IsNotFound(err) {
@@ -207,7 +207,7 @@ func (h *Handler) resolve(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, 400, "缺少 username")
 		return
 	}
-	g, err := db.QueryRowToStruct[db.Group](r.Context(), h.d.DB,
+	g, err := db.QueryRowToStruct[db.GroupChannelBrief](r.Context(), h.d.DB,
 		`SELECT "id","dialogId","name","username","avatar","type","isPublic","memberCount","announcement","createdAt"
 		 FROM "Group" WHERE "username"=$1`, username)
 	if err != nil || g.Type != "channel" {
@@ -241,7 +241,7 @@ func (h *Handler) subscribe(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, 400, "缺少必要参数：channelId")
 		return
 	}
-	g, err := db.QueryRowToStruct[db.Group](r.Context(), h.d.DB,
+	g, err := db.QueryRowToStruct[db.GroupJoinBrief](r.Context(), h.d.DB,
 		`SELECT "id","type","name","memberCount","maxMembers" FROM "Group" WHERE "id"=$1`, req.ChannelID)
 	if err != nil {
 		if db.IsNotFound(err) {

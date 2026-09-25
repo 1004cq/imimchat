@@ -348,7 +348,7 @@ func (e *Engine) ensureSeqInit(ctx context.Context, groupID string) error {
 	e.seqMu.Unlock()
 
 	var base int64
-	if g, err := db.QueryRowToStruct[db.Group](ctx, e.deps.DB,
+	if g, err := db.QueryRowToStruct[db.GroupSeqOnly](ctx, e.deps.DB,
 		`SELECT "lastMsgSeq" FROM "Group" WHERE "id"=$1`, groupID); err == nil {
 		base = g.LastMsgSeq
 	} else if !db.IsNotFound(err) {

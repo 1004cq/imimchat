@@ -294,7 +294,7 @@ func (h *Handler) userBriefMap(ctx context.Context, userIDs []string) map[string
 		return m
 	}
 	users, err := db.QueryToStructs[db.UserBrief](ctx, h.deps.DB,
-		`SELECT "id","username","nickname","avatar" FROM "User" WHERE "id"=ANY($1)`, userIDs)
+		`SELECT "id","username","nickname","avatar","backgroundUrl","bio" FROM "User" WHERE "id"=ANY($1)`, userIDs)
 	if err != nil {
 		return m
 	}

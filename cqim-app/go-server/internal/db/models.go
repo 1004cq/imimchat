@@ -506,3 +506,69 @@ type UserBrief struct {
 func (b UserBrief) ToUser() User {
 	return User{Id: b.Id, Username: b.Username, Nickname: b.Nickname, Avatar: b.Avatar, BackgroundUrl: b.BackgroundUrl, Bio: b.Bio}
 }
+
+// GroupBrief 群组精简信息，用于 pgx 查询（避免用完整 Group struct 查部分列报错）。
+type GroupBrief struct {
+	Id          string  `db:"id" json:"id"`
+	Name        string  `db:"name" json:"name"`
+	Username    *string `db:"username" json:"username"`
+	Avatar      *string `db:"avatar" json:"avatar"`
+	Type        string  `db:"type" json:"type"`
+	IsPublic    bool    `db:"isPublic" json:"isPublic"`
+	MemberCount int32   `db:"memberCount" json:"memberCount"`
+	LastMsgSeq  int64   `db:"lastMsgSeq" json:"lastMsgSeq"`
+}
+
+// GroupSeqBrief 仅含 seq 和类型，用于 joinGroup 等场景。
+type GroupSeqBrief struct {
+	LastMsgSeq int64  `db:"lastMsgSeq" json:"lastMsgSeq"`
+	Type       string `db:"type" json:"type"`
+}
+
+// GroupChannelBrief 频道公开信息（10 字段）。
+type GroupChannelBrief struct {
+	Id          string     `db:"id" json:"id"`
+	DialogId    *string    `db:"dialogId" json:"dialogId"`
+	Name        string     `db:"name" json:"name"`
+	Username    *string    `db:"username" json:"username"`
+	Avatar      *string    `db:"avatar" json:"avatar"`
+	Type        string     `db:"type" json:"type"`
+	IsPublic    bool       `db:"isPublic" json:"isPublic"`
+	MemberCount int32      `db:"memberCount" json:"memberCount"`
+	Announcement *string   `db:"announcement" json:"announcement"`
+	CreatedAt   time.Time  `db:"createdAt" json:"createdAt"`
+}
+
+// GroupTypeBrief 仅含类型。
+type GroupTypeBrief struct {
+	Type string `db:"type" json:"type"`
+}
+
+// GroupJoinBrief 入群检查用（5 字段）。
+type GroupJoinBrief struct {
+	Id          string  `db:"id" json:"id"`
+	Type        string  `db:"type" json:"type"`
+	Name        string  `db:"name" json:"name"`
+	MemberCount int32   `db:"memberCount" json:"memberCount"`
+	MaxMembers  int32   `db:"maxMembers" json:"maxMembers"`
+}
+
+// GroupDetailBrief 群详情（11 字段）。
+type GroupDetailBrief struct {
+	Id          string     `db:"id" json:"id"`
+	DialogId    *string    `db:"dialogId" json:"dialogId"`
+	Name        string     `db:"name" json:"name"`
+	Username    *string    `db:"username" json:"username"`
+	Avatar      *string    `db:"avatar" json:"avatar"`
+	Type        string     `db:"type" json:"type"`
+	IsPublic    bool       `db:"isPublic" json:"isPublic"`
+	MemberCount int32      `db:"memberCount" json:"memberCount"`
+	Announcement *string   `db:"announcement" json:"announcement"`
+	LastMsgSeq  int64      `db:"lastMsgSeq" json:"lastMsgSeq"`
+	LastMsgTime *time.Time `db:"lastMsgTime" json:"lastMsgTime"`
+}
+
+// GroupSeqOnly 仅含 lastMsgSeq。
+type GroupSeqOnly struct {
+	LastMsgSeq int64 `db:"lastMsgSeq" json:"lastMsgSeq"`
+}

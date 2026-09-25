@@ -768,7 +768,7 @@ func (e *Engine) PullGroupMessages(ctx context.Context, p PullParams) (map[strin
 	senderMap := make(map[string]db.User)
 	if len(senderIDs) > 0 {
 		users, err := db.QueryToStructs[db.UserBrief](ctx, e.deps.DB,
-			`SELECT "id","username","nickname","avatar" FROM "User" WHERE "id"=ANY($1)`, senderIDs)
+			`SELECT "id","username","nickname","avatar","backgroundUrl","bio" FROM "User" WHERE "id"=ANY($1)`, senderIDs)
 		if err == nil {
 			for _, b := range users {
 				u := b.ToUser()

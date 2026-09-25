@@ -233,8 +233,8 @@ func (h *Handler) sendRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 验证目标用户存在
-	targetUser, err := db.QueryRowToStruct[db.User](ctx, h.db(),
-		`SELECT "id","username","nickname","avatar" FROM "User" WHERE "id"=$1`, toID)
+	targetUser, err := db.QueryRowToStruct[db.UserBrief](ctx, h.db(),
+		`SELECT "id","username","nickname","avatar","backgroundUrl","bio" FROM "User" WHERE "id"=$1`, toID)
 	if err != nil {
 		if db.IsNotFound(err) {
 			util.WriteError(w, 404, "用户不存在")
