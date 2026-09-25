@@ -88,6 +88,19 @@ func (c *Client) ZAdd(ctx context.Context, key string, members ...redis.Z) error
 	return c.RDB.ZAdd(ctx, key, members...).Err()
 }
 
+func (c *Client) ZRem(ctx context.Context, key string, members ...any) error {
+	return c.RDB.ZRem(ctx, key, members...).Err()
+}
+
+func (c *Client) ZCard(ctx context.Context, key string) (int64, error) {
+	return c.RDB.ZCard(ctx, key).Result()
+}
+
+// ZRemRangeByScore 删除 score 在 [min, max] 区间内的成员，用于清理过期连接。
+func (c *Client) ZRemRangeByScore(ctx context.Context, key, min, max string) error {
+	return c.RDB.ZRemRangeByScore(ctx, key, min, max).Err()
+}
+
 // Eval 执行 Lua 脚本（用于需要原子性的复合操作，如验证码消费、分布式限流）。
 func (c *Client) Eval(ctx context.Context, script string, keys []string, args ...any) (any, error) {
 	return c.RDB.Eval(ctx, script, keys, args...).Result()

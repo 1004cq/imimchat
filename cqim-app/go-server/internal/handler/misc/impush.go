@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/1004cq/imim.chat/cqim-app/go-server/internal/handler"
 	"github.com/1004cq/imim.chat/cqim-app/go-server/internal/util"
 )
@@ -49,8 +51,10 @@ const (
 	onlinePrefix = "online:"      // redis.ts ONLINE_PREFIX（保留做兼容读取）
 	onlineTTL    = 90 * time.Second // redis.ts ONLINE_TTL
 
-	// onlineConnsPrefix 按连接跟踪在线状态：SET online:conns:{userId} = {connID...}
+	// onlineConnsPrefix 按连接跟踪在线状态：ZSET online:conns:{userId}，score=最后心跳毫秒时间戳
 	// 解决多连接/多节点互相踩：某连接断开时只移除自己的条目，集合为空才算离线。
+	// 用 ZSET 而不用 SET：每个连接有独立时间戳，心跳时清理过期成员，避免异常断开的
+	// 陈旧连接在其他连接持续续期时永久残留。
 	onlineConnsPrefix = "online:conns:"
 )
 
@@ -90,7 +94,8 @@ func setUserOnlineConn(d *handler.Deps, userID, connID string) {
 		_ = d.Redis.SetEX(ctx, onlinePrefix+userID, strconv.FormatInt(time.Now().UnixMilli(), 10), onlineTTL)
 		return
 	}
-	_ = d.Redis.SAdd(ctx, onlineConnsPrefix+userID, connID)
+	now := time.Now().UnixMilli()
+	_ = d.Redis.ZAdd(ctx, onlineConnsPrefix+userID, redis.Z{Score: float64(now), Member: connID})
 	_ = d.Redis.Expire(ctx, onlineConnsPrefix+userID, onlineTTL)
 	// 同步写旧 key，保持 IsUserOnline 的兼容读取
 	_ = d.Redis.SetEX(ctx, onlinePrefix+userID, "1", onlineTTL)
@@ -116,8 +121,10 @@ func refreshUserOnlineConn(d *handler.Deps, userID, connID string) {
 		_ = d.Redis.Expire(ctx, onlinePrefix+userID, onlineTTL)
 		return
 	}
-	// 重新 SADD（防止集合因 TTL 过期被删后条目丢失）+ 续期
-	_ = d.Redis.SAdd(ctx, onlineConnsPrefix+userID, connID)
+	now := time.Now().UnixMilli()
+	// 更新本连接时间戳（ZADD 同成员会更新 score）+ 清理过期成员 + 续期
+	_ = d.Redis.ZAdd(ctx, onlineConnsPrefix+userID, redis.Z{Score: float64(now), Member: connID})
+	_ = d.Redis.ZRemRangeByScore(ctx, onlineConnsPrefix+userID, "0", strconv.FormatInt(now-int64(onlineTTL/time.Millisecond), 10))
 	_ = d.Redis.Expire(ctx, onlineConnsPrefix+userID, onlineTTL)
 	_ = d.Redis.Expire(ctx, onlinePrefix+userID, onlineTTL)
 }
@@ -142,10 +149,10 @@ func setUserOfflineConn(d *handler.Deps, userID, connID string) {
 		_ = d.Redis.Del(ctx, onlinePrefix+userID)
 		return
 	}
-	_ = d.Redis.SRem(ctx, onlineConnsPrefix+userID, connID)
+	_ = d.Redis.ZRem(ctx, onlineConnsPrefix+userID, connID)
 	// 集合为空 → 用户真正离线，删旧 key
-	members, _ := d.Redis.SMembers(ctx, onlineConnsPrefix+userID)
-	if len(members) == 0 {
+	n, _ := d.Redis.ZCard(ctx, onlineConnsPrefix+userID)
+	if n == 0 {
 		_ = d.Redis.Del(ctx, onlineConnsPrefix+userID, onlinePrefix+userID)
 	}
 }
