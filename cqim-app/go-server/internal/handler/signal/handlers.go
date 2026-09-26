@@ -814,8 +814,8 @@ func (s *Server) handlePrivateSend(c *Client, payload map[string]any) {
 	msgID := util.NewID()
 	now := time.Now()
 	_, err := s.deps.DB.Pool.Exec(ctx,
-		`INSERT INTO "PrivateMessage"("id","chatId","senderId","msgType","content","replyToId","extra","status","burnAfterRead","hmac","createdAt","updatedAt")
-		 VALUES($1,$2,$3,'encrypted',$4,$5,$6,'sent',$7,$8,$9,$9)`,
+		`INSERT INTO "PrivateMessage"("id","chatId","senderId","msgType","content","replyToId","extra","status","burnAfterRead","hmac","createdAt")
+		 VALUES($1,$2,$3,'encrypted',$4,$5,$6,'sent',$7,$8,$9)`,
 		msgID, pChatID, c.userID, pContent, replyToPtr, extraJSON, burnSeconds, hmacVal, now)
 	if err != nil {
 		log.Printf("[PrivateChat] 发送失败: %v", err)
