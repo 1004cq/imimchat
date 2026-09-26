@@ -1657,7 +1657,10 @@ export default function ChatDetailPage() {
   );
 
   const retryPrivateKeySync = useCallback(async () => {
-    if (!otherMember) return;
+    if (!otherMember) {
+      toast.error('找不到对方用户，无法重建会话');
+      return;
+    }
     setKeySyncing(true);
     try {
       await e2ee.resetSession(otherMember);
@@ -1667,6 +1670,7 @@ export default function ChatDetailPage() {
       setHistoryNonce(value => value + 1);
       toast.success('安全会话已重建，正在重新解密');
     } catch (err: any) {
+      console.error('[E2EE] 重建会话失败:', err);
       toast.error(err?.message || '重建安全会话失败');
     } finally {
       setKeySyncing(false);
