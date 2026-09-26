@@ -174,9 +174,10 @@ export class E2EEManager {
 
     await this.store.init();
 
-    // 检查已有注册
+    // 检查已有注册：必须与当前登录用户匹配，否则切账号后密钥错乱
+    const currentUserId = typeof localStorage !== 'undefined' ? localStorage.getItem('user_id') : null;
     const existing = await this.store.getLocalRegistration();
-    if (existing) {
+    if (existing && (!currentUserId || existing.userId === currentUserId)) {
       this._registrationId = existing.registrationId;
       this._identityKeyPair = {
         pubKey: existing.identityKeyPair.pubKey,
@@ -195,6 +196,11 @@ export class E2EEManager {
 
       console.log('[E2EE] 已加载本地密钥，Registration ID:', this._registrationId);
       return;
+    }
+
+    if (existing && currentUserId && existing.userId !== currentUserId) {
+      console.log('[E2EE] 检测到账号切换，清除旧密钥重新生成');
+      await this.store.clearAll();
     }
 
     // 生成新的密钥材料
@@ -230,9 +236,11 @@ export class E2EEManager {
     const signingKP = await generateSigningKeyPair();
     this._signingKeyPair = await exportKeyPair(signingKP);
 
-    // 3. 保存本地注册信息
+    // 3. 保存本地注册信息（绑定当前登录用户）
+    const currentUserId = typeof localStorage !== 'undefined' ? localStorage.getItem('user_id') : null;
     await this.store.saveLocalRegistration({
       registrationId: this._registrationId,
+      userId: currentUserId || undefined,
       identityKeyPair: this._identityKeyPair,
       signingKeyPair: this._signingKeyPair,
       createdAt: Date.now(),

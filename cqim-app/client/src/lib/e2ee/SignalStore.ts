@@ -49,6 +49,7 @@ export interface SessionRecord {
 /** 本地注册信息 */
 export interface LocalRegistration {
   registrationId: number;
+  userId?: string;                // 绑定的登录用户ID，防止切账号后复用旧密钥
   identityKeyPair: KeyPairB64;   // ECDH Identity Key
   signingKeyPair?: KeyPairB64;   // ECDSA 签名密钥（Signed PreKey 专用）
   createdAt: number;
