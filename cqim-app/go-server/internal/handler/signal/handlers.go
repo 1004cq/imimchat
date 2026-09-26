@@ -101,30 +101,29 @@ func (s *Server) handleMessage(c *Client, raw []byte) {
 			if to != "" {
 				msg["from"] = c.userID
 				s.sendTo(to, msg)
-				// 被叫离线则推送来电通知
-				if !s.isUserOnline(to) {
-					var nickname, username, avatar string
-					_ = s.deps.DB.Pool.QueryRow(ctx,
-						`SELECT COALESCE("nickname",'') , "username", COALESCE("avatar",'') FROM "User" WHERE "id"=$1`,
-						c.userID).Scan(&nickname, &username, &avatar)
-					callerName := strVal(payload["callerName"], firstNonEmpty(nickname, username, "有人"))
-					callType, _ := payload["callType"].(string)
-					if callType == "" {
-						callType = "audio"
-					}
-					callID, _ := payload["callId"].(string)
-					roomID, _ := payload["roomId"].(string)
-					// VoIP Push 唤醒后台/杀进程的 App，调起 CallKit（不用普通 APNs）
-					_, _ = push.SendVoIPPush(s.deps, push.VoIPPushPayload{
-						ToUserID:     to,
-						CallerName:   callerName,
-						CallID:       callID,
-						CallerID:     c.userID,
-						CallerAvatar: avatar,
-						CallType:     callType,
-						RoomID:       roomID,
-					})
+				// 来电固定发 VoIP Push：后台/挂起的 App 靠 WebSocket 唤不醒，
+				// 必须走 VoIP Push 调起 CallKit；前台 App 收到可去重忽略
+				var nickname, username, avatar string
+				_ = s.deps.DB.Pool.QueryRow(ctx,
+					`SELECT COALESCE("nickname",'') , "username", COALESCE("avatar",'') FROM "User" WHERE "id"=$1`,
+					c.userID).Scan(&nickname, &username, &avatar)
+				callerName := strVal(payload["callerName"], firstNonEmpty(nickname, username, "有人"))
+				callType, _ := payload["callType"].(string)
+				if callType == "" {
+					callType = "audio"
 				}
+				callID, _ := payload["callId"].(string)
+				roomID, _ := payload["roomId"].(string)
+				// VoIP Push 唤醒后台/杀进程的 App，调起 CallKit（不用普通 APNs）
+				_, _ = push.SendVoIPPush(s.deps, push.VoIPPushPayload{
+					ToUserID:     to,
+					CallerName:   callerName,
+					CallID:       callID,
+					CallerID:     c.userID,
+					CallerAvatar: avatar,
+					CallType:     callType,
+					RoomID:       roomID,
+				})
 			}
 		}
 	case "call_accept", "call_reject", "call_end":
