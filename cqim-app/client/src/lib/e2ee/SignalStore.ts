@@ -87,30 +87,58 @@ export class SignalStore {
   /** 初始化数据库连接 */
   async init(): Promise<void> {
     if (this.db) return;
-    this.db = await openDB(DB_NAME, DB_VERSION, {
-      upgrade(db) {
-        // 本地注册信息（只存一条）
-        if (!db.objectStoreNames.contains(STORES.LOCAL_REG)) {
-          db.createObjectStore(STORES.LOCAL_REG, { keyPath: 'registrationId' });
-        }
-        // 对端 Identity Key
-        if (!db.objectStoreNames.contains(STORES.IDENTITY)) {
-          db.createObjectStore(STORES.IDENTITY, { keyPath: 'userId' });
-        }
-        // Signed PreKey
-        if (!db.objectStoreNames.contains(STORES.SIGNED_PREKEY)) {
-          db.createObjectStore(STORES.SIGNED_PREKEY, { keyPath: 'id' });
-        }
-        // One-Time PreKey
-        if (!db.objectStoreNames.contains(STORES.PREKEY)) {
-          db.createObjectStore(STORES.PREKEY, { keyPath: 'id' });
-        }
-        // Session
-        if (!db.objectStoreNames.contains(STORES.SESSION)) {
-          db.createObjectStore(STORES.SESSION, { keyPath: 'peerId' });
-        }
-      },
-    });
+    try {
+      this.db = await openDB(DB_NAME, DB_VERSION, {
+        upgrade(db) {
+          // 本地注册信息（只存一条）
+          if (!db.objectStoreNames.contains(STORES.LOCAL_REG)) {
+            db.createObjectStore(STORES.LOCAL_REG, { keyPath: 'registrationId' });
+          }
+          // 对端 Identity Key
+          if (!db.objectStoreNames.contains(STORES.IDENTITY)) {
+            db.createObjectStore(STORES.IDENTITY, { keyPath: 'userId' });
+          }
+          // Signed PreKey
+          if (!db.objectStoreNames.contains(STORES.SIGNED_PREKEY)) {
+            db.createObjectStore(STORES.SIGNED_PREKEY, { keyPath: 'id' });
+          }
+          // One-Time PreKey
+          if (!db.objectStoreNames.contains(STORES.PREKEY)) {
+            db.createObjectStore(STORES.PREKEY, { keyPath: 'id' });
+          }
+          // Session
+          if (!db.objectStoreNames.contains(STORES.SESSION)) {
+            db.createObjectStore(STORES.SESSION, { keyPath: 'peerId' });
+          }
+        },
+      });
+    } catch (err) {
+      // IndexedDB 损坏（如清缓存后状态异常），删库重试一次
+      console.warn('[SignalStore] IndexedDB 打开失败，尝试删库重建:', err);
+      try {
+        const { deleteDB } = await import('idb');
+        await deleteDB(DB_NAME);
+      } catch {}
+      this.db = await openDB(DB_NAME, DB_VERSION, {
+        upgrade(db) {
+          if (!db.objectStoreNames.contains(STORES.LOCAL_REG)) {
+            db.createObjectStore(STORES.LOCAL_REG, { keyPath: 'registrationId' });
+          }
+          if (!db.objectStoreNames.contains(STORES.IDENTITY)) {
+            db.createObjectStore(STORES.IDENTITY, { keyPath: 'userId' });
+          }
+          if (!db.objectStoreNames.contains(STORES.SIGNED_PREKEY)) {
+            db.createObjectStore(STORES.SIGNED_PREKEY, { keyPath: 'id' });
+          }
+          if (!db.objectStoreNames.contains(STORES.PREKEY)) {
+            db.createObjectStore(STORES.PREKEY, { keyPath: 'id' });
+          }
+          if (!db.objectStoreNames.contains(STORES.SESSION)) {
+            db.createObjectStore(STORES.SESSION, { keyPath: 'peerId' });
+          }
+        },
+      });
+    }
   }
 
   private ensureDB(): IDBPDatabase {
