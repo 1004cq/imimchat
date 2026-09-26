@@ -1035,6 +1035,7 @@ router.get('/me', userAuth, async (req: Request, res: Response) => {
       phone: user.phone,
       email: user.email,
       avatar: avatarToProxy(user.avatar),
+      backgroundUrl: user.backgroundUrl || '',
       bio: user.bio,
       gender: user.gender || '',
       region: user.region || '',
