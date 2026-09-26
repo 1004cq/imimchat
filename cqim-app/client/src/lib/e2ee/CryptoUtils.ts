@@ -246,7 +246,10 @@ export async function assertValidSignedPreKey(bundle: {
   signedPreKeySignature: string;
 }): Promise<void> {
   if (!bundle.signingPublicKey) {
-    throw new Error(SIGNED_PREKEY_MISSING_SIGNING_KEY);
+    // 兼容老客户端：没有上传签名公钥时降级为警告，允许建连
+    // 新客户端应始终上传 signingPublicKey
+    console.warn('[E2EE] 对端 Bundle 缺少 signingPublicKey，跳过签名强校验（兼容模式）');
+    return;
   }
   const isValid = await verifySignedPreKeySignature(
     bundle.signingPublicKey,
