@@ -115,7 +115,7 @@ func (s *Server) handleMessage(c *Client, raw []byte) {
 				callID, _ := payload["callId"].(string)
 				roomID, _ := payload["roomId"].(string)
 				// VoIP Push 唤醒后台/杀进程的 App，调起 CallKit（不用普通 APNs）
-				_, _ = push.SendVoIPPush(s.deps, push.VoIPPushPayload{
+				delivered, err := push.SendVoIPPush(s.deps, push.VoIPPushPayload{
 					ToUserID:     to,
 					CallerName:   callerName,
 					CallID:       callID,
@@ -124,6 +124,11 @@ func (s *Server) handleMessage(c *Client, raw []byte) {
 					CallType:     callType,
 					RoomID:       roomID,
 				})
+				if err != nil {
+					log.Printf("[Signal] VoIP push failed: %v", err)
+				} else if !delivered {
+					log.Printf("[Signal] target has no valid VoIP token: userId=%s", to)
+				}
 			}
 		}
 	case "call_accept", "call_reject", "call_end":

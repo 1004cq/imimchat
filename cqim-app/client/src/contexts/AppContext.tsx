@@ -1037,12 +1037,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // 只在登录后连接
     if (!state.isLoggedIn) return;
 
-    const currentUserId = state.currentUser?.id || 'me';
+    const currentUserId = state.currentUser?.id;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
     // ★ /signal 强制鉴权：token 必填，服务端以 session.userId 为准
-    const wsToken = localStorage.getItem('user_token') || '';
-    const wsUrl = `${protocol}//${host}/signal?userId=${encodeURIComponent(currentUserId)}&token=${encodeURIComponent(wsToken)}`;
+    const wsToken = localStorage.getItem('user_token');
+
+    if (!currentUserId || !wsToken) return;
+
+    const wsUrl =
+      `${protocol}//${host}/signal` +
+      `?userId=${encodeURIComponent(currentUserId)}` +
+      `&token=${encodeURIComponent(wsToken)}`;
 
     let closedByEffect = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
