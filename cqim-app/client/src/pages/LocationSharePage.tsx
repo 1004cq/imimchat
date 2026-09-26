@@ -192,7 +192,9 @@ export default function LocationSharePage({ chatId, chatName, shareId: initShare
   const connectWs = useCallback((sid: string, endAt: number) => {
     endTimeRef.current = endAt;
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${proto}//${window.location.host}/signal`);
+    // ★ /signal 强制鉴权：token 必填，服务端以 session.userId 为准
+    const wsToken = localStorage.getItem('user_token') || '';
+    const ws = new WebSocket(`${proto}//${window.location.host}/signal?userId=${encodeURIComponent(CURRENT_USER.id)}&token=${encodeURIComponent(wsToken)}`);
     wsRef.current = ws;
     ws.onopen = () => ws.send(JSON.stringify({ type: 'join_location_share', shareId: sid, userId: CURRENT_USER.id, nickname: CURRENT_USER.name }));
     ws.onmessage = (e) => {

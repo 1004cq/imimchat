@@ -97,6 +97,7 @@ export default function CallScreen() {
           from: CURRENT_USER.id,
           to: call.peerId,
           payload: {
+            callId: call.callId || `call-${Date.now()}`,
             callType: call.callType || 'audio',
             roomId,
             callerName: CURRENT_USER.name || '未知',
