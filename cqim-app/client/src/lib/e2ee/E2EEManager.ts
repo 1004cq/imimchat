@@ -715,24 +715,10 @@ export class E2EEManager {
 
     // 对称棘轮步骤：从 receiveChainKey 派生消息密钥
     if (!state.receiveChainKey) {
-      // 首次接收，使用发送链密钥的镜像
-      const chainKey = base64ToBuffer(state.sendChainKey || state.rootKey);
-      const { messageKey, nextChainKey } = await deriveMessageKeys(chainKey);
-      state.receiveChainKey = bufferToBase64(nextChainKey);
-
-      // 解密
-      const plainBuf = await aesDecrypt(envelope.ciphertext, messageKey);
-      state.receiveCounter++;
-
-      // 保存
-      sessionData.ratchetState = state;
-      await this.store.saveSession({
-        peerId,
-        sessionData: JSON.stringify(sessionData),
-        updatedAt: Date.now(),
-      });
-
-      return bufferToString(plainBuf);
+      // 异常状态：DH 棘轮后仍无接收链，说明协议状态不一致
+      // 不能用发送链"镜像"，会导致密钥错误。抛错让上层重建会话。
+      console.error('[E2EE] 解密失败：无接收链密钥，会话状态异常，对端:', peerId);
+      throw new Error('会话状态异常，请重建安全会话后重试');
     }
 
     // 正常对称棘轮
