@@ -1,14 +1,15 @@
 import React from 'react';
-import { Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
+import { Loader2, RefreshCw, ShieldAlert, X } from 'lucide-react';
 
 export interface KeySyncBannerProps {
   kind: 'private' | 'group';
   syncing?: boolean;
   error?: string | null;
   onRetry: () => void;
+  onDismiss?: () => void;
 }
 
-export function KeySyncBanner({ kind, syncing, error, onRetry }: KeySyncBannerProps) {
+export function KeySyncBanner({ kind, syncing, error, onRetry, onDismiss }: KeySyncBannerProps) {
   const title = kind === 'group' ? '群安全会话未就绪' : '安全会话需要重新验证';
   const detail = error
     || (kind === 'group'
@@ -36,6 +37,16 @@ export function KeySyncBanner({ kind, syncing, error, onRetry }: KeySyncBannerPr
           <RefreshCw size={11} className={syncing ? 'animate-spin' : ''} />
           重试
         </button>
+        {onDismiss && (
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="inline-flex items-center flex-shrink-0 rounded-full px-1.5 py-1 text-[11px] opacity-60 hover:opacity-100"
+            aria-label="关闭提示"
+          >
+            <X size={12} />
+          </button>
+        )}
       </div>
     </div>
   );

@@ -147,6 +147,7 @@ export default function ChatDetailPage() {
   const [sessionEstablished, setSessionEstablished] = useState(false);
   const [historyNonce, setHistoryNonce] = useState(0);
   const [keySyncing, setKeySyncing] = useState(false);
+  const [keyBannerDismissed, setKeyBannerDismissed] = useState(false);
   const [encryptionLog, setEncryptionLog] = useState<string[]>([]);
   const messageListRef = useRef<VirtualMessageListHandle>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -1648,7 +1649,8 @@ export default function ChatDetailPage() {
   const showPrivateKeyBanner = !isGroupChat
     && !chat?.members?.includes('official')
     && !chat?.members?.includes('BOT')
-    && failedDecryptCount > 0;
+    && failedDecryptCount > 0
+    && !keyBannerDismissed;
   const showGroupKeyBanner = isGroupChat && (
     groupSync.mlsSyncing
     || !!groupSync.mlsError
@@ -1661,6 +1663,7 @@ export default function ChatDetailPage() {
       toast.error('找不到对方用户，无法重建会话');
       return;
     }
+    setKeyBannerDismissed(false);
     setKeySyncing(true);
     try {
       await e2ee.resetSession(otherMember);
@@ -1760,6 +1763,7 @@ export default function ChatDetailPage() {
           syncing={keySyncing}
           error={failedDecryptCount > 0 ? `有 ${failedDecryptCount} 条消息无法解密` : null}
           onRetry={retryPrivateKeySync}
+          onDismiss={() => setKeyBannerDismissed(true)}
         />
       )}
 
