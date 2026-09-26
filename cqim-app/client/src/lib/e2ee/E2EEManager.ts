@@ -855,15 +855,22 @@ export class E2EEManager {
     const newRootKey = derivedKeys.slice(0, 32);
     const receiveChainKey = derivedKeys.slice(32, 64);
 
-    // 发送链在首次回复时再生成（initiateSendRatchet）
-    const placeholderSendKP = await generateKeyPair();
-    const placeholderSendExported = await exportKeyPair(placeholderSendKP);
+    // 与 iOS 对齐：响应方在 acceptPreKey 时立即生成发送链（不能懒加载，
+    // 否则双方 rootKey 推进次数不一致，导致互相解不开）。
+    // 推导：sendDerived = HKDF(newRootKey + ECDH(responseRatchet, senderRatchet), "imim-ratchet")
+    const responseRatchetKP = await generateKeyPair();
+    const responseRatchetExported = await exportKeyPair(responseRatchetKP);
+    const dhSendInit = await ecdh(responseRatchetKP.privateKey, remoteRatchetPub);
+    const ratchetInfo = stringToBuffer('imim-ratchet');
+    const sendDerived = await hkdf(concatBuffers(newRootKey, dhSendInit), salt, ratchetInfo, 64);
+    const finalRootKey = sendDerived.slice(0, 32);
+    const sendChainKey = sendDerived.slice(32, 64);
 
     const ratchetState: RatchetState = {
-      dhSendingKeyPair: placeholderSendExported,
+      dhSendingKeyPair: responseRatchetExported,
       dhReceivingKey: envelope.senderRatchetKey,
-      rootKey: bufferToBase64(newRootKey),
-      sendChainKey: null,
+      rootKey: bufferToBase64(finalRootKey),
+      sendChainKey: bufferToBase64(sendChainKey),
       sendCounter: 0,
       receiveChainKey: bufferToBase64(receiveChainKey),
       receiveCounter: 0,
