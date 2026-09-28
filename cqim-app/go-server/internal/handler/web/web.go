@@ -51,7 +51,7 @@ func RegisterRoutes(mux *http.ServeMux, d *handler.Deps) {
 
 	// ---- 个人资料 ----
 	mux.Handle("GET /api/profile", optAuth(http.HandlerFunc(h.getProfile)))
-	mux.Handle("PUT /api/profile", optAuth(http.HandlerFunc(h.putProfile)))
+	mux.Handle("PUT /api/profile", auth(http.HandlerFunc(h.putProfile)))
 
 	// ---- 用户 ----
 	mux.HandleFunc("GET /api/users/search", h.userSearch)

@@ -1,9 +1,11 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -18,6 +20,92 @@ import (
 
 const linkPreviewUA = "Mozilla/5.0 (compatible; imim-LinkPreview/1.0; +https://imim.app)"
 
+// linkPreviewIPBlocked 拦截回环/私网/链路本地/组播等不可出公网的目标。
+func linkPreviewIPBlocked(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified()
+}
+
+// linkPreviewCheckURL 校验 URL 的 scheme 与目标 IP。
+// DNS 解析与连接建立之间存在 TOCTOU（DNS rebinding），因此实际连接时
+// linkPreviewDialContext 会再次校验；此处用于前置拦截与重定向检查。
+func linkPreviewCheckURL(raw string) error {
+	target, err := url.Parse(raw)
+	if err != nil || target.Host == "" {
+		return errors.New("无效的 URL 格式")
+	}
+	if target.User != nil {
+		return errors.New("URL 不得携带认证信息")
+	}
+	scheme := strings.ToLower(target.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return errors.New("仅支持 http/https 链接")
+	}
+	host := target.Hostname()
+	var ips []net.IP
+	if ip := net.ParseIP(host); ip != nil {
+		ips = []net.IP{ip}
+	} else {
+		addrs, err := net.DefaultResolver.LookupIP(context.Background(), "ip", host)
+		if err != nil || len(addrs) == 0 {
+			return errors.New("域名解析失败")
+		}
+		ips = addrs
+	}
+	for _, ip := range ips {
+		if linkPreviewIPBlocked(ip) {
+			return errors.New("不允许访问内网/回环地址")
+		}
+	}
+	return nil
+}
+
+// linkPreviewDialContext 在建立连接时校验目标 IP，防 DNS rebinding 绕过前置检查：
+// 解析后只连接校验通过的 IP，不再二次解析。
+func linkPreviewDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	var ips []net.IP
+	if ip := net.ParseIP(host); ip != nil {
+		ips = []net.IP{ip}
+	} else {
+		addrs, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+		if err != nil || len(addrs) == 0 {
+			return nil, errors.New("域名解析失败")
+		}
+		ips = addrs
+	}
+	for _, ip := range ips {
+		if linkPreviewIPBlocked(ip) {
+			return nil, errors.New("不允许访问内网/回环地址")
+		}
+	}
+	d := &net.Dialer{Timeout: 5 * time.Second}
+	return d.DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
+}
+
+var linkPreviewClient = &http.Client{
+	Timeout: 8 * time.Second,
+	Transport: &http.Transport{
+		DialContext:     linkPreviewDialContext,
+		MaxIdleConns:    20,
+		IdleConnTimeout: 30 * time.Second,
+	},
+	// 重定向同样要过 SSRF 校验，且限制跳转次数。
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return errors.New("重定向次数过多")
+		}
+		if err := linkPreviewCheckURL(req.URL.String()); err != nil {
+			return err
+		}
+		req.Header.Set("User-Agent", linkPreviewUA)
+		return nil
+	},
+}
+
 // GET /api/link-preview?url=<encoded_url>
 func (h *Handler) linkPreview(w http.ResponseWriter, r *http.Request) {
 	rawURL := r.URL.Query().Get("url")
@@ -25,16 +113,11 @@ func (h *Handler) linkPreview(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, 400, "缺少 url 参数")
 		return
 	}
-	target, err := url.Parse(rawURL)
-	if err != nil || target.Host == "" {
-		util.WriteError(w, 400, "无效的 URL 格式")
+	if err := linkPreviewCheckURL(rawURL); err != nil {
+		util.WriteError(w, 400, err.Error())
 		return
 	}
-	scheme := strings.ToLower(target.Scheme)
-	if scheme != "http" && scheme != "https" {
-		util.WriteError(w, 400, "仅支持 http/https 链接")
-		return
-	}
+	target, _ := url.Parse(rawURL)
 	targetURL := target.String()
 	favicon := fmt.Sprintf("https://www.google.com/s2/favicons?domain=%s&sz=64", target.Hostname())
 	basicInfo := func() map[string]any {
@@ -44,7 +127,6 @@ func (h *Handler) linkPreview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	client := &http.Client{Timeout: 8 * time.Second}
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, targetURL, nil)
 	if err != nil {
 		util.WriteJSON(w, 200, basicInfo())
@@ -53,7 +135,7 @@ func (h *Handler) linkPreview(w http.ResponseWriter, r *http.Request) {
 	req.Header.Set("User-Agent", linkPreviewUA)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-	resp, err := client.Do(req)
+	resp, err := linkPreviewClient.Do(req)
 	if err != nil {
 		// 超时降级为基本信息（对应 TS 的 AbortError → 504；此处统一降级）
 		if errors.Is(err, http.ErrHandlerTimeout) {
@@ -108,17 +190,39 @@ func (h *Handler) linkPreview(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// linkMetaProps 链接预览需要提取的 meta 属性；正则在包初始化时预编译，
+// 避免每次请求重复编译约 36 个正则。
+var linkMetaProps = []string{
+	"og:title", "twitter:title",
+	"og:description", "twitter:description", "description",
+	"og:image", "twitter:image", "og:image:url",
+	"og:site_name",
+}
+
+var linkMetaRes map[string][]*regexp.Regexp
+
+func init() {
+	linkMetaRes = make(map[string][]*regexp.Regexp, len(linkMetaProps))
+	for _, property := range linkMetaProps {
+		prop := regexp.QuoteMeta(property)
+		patterns := []string{
+			`<meta[^>]+property=["']` + prop + `["'][^>]+content=["']([^"']*)["']`,
+			`<meta[^>]+content=["']([^"']*)["'][^>]+property=["']` + prop + `["']`,
+			`<meta[^>]+name=["']` + prop + `["'][^>]+content=["']([^"']*)["']`,
+			`<meta[^>]+content=["']([^"']*)["'][^>]+name=["']` + prop + `["']`,
+		}
+		res := make([]*regexp.Regexp, 0, len(patterns))
+		for _, p := range patterns {
+			res = append(res, regexp.MustCompile(`(?i)`+p))
+		}
+		linkMetaRes[property] = res
+	}
+}
+
 // getMeta 按优先级匹配 meta 标签的 content（对应 TS 的 4 种正则）。
 func getMeta(html, property string) string {
-	prop := regexp.QuoteMeta(property)
-	patterns := []string{
-		`<meta[^>]+property=["']` + prop + `["'][^>]+content=["']([^"']*)["']`,
-		`<meta[^>]+content=["']([^"']*)["'][^>]+property=["']` + prop + `["']`,
-		`<meta[^>]+name=["']` + prop + `["'][^>]+content=["']([^"']*)["']`,
-		`<meta[^>]+content=["']([^"']*)["'][^>]+name=["']` + prop + `["']`,
-	}
-	for _, p := range patterns {
-		if m := regexp.MustCompile(`(?i)` + p).FindStringSubmatch(html); m != nil {
+	for _, re := range linkMetaRes[property] {
+		if m := re.FindStringSubmatch(html); m != nil {
 			if v := strings.TrimSpace(m[1]); v != "" {
 				return v
 			}

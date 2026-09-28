@@ -64,8 +64,10 @@ type Engine struct {
 	groupOnline map[string]map[string]struct{} // groupId -> 本机在线成员
 
 	seqMu    sync.Mutex
-	seqInit  map[string]bool        // Redis seq 是否已初始化（SET NX）
-	seqLocal map[string]int64       // 高水位（Redis 成功/回退共用）
+	seqInit  map[string]bool  // Redis seq 是否已初始化（SET NX）
+	seqLocal map[string]int64 // 高水位（Redis 成功/回退共用）
+	seqBase  map[string]int64 // 初始化基准（max(DB, 当时高水位)）：高水位为 0 且 key 在首次发送前被驱逐时，
+	// INCR 从 0 开始得 1，不会触发“n <= 高水位”检测，必须用基准兜底，否则 seq 回退重复。
 	seqFLock map[string]*sync.Mutex // 回退路径的群级互斥
 
 	queue   *batchQueue
@@ -98,6 +100,7 @@ func NewEngine(d *handler.Deps) *Engine {
 		groupOnline:           make(map[string]map[string]struct{}),
 		seqInit:               make(map[string]bool),
 		seqLocal:              make(map[string]int64),
+		seqBase:               make(map[string]int64),
 		seqFLock:              make(map[string]*sync.Mutex),
 		merges:                make(map[string]*mergeBuffer),
 		workers:               make(map[string]*fanoutWorker),
@@ -348,11 +351,14 @@ func (e *Engine) ensureSeqInit(ctx context.Context, groupID string) error {
 	e.seqMu.Unlock()
 
 	var base int64
-	if g, err := db.QueryRowToStruct[db.GroupSeqOnly](ctx, e.deps.DB,
-		`SELECT "lastMsgSeq" FROM "Group" WHERE "id"=$1`, groupID); err == nil {
-		base = g.LastMsgSeq
-	} else if !db.IsNotFound(err) {
-		return err
+	// DB 为 nil（单测构造）时跳过 DB 基准，仅用本地高水位；生产环境 DB 恒不为 nil。
+	if e.deps.DB != nil {
+		if g, err := db.QueryRowToStruct[db.GroupSeqOnly](ctx, e.deps.DB,
+			`SELECT "lastMsgSeq" FROM "Group" WHERE "id"=$1`, groupID); err == nil {
+			base = g.LastMsgSeq
+		} else if !db.IsNotFound(err) {
+			return err
+		}
 	}
 	if localHigh > base {
 		base = localHigh
@@ -366,6 +372,7 @@ func (e *Engine) ensureSeqInit(ctx context.Context, groupID string) error {
 	}
 	e.seqMu.Lock()
 	e.seqInit[groupID] = true
+	e.seqBase[groupID] = base
 	e.seqMu.Unlock()
 	return nil
 }
@@ -383,11 +390,55 @@ func (s errString) Error() string { return string(s) }
 // CQIM_SEQ_LOCAL_FALLBACK=1 显式开启进程内回退（以内存高水位/DB 为起点）。
 func (e *Engine) nextSeq(ctx context.Context, groupID string) (int64, error) {
 	if err := e.ensureSeqInit(ctx, groupID); err == nil {
-		if n, err := e.deps.Redis.Incr(ctx, seqRedisKeyPrefix+groupID); err == nil {
-			e.seqMu.Lock()
-			e.seqLocal[groupID] = n // 记录高水位，供 key 驱逐重建使用
-			e.seqMu.Unlock()
-			return n, nil
+		// 驱逐检测阈值：max(本地高水位, 初始化基准)。INCR 返回值 <= 阈值说明 Redis key
+		// 在运行中被驱逐（无 TTL + maxmemory 逐出策略），INCR 从 0 开始计数，必须重建。
+		// 只用高水位不够：高水位为 0 且 key 在首次发送前被驱逐时，INCR 得 1 也会漏检。
+		e.seqMu.Lock()
+		high := e.seqLocal[groupID]
+		base := e.seqBase[groupID]
+		e.seqMu.Unlock()
+		if base > high {
+			high = base
+		}
+		incr := func() (int64, error) {
+			return e.deps.Redis.Incr(ctx, seqRedisKeyPrefix+groupID)
+		}
+		if n, err := incr(); err == nil {
+			if n <= high {
+				// key 被驱逐：必须先 DEL 掉被 INCR 重建的 stale key，再重走 ensureSeqInit
+				//（基准取 max(DB, 本地高水位)），再 INCR。否则 SET NX 因 key 已存在而静默失败，
+				// seq 回退会导致 (groupId,seq) 唯一冲突，消息持续发送失败。
+				log.Printf("[GroupMsg] seq key 疑似被驱逐（n=%d <= 阈值 %d），重建: groupId=%s", n, high, groupID)
+				_ = e.deps.Redis.RDB.Del(ctx, seqRedisKeyPrefix+groupID).Err()
+				e.seqMu.Lock()
+				delete(e.seqInit, groupID)
+				e.seqMu.Unlock()
+				if err := e.ensureSeqInit(ctx, groupID); err != nil {
+					return 0, err
+				}
+				n, err = incr()
+				if err != nil {
+					log.Printf("[GroupMsg] Redis seq 重建后仍失败: groupId=%s %v", groupID, err)
+					e.seqMu.Lock()
+					delete(e.seqInit, groupID)
+					e.seqMu.Unlock()
+				} else {
+					e.seqMu.Lock()
+					if n > e.seqLocal[groupID] {
+						e.seqLocal[groupID] = n
+					}
+					e.seqMu.Unlock()
+					return n, nil
+				}
+			} else {
+				e.seqMu.Lock()
+				// 高水位只增不减：回退后的小值不能覆盖，作为驱逐重建的基准。
+				if n > e.seqLocal[groupID] {
+					e.seqLocal[groupID] = n
+				}
+				e.seqMu.Unlock()
+				return n, nil
+			}
 		} else {
 			log.Printf("[GroupMsg] Redis seq 失败: groupId=%s %v", groupID, err)
 		}
@@ -425,7 +476,8 @@ func (e *Engine) nextSeqLocal(ctx context.Context, groupID string) (int64, error
 	cur, ok := e.seqLocal[groupID]
 	e.seqMu.Unlock()
 	if !ok {
-		if g, err := db.QueryRowToStruct[db.Group](ctx, e.deps.DB,
+		// pgx 严格模式：SELECT 部分列必须用 db.GroupSeqOnly，不能用完整 db.Group。
+		if g, err := db.QueryRowToStruct[db.GroupSeqOnly](ctx, e.deps.DB,
 			`SELECT "lastMsgSeq" FROM "Group" WHERE "id"=$1`, groupID); err == nil {
 			cur = g.LastMsgSeq
 		} else if !db.IsNotFound(err) {

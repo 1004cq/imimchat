@@ -1,6 +1,7 @@
 package onebot
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -22,6 +23,29 @@ var upgrader = websocket.Upgrader{
 
 var heartbeatOnce sync.Once
 
+// oneBotHTTPAuth OneBot v11 HTTP 备用接口的 access token 校验，与 WS 接入保持一致：
+// 未配置 ONEBOT_ACCESS_TOKEN 时保持原有行为；配置后必须携带正确 token
+// （Authorization: Bearer 头或 access_token 查询参数），否则 1403。
+func oneBotHTTPAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if configured := os.Getenv("ONEBOT_ACCESS_TOKEN"); configured != "" {
+			token := r.URL.Query().Get("access_token")
+			if token == "" {
+				if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+					token = strings.TrimPrefix(auth, "Bearer ")
+				}
+			}
+			if subtle.ConstantTimeCompare([]byte(token), []byte(configured)) != 1 {
+				util.WriteJSON(w, 200, map[string]any{
+					"status": "failed", "retcode": 1403, "data": nil, "message": "Unauthorized",
+				})
+				return
+			}
+		}
+		next(w, r)
+	}
+}
+
 // RegisterRoutes 注册 OneBot 路由（入口约定）。
 //   - GET /onebot/v11/ws：AstrBot 反向 WS 接入
 //   - OneBot v11 HTTP API 备用接口（兼容 HTTP POST/GET 方式，照抄 TS）
@@ -32,7 +56,7 @@ func RegisterRoutes(mux *http.ServeMux, d *handler.Deps) {
 	}))
 
 	// ============ OneBot v11 HTTP API 备用接口（兼容 HTTP POST 方式） ============
-	mux.Handle("POST /send_group_msg", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /send_group_msg", oneBotHTTPAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := httpActionParams(w, r)
 		if p == nil {
 			return
@@ -48,8 +72,8 @@ func RegisterRoutes(mux *http.ServeMux, d *handler.Deps) {
 			synthesizeAndBroadcastBotVoiceToGroup(d, groupID, text)
 		}
 		writeActionOK(w)
-	}))
-	mux.Handle("POST /send_private_msg", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	})))
+	mux.Handle("POST /send_private_msg", oneBotHTTPAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := httpActionParams(w, r)
 		if p == nil {
 			return
@@ -65,8 +89,8 @@ func RegisterRoutes(mux *http.ServeMux, d *handler.Deps) {
 			synthesizeAndBroadcastBotVoiceToUser(d, userID, text)
 		}
 		writeActionOK(w)
-	}))
-	mux.Handle("POST /send_msg", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	})))
+	mux.Handle("POST /send_msg", oneBotHTTPAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := httpActionParams(w, r)
 		if p == nil {
 			return
@@ -89,17 +113,17 @@ func RegisterRoutes(mux *http.ServeMux, d *handler.Deps) {
 			}
 		}
 		writeActionOK(w)
-	}))
-	mux.Handle("POST /delete_msg", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	})))
+	mux.Handle("POST /delete_msg", oneBotHTTPAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeActionOK(w)
-	}))
-	mux.Handle("GET /get_login_info", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	})))
+	mux.Handle("GET /get_login_info", oneBotHTTPAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		util.WriteJSON(w, 200, map[string]any{
 			"status": "ok", "retcode": 0,
 			"data": map[string]any{"user_id": BotSelfID, "nickname": "imim AI"},
 		})
-	}))
-	mux.Handle("GET /get_group_list", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	})))
+	mux.Handle("GET /get_group_list", oneBotHTTPAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		groupsMu.RLock()
 		list := make([]map[string]any, 0, len(groupRegistry))
 		for id, g := range groupRegistry {
@@ -109,8 +133,8 @@ func RegisterRoutes(mux *http.ServeMux, d *handler.Deps) {
 		}
 		groupsMu.RUnlock()
 		util.WriteJSON(w, 200, map[string]any{"status": "ok", "retcode": 0, "data": list})
-	}))
-	mux.Handle("GET /get_group_info", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	})))
+	mux.Handle("GET /get_group_info", oneBotHTTPAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		groupID, _ := parseInt(r.URL.Query().Get("group_id"))
 		if g, ok := groupOf(groupID); ok {
 			util.WriteJSON(w, 200, map[string]any{"status": "ok", "retcode": 0, "data": map[string]any{
@@ -119,8 +143,8 @@ func RegisterRoutes(mux *http.ServeMux, d *handler.Deps) {
 		} else {
 			util.WriteJSON(w, 200, map[string]any{"status": "failed", "retcode": 100, "data": nil})
 		}
-	}))
-	mux.Handle("GET /get_group_member_list", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	})))
+	mux.Handle("GET /get_group_member_list", oneBotHTTPAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		groupID, _ := parseInt(r.URL.Query().Get("group_id"))
 		members := []map[string]any{}
 		if g, ok := groupOf(groupID); ok {
@@ -136,17 +160,17 @@ func RegisterRoutes(mux *http.ServeMux, d *handler.Deps) {
 			}
 		}
 		util.WriteJSON(w, 200, map[string]any{"status": "ok", "retcode": 0, "data": members})
-	}))
-	mux.Handle("GET /get_status", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	})))
+	mux.Handle("GET /get_status", oneBotHTTPAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		util.WriteJSON(w, 200, map[string]any{
 			"status": "ok", "retcode": 0, "data": map[string]any{"online": true, "good": true},
 		})
-	}))
-	mux.Handle("GET /get_version_info", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	})))
+	mux.Handle("GET /get_version_info", oneBotHTTPAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		util.WriteJSON(w, 200, map[string]any{"status": "ok", "retcode": 0, "data": map[string]any{
 			"app_name": "imim", "app_version": "2.0.0", "protocol_version": "v11",
 		}})
-	}))
+	})))
 
 	// ============ 前端推送消息给 AstrBot ============
 	mux.Handle("POST /api/push-to-onebot", d.Auth.UserAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

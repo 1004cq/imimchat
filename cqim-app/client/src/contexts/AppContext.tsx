@@ -985,7 +985,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
         const [privateData, groupData] = await Promise.all([
           fetch('/api/chat/list', { headers: authHeaders }).then(r => r.ok ? r.json() : null),
-          fetch(`/api/group/list?userId=${encodeURIComponent(currentUserId)}`).then(r => r.ok ? r.json() : null),
+          authFetch(`/api/group/list`).then(r => r.ok ? r.json() : null),
         ]);
         return { aggregated: false, chats: privateData?.chats || [], groups: groupData?.groups || [] };
       })

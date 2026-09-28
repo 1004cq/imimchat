@@ -869,11 +869,12 @@ export const QRCardModal: React.FC<{
         toast.error(data.error || '二维码无效');
         return;
       }
-      // 用服务端返回的真实用户信息覆盖二维码中的信息
+      // 用服务端返回的真实用户信息覆盖二维码中的信息。
+      // 注意：服务端不再返回 phone（防伪造 UID 查手机号），沿用二维码自带的 phone。
       const verifiedPayload: QRPayload = {
         ...p,
         name: data.user.name,
-        phone: data.user.phone,
+        phone: data.user.phone ?? p.phone,
       };
       setScannedPayload(verifiedPayload);
       // 计算安全码

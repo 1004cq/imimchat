@@ -9,7 +9,6 @@ import {
   signSignedPreKey,
   verifySignedPreKeySignature,
   assertValidSignedPreKey,
-  SIGNED_PREKEY_MISSING_SIGNING_KEY,
   SIGNED_PREKEY_SIGNATURE_INVALID,
   verify,
   base64ToBuffer,
@@ -61,14 +60,16 @@ describe('Signed PreKey ECDSA vs ECDH identity key', () => {
     ).rejects.toThrow(SIGNED_PREKEY_SIGNATURE_INVALID);
   });
 
-  it('fails closed when the peer bundle has no signingPublicKey', async () => {
+  it('warns and continues (compat mode) when the peer bundle has no signingPublicKey', async () => {
+    // 有意为之（见 9d44f8f）：老客户端/iOS 可能未上传 signingPublicKey，
+    // 此时降级为警告并允许建连，而不是阻断。签名无效时仍然抛错。
     const { signedPreKey, signedPreKeySignature } = await makePeerBundle();
     await expect(
       assertValidSignedPreKey({
         signedPreKey: signedPreKey.pubKey,
         signedPreKeySignature,
       }),
-    ).rejects.toThrow(SIGNED_PREKEY_MISSING_SIGNING_KEY);
+    ).resolves.toBeUndefined();
   });
 
   it('keeps identityKey usable for X3DH ECDH after signature verification', async () => {

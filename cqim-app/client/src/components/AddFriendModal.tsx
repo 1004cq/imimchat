@@ -9,7 +9,7 @@ import { X, Search, UserPlus, Check, Loader2, Users } from 'lucide-react';
 import { DoveAvatar } from '@/components/DoveAvatar';
 import { toast } from 'sonner';
 import { useApp, useAppActions } from '@/contexts/AppContext';
-import { authApi } from '@/lib/authFetch';
+import { authApi, authFetch } from '@/lib/authFetch';
 
 interface SearchUser {
   id: string;
@@ -80,7 +80,7 @@ export const AddFriendModal: React.FC<AddFriendModalProps> = ({ onClose, prefill
     setLoading(true);
     setError('');
     try {
-      const res = await fetch(`/api/group/search?q=${encodeURIComponent(q.trim())}`);
+      const res = await authFetch(`/api/group/search?q=${encodeURIComponent(q.trim())}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || '搜索失败');
       setGroupResults(data.groups as SearchGroup[]);
@@ -150,7 +150,7 @@ export const AddFriendModal: React.FC<AddFriendModalProps> = ({ onClose, prefill
     try {
       const userId = state.currentUser?.id;
       if (!userId) { toast.error('请先登录'); return; }
-      const res = await fetch('/api/group/join', {
+      const res = await authFetch('/api/group/join', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ groupId: group.id, userId }),

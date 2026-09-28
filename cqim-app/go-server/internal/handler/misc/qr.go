@@ -52,9 +52,17 @@ func (h *Handler) qrVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 用户存在性校验
-	user, err := db.QueryRowToStruct[db.User](ctx, h.deps.DB,
-		`SELECT "id","username","nickname","avatar","phone" FROM "User" WHERE "id"=$1`, payload.UID)
+	// 用户存在性校验（pgx 严格模式：SELECT 部分列必须用字段精确匹配的 struct）。
+	// 注意：不再返回 phone——verify 的 payload 未验签，返回手机号等于允许
+	// 任意伪造 UID 查询他人手机号。客户端改用二维码自带的 phone 展示。
+	type qrUserRow struct {
+		Id       string  `db:"id"`
+		Username string  `db:"username"`
+		Nickname *string `db:"nickname"`
+		Avatar   *string `db:"avatar"`
+	}
+	user, err := db.QueryRowToStruct[qrUserRow](ctx, h.deps.DB,
+		`SELECT "id","username","nickname","avatar" FROM "User" WHERE "id"=$1`, payload.UID)
 	if err != nil {
 		if db.IsNotFound(err) {
 			util.WriteError(w, 404, "二维码对应的用户不存在")
@@ -81,7 +89,6 @@ func (h *Handler) qrVerify(w http.ResponseWriter, r *http.Request) {
 		"user": map[string]any{
 			"id":     user.Id,
 			"name":   name,
-			"phone":  util.StrVal(user.Phone),
 			"avatar": avatarToProxy(util.StrVal(user.Avatar)),
 		},
 	})

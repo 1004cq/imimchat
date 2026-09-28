@@ -14,13 +14,34 @@ type DB struct {
 	Pool *pgxpool.Pool
 }
 
-// sanitizeDSN 去掉 Prisma 风格的查询参数（如 ?schema=public），pgx 不识别这些参数，
+// sanitizeDSN 去掉 Prisma 专有的查询参数（如 ?schema=public），pgx 不识别这些参数，
 // 会把它们当成 PostgreSQL 配置项下发导致连接失败。public 本就是默认 schema，去掉不影响。
+// 注意：只剔除已知 Prisma 专有参数，sslmode、connect_timeout 等合法参数必须保留，
+// 否则托管 PG 强制 SSL 等部署会静默降级或连接失败。
 func sanitizeDSN(dsn string) string {
-	if i := strings.Index(dsn, "?"); i >= 0 {
-		return dsn[:i]
+	i := strings.Index(dsn, "?")
+	if i < 0 {
+		return dsn
 	}
-	return dsn
+	base, query := dsn[:i], dsn[i+1:]
+	// Prisma 专有参数白名单（出现在 DATABASE_URL 查询串中时剔除）。
+	prismaOnly := map[string]bool{
+		"schema": true,
+	}
+	var kept []string
+	for _, kv := range strings.Split(query, "&") {
+		k := kv
+		if j := strings.Index(kv, "="); j >= 0 {
+			k = kv[:j]
+		}
+		if !prismaOnly[k] {
+			kept = append(kept, kv)
+		}
+	}
+	if len(kept) == 0 {
+		return base
+	}
+	return base + "?" + strings.Join(kept, "&")
 }
 
 // New 创建连接池。DATABASE_URL 为空时返回错误。

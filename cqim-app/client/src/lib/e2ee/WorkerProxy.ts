@@ -22,6 +22,7 @@ export class WorkerProxy {
   private taskQueue: Promise<unknown> = Promise.resolve();
   private initPromise: Promise<void> | null = null;
   private ready = false;
+  private _userId: string | null = null; // Worker 绑定的登录用户，切账号时必须重置
 
   static shared(): WorkerProxy {
     if (!WorkerProxy._instance) {
@@ -98,8 +99,13 @@ export class WorkerProxy {
 
   async init(userId: string): Promise<void> {
     if (!this.worker) throw new Error('E2EE Worker not available');
+    // Worker 按用户隔离：SPA 内切账号后必须重置，否则沿用旧用户的密钥上下文
+    if (this.ready && this._userId !== userId) {
+      await this.reset();
+    }
     if (this.ready) return;
     if (!this.initPromise) {
+      this._userId = userId;
       this.initPromise = this.callWorker<void>('init', { userId })
         .then(() => {
           this.ready = true;
@@ -149,6 +155,7 @@ export class WorkerProxy {
     await this.callWorker<void>('reset');
     this.ready = false;
     this.initPromise = null;
+    this._userId = null;
   }
 
   get isWorkerAvailable(): boolean {

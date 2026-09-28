@@ -18,7 +18,9 @@ import (
 	"github.com/1004cq/imim.chat/cqim-app/go-server/internal/db"
 	"github.com/1004cq/imim.chat/cqim-app/go-server/internal/handler"
 	"github.com/1004cq/imim.chat/cqim-app/go-server/internal/handler/media"
+	"github.com/1004cq/imim.chat/cqim-app/go-server/internal/middleware"
 	"github.com/1004cq/imim.chat/cqim-app/go-server/internal/util"
+	"github.com/jackc/pgx/v5"
 )
 
 // Handler 群模块 HTTP handler（挂载在 /api/group，与 TS groupRouter 路由一致）。
@@ -27,43 +29,54 @@ type Handler struct {
 	engine *Engine
 }
 
-// RegisterRoutes 注册群模块路由。TS 中 groupRouter 挂载时未包 userAuth，
-// 这里保持一致：路由从 body/query 取 userId 等身份参数。
+// RegisterRoutes 注册群模块路由。
+// 安全说明：全部路由包 UserAuth，调用者身份一律取自登录 token
+// （middleware.UserFrom），不再信任 body/query 中的 userId/senderId/operatorId/ownerId/inviterId。
+// 公开群搜索（search）与二维码邀请入群（inviteJoin）也需要登录：前者防爬取，后者入群即建立身份。
 func RegisterRoutes(mux *http.ServeMux, d *handler.Deps, e *Engine) {
 	h := &Handler{deps: d, engine: e}
-	mux.Handle("POST /api/group/send", http.HandlerFunc(h.send))
-	mux.Handle("GET /api/group/messages", http.HandlerFunc(h.messages))
-	mux.Handle("POST /api/group/ack", http.HandlerFunc(h.ack))
-	mux.Handle("GET /api/group/unread", http.HandlerFunc(h.unread))
-	mux.Handle("POST /api/group/create", http.HandlerFunc(h.create))
-	mux.Handle("GET /api/group/list", http.HandlerFunc(h.list))
-	mux.Handle("GET /api/group/info", http.HandlerFunc(h.info))
-	mux.Handle("GET /api/group/members", http.HandlerFunc(h.members))
-	mux.Handle("POST /api/group/join", http.HandlerFunc(h.join))
-	mux.Handle("GET /api/group/search", http.HandlerFunc(h.search))
-	mux.Handle("POST /api/group/invite/create", http.HandlerFunc(h.inviteCreate))
-	mux.Handle("GET /api/group/invite/list", http.HandlerFunc(h.inviteList))
-	mux.Handle("POST /api/group/invite/revoke", http.HandlerFunc(h.inviteRevoke))
-	mux.Handle("POST /api/group/invite/join", http.HandlerFunc(h.inviteJoin))
-	mux.Handle("GET /api/group/peer/resolve", http.HandlerFunc(h.peerResolve))
-	mux.Handle("POST /api/group/username/set", http.HandlerFunc(h.usernameSet))
-	mux.Handle("PUT /api/group/update/name", http.HandlerFunc(h.updateName))
-	mux.Handle("PUT /api/group/update/avatar", http.HandlerFunc(h.updateAvatar))
-	mux.Handle("PUT /api/group/update/username", http.HandlerFunc(h.updateUsername))
-	mux.Handle("PUT /api/group/update", http.HandlerFunc(h.updateBatch))
-	mux.Handle("POST /api/group/leave", http.HandlerFunc(h.leave))
-	mux.Handle("POST /api/group/kick", http.HandlerFunc(h.kick))
-	mux.Handle("POST /api/group/transfer", http.HandlerFunc(h.transfer))
-	mux.Handle("POST /api/group/admin/set", http.HandlerFunc(h.adminSet))
-	mux.Handle("PUT /api/group/announcement", http.HandlerFunc(h.announcement))
-	mux.Handle("PUT /api/group/member/nickname", http.HandlerFunc(h.memberNickname))
-	mux.Handle("POST /api/group/mute", http.HandlerFunc(h.mute))
-	mux.Handle("POST /api/group/dissolve", http.HandlerFunc(h.dissolve))
-	mux.Handle("POST /api/group/qrcode", http.HandlerFunc(h.qrcode))
-	mux.Handle("POST /api/group/invite-members", http.HandlerFunc(h.inviteMembers))
-	mux.Handle("GET /api/group/invites", http.HandlerFunc(h.invites))
-	mux.Handle("POST /api/group/invite-accept/{inviteId}", http.HandlerFunc(h.inviteAccept))
-	mux.Handle("POST /api/group/invite-reject/{inviteId}", http.HandlerFunc(h.inviteReject))
+	auth := d.Auth.UserAuth
+	mux.Handle("POST /api/group/send", auth(http.HandlerFunc(h.send)))
+	mux.Handle("GET /api/group/messages", auth(http.HandlerFunc(h.messages)))
+	mux.Handle("POST /api/group/ack", auth(http.HandlerFunc(h.ack)))
+	mux.Handle("GET /api/group/unread", auth(http.HandlerFunc(h.unread)))
+	mux.Handle("POST /api/group/create", auth(http.HandlerFunc(h.create)))
+	mux.Handle("GET /api/group/list", auth(http.HandlerFunc(h.list)))
+	mux.Handle("GET /api/group/info", auth(http.HandlerFunc(h.info)))
+	mux.Handle("GET /api/group/members", auth(http.HandlerFunc(h.members)))
+	mux.Handle("POST /api/group/join", auth(http.HandlerFunc(h.join)))
+	mux.Handle("GET /api/group/search", auth(http.HandlerFunc(h.search)))
+	mux.Handle("POST /api/group/invite/create", auth(http.HandlerFunc(h.inviteCreate)))
+	mux.Handle("GET /api/group/invite/list", auth(http.HandlerFunc(h.inviteList)))
+	mux.Handle("POST /api/group/invite/revoke", auth(http.HandlerFunc(h.inviteRevoke)))
+	mux.Handle("POST /api/group/invite/join", auth(http.HandlerFunc(h.inviteJoin)))
+	mux.Handle("GET /api/group/peer/resolve", auth(http.HandlerFunc(h.peerResolve)))
+	mux.Handle("POST /api/group/username/set", auth(http.HandlerFunc(h.usernameSet)))
+	mux.Handle("PUT /api/group/update/name", auth(http.HandlerFunc(h.updateName)))
+	mux.Handle("PUT /api/group/update/avatar", auth(http.HandlerFunc(h.updateAvatar)))
+	mux.Handle("PUT /api/group/update/username", auth(http.HandlerFunc(h.updateUsername)))
+	mux.Handle("PUT /api/group/update", auth(http.HandlerFunc(h.updateBatch)))
+	mux.Handle("POST /api/group/leave", auth(http.HandlerFunc(h.leave)))
+	mux.Handle("POST /api/group/kick", auth(http.HandlerFunc(h.kick)))
+	mux.Handle("POST /api/group/transfer", auth(http.HandlerFunc(h.transfer)))
+	mux.Handle("POST /api/group/admin/set", auth(http.HandlerFunc(h.adminSet)))
+	mux.Handle("PUT /api/group/announcement", auth(http.HandlerFunc(h.announcement)))
+	mux.Handle("PUT /api/group/member/nickname", auth(http.HandlerFunc(h.memberNickname)))
+	mux.Handle("POST /api/group/mute", auth(http.HandlerFunc(h.mute)))
+	mux.Handle("POST /api/group/dissolve", auth(http.HandlerFunc(h.dissolve)))
+	mux.Handle("POST /api/group/qrcode", auth(http.HandlerFunc(h.qrcode)))
+	mux.Handle("POST /api/group/invite-members", auth(http.HandlerFunc(h.inviteMembers)))
+	mux.Handle("GET /api/group/invites", auth(http.HandlerFunc(h.invites)))
+	mux.Handle("POST /api/group/invite-accept/{inviteId}", auth(http.HandlerFunc(h.inviteAccept)))
+	mux.Handle("POST /api/group/invite-reject/{inviteId}", auth(http.HandlerFunc(h.inviteReject)))
+}
+
+// meID 取登录用户 ID。路由已包 UserAuth，此处防御性处理 nil。
+func meID(r *http.Request) string {
+	if u := middleware.UserFrom(r); u != nil {
+		return u.Id
+	}
+	return ""
 }
 
 func (h *Handler) ctx(r *http.Request) context.Context { return r.Context() }
@@ -341,9 +354,10 @@ func parseInt64Query(q url.Values, key string) *int64 {
 
 // POST /api/group/send 发送群消息
 func (h *Handler) send(w http.ResponseWriter, r *http.Request) {
+	// 发送者身份取自登录 token，不再信任 body 中的 senderId。
+	senderID := meID(r)
 	var req struct {
 		GroupID    string          `json:"groupId"`
-		SenderID   string          `json:"senderId"`
 		SenderName string          `json:"senderName"`
 		MsgType    string          `json:"msgType"`
 		Content    string          `json:"content"`
@@ -353,12 +367,20 @@ func (h *Handler) send(w http.ResponseWriter, r *http.Request) {
 	if !util.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.GroupID == "" || req.SenderID == "" || req.Content == "" {
+	if req.GroupID == "" || req.Content == "" {
 		util.WriteError(w, 400, "缺少必要参数")
 		return
 	}
+	// 必须是群成员才能发言（之前未登录也可任意冒充成员发消息）。
+	if _, ok, err := h.memberRole(h.ctx(r), req.GroupID, senderID); err != nil {
+		writeErr(w, err)
+		return
+	} else if !ok {
+		util.WriteError(w, 403, "非群成员，无权发言")
+		return
+	}
 	seq, ts, err := h.engine.SendGroupMessage(h.ctx(r), SendParams{
-		GroupID: req.GroupID, SenderID: req.SenderID, SenderName: req.SenderName,
+		GroupID: req.GroupID, SenderID: senderID, SenderName: req.SenderName,
 		MsgType: req.MsgType, Content: req.Content, ReplyToID: req.ReplyToID, Extra: req.Extra,
 	})
 	if err != nil {
@@ -371,9 +393,10 @@ func (h *Handler) send(w http.ResponseWriter, r *http.Request) {
 // GET /api/group/messages 拉取群历史消息
 func (h *Handler) messages(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	groupID, userID := q.Get("groupId"), q.Get("userId")
-	if groupID == "" || userID == "" {
-		util.WriteError(w, 400, "缺少 groupId 或 userId")
+	groupID := q.Get("groupId")
+	userID := meID(r)
+	if groupID == "" {
+		util.WriteError(w, 400, "缺少 groupId")
 		return
 	}
 	limit := parseIntQuery(q, "limit", 50)
@@ -396,17 +419,16 @@ func (h *Handler) messages(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ack(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		GroupID    string `json:"groupId"`
-		UserID     string `json:"userId"`
 		LastAckSeq *int64 `json:"lastAckSeq"`
 	}
 	if !util.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.GroupID == "" || req.UserID == "" || req.LastAckSeq == nil {
+	if req.GroupID == "" || req.LastAckSeq == nil {
 		util.WriteError(w, 400, "缺少必要参数")
 		return
 	}
-	unread, err := h.engine.ack(h.ctx(r), req.GroupID, req.UserID, *req.LastAckSeq)
+	unread, err := h.engine.ack(h.ctx(r), req.GroupID, meID(r), *req.LastAckSeq)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -416,12 +438,7 @@ func (h *Handler) ack(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/group/unread 获取未读数
 func (h *Handler) unread(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
-	if userID == "" {
-		util.WriteError(w, 400, "缺少 userId")
-		return
-	}
-	res, err := h.engine.GetGroupUnreadCounts(h.ctx(r), userID)
+	res, err := h.engine.GetGroupUnreadCounts(h.ctx(r), meID(r))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -431,9 +448,10 @@ func (h *Handler) unread(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/group/create 创建群组
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
+	// 群主身份取自登录 token，不再信任 body 中的 ownerId。
+	ownerID := meID(r)
 	var req struct {
 		Name       string   `json:"name"`
-		OwnerID    string   `json:"ownerId"`
 		MemberIDs  []string `json:"memberIds"`
 		Type       string   `json:"type"`
 		MaxMembers *int32   `json:"maxMembers"`
@@ -443,7 +461,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	if !util.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.Name == "" || req.OwnerID == "" {
+	if req.Name == "" {
 		util.WriteError(w, 400, "缺少必要参数")
 		return
 	}
@@ -497,16 +515,16 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO "Group"("id","dialogId","name","username","ownerId","type","isPublic","maxMembers","memberCount","createdAt","updatedAt")
 		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),NOW())`,
-		groupID, dialogID, req.Name, un, req.OwnerID, resolvedType, req.IsPublic, resolvedMaxMembers, len(req.MemberIDs)+1); err != nil {
+		groupID, dialogID, req.Name, un, ownerID, resolvedType, req.IsPublic, resolvedMaxMembers, len(req.MemberIDs)+1); err != nil {
 		writeErr(w, err)
 		return
 	}
 	members := []struct {
 		userID string
 		role   string
-	}{{req.OwnerID, "owner"}}
+	}{{ownerID, "owner"}}
 	for _, id := range req.MemberIDs {
-		if id != req.OwnerID {
+		if id != ownerID {
 			members = append(members, struct {
 				userID string
 				role   string
@@ -533,11 +551,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/group/list 获取我的群聊列表
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("userId")
-	if userID == "" {
-		util.WriteError(w, 400, "缺少 userId")
-		return
-	}
+	userID := meID(r)
 	type row struct {
 		GroupID     string    `db:"groupId"`
 		LastAckSeq  int64     `db:"lastAckSeq"`
@@ -615,6 +629,16 @@ func (h *Handler) info(w http.ResponseWriter, r *http.Request) {
 	var memberCount int64
 	_ = h.deps.DB.Pool.QueryRow(h.ctx(r),
 		`SELECT COUNT(*) FROM "GroupMember" WHERE "groupId"=$1`, groupID).Scan(&memberCount)
+	// 非公开群仅成员可查看详情。
+	if !g.IsPublic {
+		if _, ok, err := h.memberRole(h.ctx(r), groupID, meID(r)); err != nil {
+			writeErr(w, err)
+			return
+		} else if !ok {
+			util.WriteError(w, 403, "非群成员，无权查看")
+			return
+		}
+	}
 	util.WriteJSON(w, 200, map[string]any{
 		"id": g.Id, "dialogId": strOrNil(g.DialogId), "name": g.Name,
 		"username": strOrNil(g.Username), "avatar": avatarToProxy(util.StrVal(g.Avatar)),
@@ -641,6 +665,26 @@ func (h *Handler) members(w http.ResponseWriter, r *http.Request) {
 		page = 1
 	}
 	ctx := h.ctx(r)
+	// 非公开群仅成员可查看成员列表。
+	var isPublic bool
+	if err := h.deps.DB.Pool.QueryRow(ctx,
+		`SELECT "isPublic" FROM "Group" WHERE "id"=$1`, groupID).Scan(&isPublic); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			util.WriteError(w, 404, "群组不存在")
+		} else {
+			writeErr(w, err)
+		}
+		return
+	}
+	if !isPublic {
+		if _, ok, err := h.memberRole(ctx, groupID, meID(r)); err != nil {
+			writeErr(w, err)
+			return
+		} else if !ok {
+			util.WriteError(w, 403, "非群成员，无权查看")
+			return
+		}
+	}
 	rawMembers, err := db.QueryToStructs[db.GroupMember](ctx, h.deps.DB,
 		`SELECT * FROM "GroupMember" WHERE "groupId"=$1 ORDER BY "role" ASC, "joinTime" ASC LIMIT $2 OFFSET $3`,
 		groupID, pageSize, (page-1)*pageSize)
@@ -690,17 +734,16 @@ func (h *Handler) members(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) join(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		GroupID  string `json:"groupId"`
-		UserID   string `json:"userId"`
 		Nickname string `json:"nickname"`
 	}
 	if !util.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.GroupID == "" || req.UserID == "" {
+	if req.GroupID == "" {
 		util.WriteError(w, 400, "缺少必要参数")
 		return
 	}
-	if err := h.joinGroup(h.ctx(r), req.GroupID, req.UserID, req.Nickname); err != nil {
+	if err := h.joinGroup(h.ctx(r), req.GroupID, meID(r), req.Nickname); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -714,7 +757,18 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, 400, "请输入至少1个字符")
 		return
 	}
-	groups, err := db.QueryToStructs[db.Group](h.ctx(r), h.deps.DB,
+	// pgx 严格模式：SELECT 部分列必须用字段精确匹配的 struct。
+	type groupSearchRow struct {
+		ID          string  `db:"id"`
+		DialogId    *string `db:"dialogId"`
+		Username    *string `db:"username"`
+		Name        string  `db:"name"`
+		Avatar      *string `db:"avatar"`
+		MemberCount int32   `db:"memberCount"`
+		Type        string  `db:"type"`
+		IsPublic    bool    `db:"isPublic"`
+	}
+	groups, err := db.QueryToStructs[groupSearchRow](h.ctx(r), h.deps.DB,
 		`SELECT "id","dialogId","username","name","avatar","memberCount","type","isPublic" FROM "Group"
 		 WHERE "id"=$1 OR "dialogId"=$1 OR "username"=$1 OR "name" LIKE $2 LIMIT 10`,
 		keyword, "%"+keyword+"%")
@@ -725,7 +779,7 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
 	out := make([]map[string]any, 0, len(groups))
 	for _, g := range groups {
 		out = append(out, map[string]any{
-			"id": g.Id, "dialogId": strOrNil(g.DialogId), "username": strOrNil(g.Username),
+			"id": g.ID, "dialogId": strOrNil(g.DialogId), "username": strOrNil(g.Username),
 			"name": g.Name, "avatar": avatarToProxy(util.StrVal(g.Avatar)),
 			"memberCount": g.MemberCount, "type": g.Type, "isPublic": g.IsPublic,
 		})
@@ -735,9 +789,10 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/group/invite/create 创建邀请链接
 func (h *Handler) inviteCreate(w http.ResponseWriter, r *http.Request) {
+	// 创建者身份取自登录 token，不再信任 body 中的 creatorId。
+	creatorID := meID(r)
 	var req struct {
 		GroupID     string   `json:"groupId"`
-		CreatorID   string   `json:"creatorId"`
 		Name        string   `json:"name"`
 		ExpireHours *float64 `json:"expireHours"`
 		ExpireAt    string   `json:"expireAt"`
@@ -746,12 +801,12 @@ func (h *Handler) inviteCreate(w http.ResponseWriter, r *http.Request) {
 	if !util.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.GroupID == "" || req.CreatorID == "" {
+	if req.GroupID == "" {
 		util.WriteError(w, 400, "缺少必要参数")
 		return
 	}
 	ctx := h.ctx(r)
-	role, ok, err := h.memberRole(ctx, req.GroupID, req.CreatorID)
+	role, ok, err := h.memberRole(ctx, req.GroupID, creatorID)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -806,7 +861,7 @@ func (h *Handler) inviteCreate(w http.ResponseWriter, r *http.Request) {
 	if _, err := h.deps.DB.Exec(ctx,
 		`INSERT INTO "InviteLink"("id","hash","groupId","creatorId","name","expireAt","maxUses","usedCount","isRevoked","createdAt")
 		 VALUES($1,$2,$3,$4,$5,$6,$7,0,false,NOW())`,
-		linkID, hash, req.GroupID, req.CreatorID, name, expAny, maxUses); err != nil {
+		linkID, hash, req.GroupID, creatorID, name, expAny, maxUses); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -849,6 +904,14 @@ func (h *Handler) inviteList(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, 400, "缺少 groupId")
 		return
 	}
+	// 仅群成员可查看本群邀请链接。
+	if _, ok, err := h.memberRole(h.ctx(r), groupID, meID(r)); err != nil {
+		writeErr(w, err)
+		return
+	} else if !ok {
+		util.WriteError(w, 403, "非群成员，无权查看")
+		return
+	}
 	links, err := db.QueryToStructs[db.InviteLink](h.ctx(r), h.deps.DB,
 		`SELECT * FROM "InviteLink" WHERE "groupId"=$1 AND "isRevoked"=false ORDER BY "createdAt" DESC`, groupID)
 	if err != nil {
@@ -887,14 +950,15 @@ func (h *Handler) inviteList(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/group/invite/revoke 撤销邀请链接
 func (h *Handler) inviteRevoke(w http.ResponseWriter, r *http.Request) {
+	// 操作者身份取自登录 token，不再信任 body 中的 creatorId。
+	operatorID := meID(r)
 	var req struct {
-		Hash      string `json:"hash"`
-		CreatorID string `json:"creatorId"`
+		Hash string `json:"hash"`
 	}
 	if !util.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.Hash == "" || req.CreatorID == "" {
+	if req.Hash == "" {
 		util.WriteError(w, 400, "缺少必要参数")
 		return
 	}
@@ -909,8 +973,8 @@ func (h *Handler) inviteRevoke(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if link.CreatorId != req.CreatorID {
-		role, ok, err := h.memberRole(ctx, link.GroupId, req.CreatorID)
+	if link.CreatorId != operatorID {
+		role, ok, err := h.memberRole(ctx, link.GroupId, operatorID)
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -930,15 +994,16 @@ func (h *Handler) inviteRevoke(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/group/invite/join 通过邀请链接加入群组
 func (h *Handler) inviteJoin(w http.ResponseWriter, r *http.Request) {
+	// 加入者身份取自登录 token，不再信任 body 中的 userId。
+	joinerID := meID(r)
 	var req struct {
 		Hash     string `json:"hash"`
-		UserID   string `json:"userId"`
 		Nickname string `json:"nickname"`
 	}
 	if !util.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.Hash == "" || req.UserID == "" {
+	if req.Hash == "" {
 		util.WriteError(w, 400, "缺少必要参数")
 		return
 	}
@@ -965,7 +1030,7 @@ func (h *Handler) inviteJoin(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, 410, "邀请链接已达到最大使用次数")
 		return
 	}
-	if _, ok, err := h.memberRole(ctx, link.GroupId, req.UserID); err != nil {
+	if _, ok, err := h.memberRole(ctx, link.GroupId, joinerID); err != nil {
 		writeErr(w, err)
 		return
 	} else if ok {
@@ -984,7 +1049,7 @@ func (h *Handler) inviteJoin(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, 403, "群组已满员")
 		return
 	}
-	if err := h.joinGroup(ctx, link.GroupId, req.UserID, req.Nickname); err != nil {
+	if err := h.joinGroup(ctx, link.GroupId, joinerID, req.Nickname); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -1006,7 +1071,17 @@ func (h *Handler) peerResolve(w http.ResponseWriter, r *http.Request) {
 	ctx := h.ctx(r)
 	peerType := getPeerTypeByDialogID(dialogID)
 	if peerType == "user" {
-		u, err := db.QueryRowToStruct[db.User](ctx, h.deps.DB,
+		// pgx 严格模式：SELECT 部分列必须用字段精确匹配的 struct。
+		type peerUserRow struct {
+			ID       string  `db:"id"`
+			DialogId *string `db:"dialogId"`
+			Username string  `db:"username"`
+			Nickname *string `db:"nickname"`
+			Avatar   *string `db:"avatar"`
+			Bio      *string `db:"bio"`
+			IsBot    bool    `db:"isBot"`
+		}
+		u, err := db.QueryRowToStruct[peerUserRow](ctx, h.deps.DB,
 			`SELECT "id","dialogId","username","nickname","avatar","bio","isBot" FROM "User" WHERE "dialogId"=$1`, dialogID)
 		if err != nil {
 			if db.IsNotFound(err) {
@@ -1023,14 +1098,25 @@ func (h *Handler) peerResolve(w http.ResponseWriter, r *http.Request) {
 		util.WriteJSON(w, 200, map[string]any{
 			"peerType": pt,
 			"data": map[string]any{
-				"id": u.Id, "dialogId": strOrNil(u.DialogId), "username": strOrNil(nilIfEmpty(u.Username)),
+				"id": u.ID, "dialogId": strOrNil(u.DialogId), "username": strOrNil(nilIfEmpty(u.Username)),
 				"nickname": strOrNil(u.Nickname), "avatar": avatarToProxy(util.StrVal(u.Avatar)),
 				"bio": strOrNil(u.Bio), "isBot": u.IsBot,
 			},
 		})
 		return
 	}
-	g, err := db.QueryRowToStruct[db.Group](ctx, h.deps.DB,
+	// pgx 严格模式：SELECT 部分列必须用字段精确匹配的 struct。
+	type peerGroupRow struct {
+		ID          string  `db:"id"`
+		DialogId    *string `db:"dialogId"`
+		Username    *string `db:"username"`
+		Name        string  `db:"name"`
+		Avatar      *string `db:"avatar"`
+		Type        string  `db:"type"`
+		IsPublic    bool    `db:"isPublic"`
+		MemberCount int32   `db:"memberCount"`
+	}
+	g, err := db.QueryRowToStruct[peerGroupRow](ctx, h.deps.DB,
 		`SELECT "id","dialogId","username","name","avatar","type","isPublic","memberCount" FROM "Group" WHERE "dialogId"=$1`, dialogID)
 	if err != nil {
 		if db.IsNotFound(err) {
@@ -1049,7 +1135,7 @@ func (h *Handler) peerResolve(w http.ResponseWriter, r *http.Request) {
 	util.WriteJSON(w, 200, map[string]any{
 		"peerType": pt,
 		"data": map[string]any{
-			"id": g.Id, "dialogId": strOrNil(g.DialogId), "username": strOrNil(g.Username),
+			"id": g.ID, "dialogId": strOrNil(g.DialogId), "username": strOrNil(g.Username),
 			"name": g.Name, "avatar": avatarToProxy(util.StrVal(g.Avatar)),
 			"type": g.Type, "isPublic": g.IsPublic, "memberCount": g.MemberCount,
 		},
@@ -1060,18 +1146,17 @@ func (h *Handler) peerResolve(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) usernameSet(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		GroupID  string `json:"groupId"`
-		UserID   string `json:"userId"`
 		Username string `json:"username"`
 	}
 	if !util.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.GroupID == "" || req.UserID == "" {
+	if req.GroupID == "" {
 		util.WriteError(w, 400, "缺少必要参数")
 		return
 	}
 	ctx := h.ctx(r)
-	role, ok, err := h.memberRole(ctx, req.GroupID, req.UserID)
+	role, ok, err := h.memberRole(ctx, req.GroupID, meID(r))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -1118,18 +1203,17 @@ func (h *Handler) usernameSet(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) updateName(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		GroupID string `json:"groupId"`
-		UserID  string `json:"userId"`
 		Name    string `json:"name"`
 	}
 	if !util.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.GroupID == "" || req.UserID == "" || strings.TrimSpace(req.Name) == "" {
+	if req.GroupID == "" || strings.TrimSpace(req.Name) == "" {
 		util.WriteError(w, 400, "缺少必要参数")
 		return
 	}
 	ctx := h.ctx(r)
-	role, ok, err := h.memberRole(ctx, req.GroupID, req.UserID)
+	role, ok, err := h.memberRole(ctx, req.GroupID, meID(r))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -1156,19 +1240,18 @@ func (h *Handler) updateName(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) updateAvatar(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		GroupID    string `json:"groupId"`
-		UserID     string `json:"userId"`
 		DataBase64 string `json:"dataBase64"`
 		MimeType   string `json:"mimeType"`
 	}
 	if !util.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.GroupID == "" || req.UserID == "" {
+	if req.GroupID == "" {
 		util.WriteError(w, 400, "缺少必要参数")
 		return
 	}
 	ctx := h.ctx(r)
-	role, ok, err := h.memberRole(ctx, req.GroupID, req.UserID)
+	role, ok, err := h.memberRole(ctx, req.GroupID, meID(r))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -1220,18 +1303,17 @@ func (h *Handler) updateAvatar(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) updateUsername(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		GroupID  string `json:"groupId"`
-		UserID   string `json:"userId"`
 		Username string `json:"username"`
 	}
 	if !util.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.GroupID == "" || req.UserID == "" {
+	if req.GroupID == "" {
 		util.WriteError(w, 400, "缺少必要参数")
 		return
 	}
 	ctx := h.ctx(r)
-	role, ok, err := h.memberRole(ctx, req.GroupID, req.UserID)
+	role, ok, err := h.memberRole(ctx, req.GroupID, meID(r))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -1278,7 +1360,6 @@ func (h *Handler) updateUsername(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) updateBatch(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		GroupID        string  `json:"groupId"`
-		UserID         string  `json:"userId"`
 		Name           *string `json:"name"`
 		Username       *string `json:"username"`
 		AvatarBase64   string  `json:"avatarBase64"`
@@ -1287,12 +1368,12 @@ func (h *Handler) updateBatch(w http.ResponseWriter, r *http.Request) {
 	if !util.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.GroupID == "" || req.UserID == "" {
+	if req.GroupID == "" {
 		util.WriteError(w, 400, "缺少必要参数")
 		return
 	}
 	ctx := h.ctx(r)
-	role, ok, err := h.memberRole(ctx, req.GroupID, req.UserID)
+	role, ok, err := h.memberRole(ctx, req.GroupID, meID(r))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -1395,7 +1476,15 @@ func (h *Handler) updateBatch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	g, err := db.QueryRowToStruct[db.Group](ctx, h.deps.DB,
+	// pgx 严格模式：SELECT 部分列必须用字段精确匹配的 struct。
+	type updatedGroupRow struct {
+		ID       string  `db:"id"`
+		Name     string  `db:"name"`
+		Avatar   *string `db:"avatar"`
+		Username *string `db:"username"`
+		IsPublic bool    `db:"isPublic"`
+	}
+	g, err := db.QueryRowToStruct[updatedGroupRow](ctx, h.deps.DB,
 		`SELECT "id","name","avatar","username","isPublic" FROM "Group" WHERE "id"=$1`, req.GroupID)
 	if err != nil {
 		writeErr(w, err)
@@ -1407,7 +1496,7 @@ func (h *Handler) updateBatch(w http.ResponseWriter, r *http.Request) {
 	util.WriteJSON(w, 200, map[string]any{
 		"ok": true,
 		"group": map[string]any{
-			"id": g.Id, "name": g.Name, "avatar": avatarToProxy(util.StrVal(g.Avatar)),
+			"id": g.ID, "name": g.Name, "avatar": avatarToProxy(util.StrVal(g.Avatar)),
 			"username": strOrNil(g.Username), "isPublic": g.IsPublic,
 		},
 	})
@@ -1417,17 +1506,16 @@ func (h *Handler) updateBatch(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) leave(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		GroupID string `json:"groupId"`
-		UserID  string `json:"userId"`
 	}
 	if !util.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.GroupID == "" || req.UserID == "" {
+	if req.GroupID == "" {
 		util.WriteError(w, 400, "缺少必要参数")
 		return
 	}
 	ctx := h.ctx(r)
-	role, ok, err := h.memberRole(ctx, req.GroupID, req.UserID)
+	role, ok, err := h.memberRole(ctx, req.GroupID, meID(r))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -1447,7 +1535,7 @@ func (h *Handler) leave(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(ctx,
-		`DELETE FROM "GroupMember" WHERE "groupId"=$1 AND "userId"=$2`, req.GroupID, req.UserID); err != nil {
+		`DELETE FROM "GroupMember" WHERE "groupId"=$1 AND "userId"=$2`, req.GroupID, meID(r)); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -1460,8 +1548,8 @@ func (h *Handler) leave(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	h.sysMessage(req.GroupID, req.UserID+" 已退出群聊")
-	h.engine.LeaveGroupOnline(req.GroupID, req.UserID)
+	h.sysMessage(req.GroupID, meID(r)+" 已退出群聊")
+	h.engine.LeaveGroupOnline(req.GroupID, meID(r))
 	util.WriteJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -1469,18 +1557,17 @@ func (h *Handler) leave(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) kick(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		GroupID      string `json:"groupId"`
-		OperatorID   string `json:"operatorId"`
 		TargetUserID string `json:"targetUserId"`
 	}
 	if !util.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.GroupID == "" || req.OperatorID == "" || req.TargetUserID == "" {
+	if req.GroupID == "" || req.TargetUserID == "" {
 		util.WriteError(w, 400, "缺少必要参数")
 		return
 	}
 	ctx := h.ctx(r)
-	opRole, ok, err := h.memberRole(ctx, req.GroupID, req.OperatorID)
+	opRole, ok, err := h.memberRole(ctx, req.GroupID, meID(r))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -1535,18 +1622,17 @@ func (h *Handler) kick(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) transfer(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		GroupID    string `json:"groupId"`
-		OwnerID    string `json:"ownerId"`
 		NewOwnerID string `json:"newOwnerId"`
 	}
 	if !util.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.GroupID == "" || req.OwnerID == "" || req.NewOwnerID == "" {
+	if req.GroupID == "" || req.NewOwnerID == "" {
 		util.WriteError(w, 400, "缺少必要参数")
 		return
 	}
 	ctx := h.ctx(r)
-	role, ok, err := h.memberRole(ctx, req.GroupID, req.OwnerID)
+	role, ok, err := h.memberRole(ctx, req.GroupID, meID(r))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -1570,7 +1656,7 @@ func (h *Handler) transfer(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(ctx,
 		`UPDATE "GroupMember" SET "role"='admin', "updatedAt"=NOW() WHERE "groupId"=$1 AND "userId"=$2`,
-		req.GroupID, req.OwnerID); err != nil {
+		req.GroupID, meID(r)); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -1597,19 +1683,18 @@ func (h *Handler) transfer(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) adminSet(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		GroupID      string `json:"groupId"`
-		OwnerID      string `json:"ownerId"`
 		TargetUserID string `json:"targetUserId"`
 		IsAdmin      bool   `json:"isAdmin"`
 	}
 	if !util.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.GroupID == "" || req.OwnerID == "" || req.TargetUserID == "" {
+	if req.GroupID == "" || req.TargetUserID == "" {
 		util.WriteError(w, 400, "缺少必要参数")
 		return
 	}
 	ctx := h.ctx(r)
-	role, ok, err := h.memberRole(ctx, req.GroupID, req.OwnerID)
+	role, ok, err := h.memberRole(ctx, req.GroupID, meID(r))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -1653,18 +1738,17 @@ func (h *Handler) adminSet(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) announcement(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		GroupID      string `json:"groupId"`
-		UserID       string `json:"userId"`
 		Announcement string `json:"announcement"`
 	}
 	if !util.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.GroupID == "" || req.UserID == "" {
+	if req.GroupID == "" {
 		util.WriteError(w, 400, "缺少必要参数")
 		return
 	}
 	ctx := h.ctx(r)
-	role, ok, err := h.memberRole(ctx, req.GroupID, req.UserID)
+	role, ok, err := h.memberRole(ctx, req.GroupID, meID(r))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -1692,18 +1776,17 @@ func (h *Handler) announcement(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) memberNickname(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		GroupID  string `json:"groupId"`
-		UserID   string `json:"userId"`
 		Nickname string `json:"nickname"`
 	}
 	if !util.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.GroupID == "" || req.UserID == "" {
+	if req.GroupID == "" {
 		util.WriteError(w, 400, "缺少必要参数")
 		return
 	}
 	ctx := h.ctx(r)
-	if _, ok, err := h.memberRole(ctx, req.GroupID, req.UserID); err != nil {
+	if _, ok, err := h.memberRole(ctx, req.GroupID, meID(r)); err != nil {
 		writeErr(w, err)
 		return
 	} else if !ok {
@@ -1721,7 +1804,7 @@ func (h *Handler) memberNickname(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := h.deps.DB.Exec(ctx,
 		`UPDATE "GroupMember" SET "nickname"=$3, "updatedAt"=NOW() WHERE "groupId"=$1 AND "userId"=$2`,
-		req.GroupID, req.UserID, nn); err != nil {
+		req.GroupID, meID(r), nn); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -1732,19 +1815,18 @@ func (h *Handler) memberNickname(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) mute(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		GroupID      string `json:"groupId"`
-		OperatorID   string `json:"operatorId"`
 		TargetUserID string `json:"targetUserId"`
 		Duration     *int64 `json:"duration"`
 	}
 	if !util.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.GroupID == "" || req.OperatorID == "" || req.TargetUserID == "" {
+	if req.GroupID == "" || req.TargetUserID == "" {
 		util.WriteError(w, 400, "缺少必要参数")
 		return
 	}
 	ctx := h.ctx(r)
-	opRole, ok, err := h.memberRole(ctx, req.GroupID, req.OperatorID)
+	opRole, ok, err := h.memberRole(ctx, req.GroupID, meID(r))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -1808,17 +1890,16 @@ func (h *Handler) mute(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) dissolve(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		GroupID string `json:"groupId"`
-		OwnerID string `json:"ownerId"`
 	}
 	if !util.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.GroupID == "" || req.OwnerID == "" {
+	if req.GroupID == "" {
 		util.WriteError(w, 400, "缺少必要参数")
 		return
 	}
 	ctx := h.ctx(r)
-	role, ok, err := h.memberRole(ctx, req.GroupID, req.OwnerID)
+	role, ok, err := h.memberRole(ctx, req.GroupID, meID(r))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -1846,17 +1927,16 @@ func (h *Handler) dissolve(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) qrcode(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		GroupID string `json:"groupId"`
-		UserID  string `json:"userId"`
 	}
 	if !util.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.GroupID == "" || req.UserID == "" {
+	if req.GroupID == "" {
 		util.WriteError(w, 400, "缺少必要参数")
 		return
 	}
 	ctx := h.ctx(r)
-	if _, ok, err := h.memberRole(ctx, req.GroupID, req.UserID); err != nil {
+	if _, ok, err := h.memberRole(ctx, req.GroupID, meID(r)); err != nil {
 		writeErr(w, err)
 		return
 	} else if !ok {
@@ -1888,7 +1968,7 @@ func (h *Handler) qrcode(w http.ResponseWriter, r *http.Request) {
 		if _, err := h.deps.DB.Exec(ctx,
 			`INSERT INTO "InviteLink"("id","hash","groupId","creatorId","name","expireAt","maxUses","usedCount","isRevoked","createdAt")
 			 VALUES($1,$2,$3,$4,'group_qrcode',NULL,0,0,false,NOW())`,
-			util.NewID(), hash, req.GroupID, req.UserID); err != nil {
+			util.NewID(), hash, req.GroupID, meID(r)); err != nil {
 			writeErr(w, err)
 			return
 		}
@@ -1908,13 +1988,12 @@ func (h *Handler) qrcode(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) inviteMembers(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		GroupID   string   `json:"groupId"`
-		InviterID string   `json:"inviterId"`
 		MemberIDs []string `json:"memberIds"`
 	}
 	if !util.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.GroupID == "" || req.InviterID == "" || len(req.MemberIDs) == 0 {
+	if req.GroupID == "" || len(req.MemberIDs) == 0 {
 		util.WriteError(w, 400, "缺少必要参数")
 		return
 	}
@@ -1923,7 +2002,7 @@ func (h *Handler) inviteMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := h.ctx(r)
-	if _, ok, err := h.memberRole(ctx, req.GroupID, req.InviterID); err != nil {
+	if _, ok, err := h.memberRole(ctx, req.GroupID, meID(r)); err != nil {
 		writeErr(w, err)
 		return
 	} else if !ok {
@@ -1940,8 +2019,11 @@ func (h *Handler) inviteMembers(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	// 过滤已是群成员的用户
-	existingMembers, err := db.QueryToStructs[db.GroupMember](ctx, h.deps.DB,
+	// 过滤已是群成员的用户（pgx 严格模式：SELECT 部分列用精确匹配的 struct）
+	type memberIDRow struct {
+		UserId string `db:"userId"`
+	}
+	existingMembers, err := db.QueryToStructs[memberIDRow](ctx, h.deps.DB,
 		`SELECT "userId" FROM "GroupMember" WHERE "groupId"=$1 AND "userId"=ANY($2)`, req.GroupID, req.MemberIDs)
 	if err != nil {
 		writeErr(w, err)
@@ -1963,8 +2045,11 @@ func (h *Handler) inviteMembers(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	// 验证用户存在
-	validUsers, err := db.QueryToStructs[db.User](ctx, h.deps.DB,
+	// 验证用户存在（pgx 严格模式：SELECT 部分列用精确匹配的 struct）
+	type userIDRow struct {
+		Id string `db:"id"`
+	}
+	validUsers, err := db.QueryToStructs[userIDRow](ctx, h.deps.DB,
 		`SELECT "id" FROM "User" WHERE "id"=ANY($1)`, newMemberIDs)
 	if err != nil {
 		writeErr(w, err)
@@ -1978,8 +2063,11 @@ func (h *Handler) inviteMembers(w http.ResponseWriter, r *http.Request) {
 	for _, u := range validUsers {
 		validIDs = append(validIDs, u.Id)
 	}
-	// 过滤已有待处理邀请的用户
-	pendingInvites, err := db.QueryToStructs[db.GroupInvite](ctx, h.deps.DB,
+	// 过滤已有待处理邀请的用户（pgx 严格模式：SELECT 部分列用精确匹配的 struct）
+	type inviteeIDRow struct {
+		InviteeId string `db:"inviteeId"`
+	}
+	pendingInvites, err := db.QueryToStructs[inviteeIDRow](ctx, h.deps.DB,
 		`SELECT "inviteeId" FROM "GroupInvite" WHERE "groupId"=$1 AND "inviteeId"=ANY($2) AND "status"='pending'`,
 		req.GroupID, validIDs)
 	if err != nil {
@@ -2007,7 +2095,7 @@ func (h *Handler) inviteMembers(w http.ResponseWriter, r *http.Request) {
 			}
 			sb.WriteString("( $" + itoa(base) + ",$" + itoa(base+1) + ",$" + itoa(base+2) + ",$" + itoa(base+3) +
 				",$" + itoa(base+4) + ",$" + itoa(base+5) + ",NOW(),NOW())")
-			args = append(args, util.NewID(), req.GroupID, req.InviterID, uid,
+			args = append(args, util.NewID(), req.GroupID, meID(r), uid,
 				"邀请你加入群聊「"+groupName+"」", "pending")
 		}
 		// skipDuplicates：唯一键 (groupId, inviteeId, status)
@@ -2018,7 +2106,7 @@ func (h *Handler) inviteMembers(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	log.Printf("[GroupMsg] 批量发送入群邀请: groupId=%s inviter=%s invited=%d alreadyPending=%d",
-		req.GroupID, req.InviterID, len(toInvite), len(pendingSet))
+		req.GroupID, meID(r), len(toInvite), len(pendingSet))
 	util.WriteJSON(w, 200, map[string]any{
 		"ok": true, "invited": len(toInvite), "alreadyPending": len(pendingSet),
 		"alreadyMembers": len(existingSet), "groupName": groupName,
@@ -2030,11 +2118,8 @@ func itoa(n int) string { return strconv.Itoa(n) }
 // GET /api/group/invites 获取当前用户收到的群邀请列表
 func (h *Handler) invites(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	userID := q.Get("userId")
-	if userID == "" {
-		util.WriteError(w, 400, "缺少 userId")
-		return
-	}
+	// 只允许查看自己的邀请（收到的或发出的），不再信任 query 中的 userId。
+	userID := meID(r)
 	typ := q.Get("type")
 	var where string
 	var args []any
@@ -2062,14 +2147,23 @@ func (h *Handler) invites(w http.ResponseWriter, r *http.Request) {
 	for _, iv := range invites {
 		groupIDs = append(groupIDs, iv.GroupId)
 	}
-	groupMap := make(map[string]db.Group)
+	// pgx 严格模式：SELECT 部分列必须用字段精确匹配的 struct。
+	type inviteGroupRow struct {
+		ID          string  `db:"id"`
+		Name        string  `db:"name"`
+		Avatar      *string `db:"avatar"`
+		MemberCount int32   `db:"memberCount"`
+	}
+	groupMap := make(map[string]inviteGroupRow)
 	if len(groupIDs) > 0 {
-		groups, err := db.QueryToStructs[db.Group](ctx, h.deps.DB,
+		groups, err := db.QueryToStructs[inviteGroupRow](ctx, h.deps.DB,
 			`SELECT "id","name","avatar","memberCount" FROM "Group" WHERE "id"=ANY($1)`, groupIDs)
 		if err == nil {
 			for _, g := range groups {
-				groupMap[g.Id] = g
+				groupMap[g.ID] = g
 			}
+		} else {
+			log.Printf("[GroupMsg] 关联群信息失败: %v", err)
 		}
 	}
 	userIDs := make([]string, 0, len(invites)*2)
@@ -2106,13 +2200,8 @@ func (h *Handler) invites(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) inviteAccept(w http.ResponseWriter, r *http.Request) {
 	inviteID := r.PathValue("inviteId")
 	var req struct {
-		UserID string `json:"userId"`
 	}
 	if !util.DecodeJSON(w, r, &req) {
-		return
-	}
-	if req.UserID == "" {
-		util.WriteError(w, 400, "缺少 userId")
 		return
 	}
 	ctx := h.ctx(r)
@@ -2126,7 +2215,7 @@ func (h *Handler) inviteAccept(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if iv.InviteeId != req.UserID {
+	if iv.InviteeId != meID(r) {
 		util.WriteError(w, 403, "无权操作此邀请")
 		return
 	}
@@ -2138,7 +2227,7 @@ func (h *Handler) inviteAccept(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, 400, msg)
 		return
 	}
-	if _, ok, err := h.memberRole(ctx, iv.GroupId, req.UserID); err != nil {
+	if _, ok, err := h.memberRole(ctx, iv.GroupId, meID(r)); err != nil {
 		writeErr(w, err)
 		return
 	} else if ok {
@@ -2182,7 +2271,7 @@ func (h *Handler) inviteAccept(w http.ResponseWriter, r *http.Request) {
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO "GroupMember"("id","groupId","userId","role","lastAckSeq","joinTime","createdAt","updatedAt")
 		 VALUES($1,$2,$3,'member',$4,NOW(),NOW(),NOW())`,
-		util.NewID(), iv.GroupId, req.UserID, lastMsgSeq); err != nil {
+		util.NewID(), iv.GroupId, meID(r), lastMsgSeq); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -2195,14 +2284,23 @@ func (h *Handler) inviteAccept(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	u, _ := db.QueryRowToStruct[db.User](ctx, h.deps.DB,
-		`SELECT "nickname","username" FROM "User" WHERE "id"=$1`, req.UserID)
-	userName := req.UserID
+	// pgx 严格模式：SELECT 部分列必须用字段精确匹配的 struct。
+	type inviteAccepterRow struct {
+		Nickname *string `db:"nickname"`
+		Username string  `db:"username"`
+	}
+	u, _ := db.QueryRowToStruct[inviteAccepterRow](ctx, h.deps.DB,
+		`SELECT "nickname","username" FROM "User" WHERE "id"=$1`, meID(r))
+	userName := meID(r)
 	if u != nil {
-		userName = displayName(*u, req.UserID)
+		if s := util.StrVal(u.Nickname); s != "" {
+			userName = s
+		} else if u.Username != "" {
+			userName = u.Username
+		}
 	}
 	h.sysMessage(iv.GroupId, userName+" 通过邀请加入了群聊")
-	log.Printf("[GroupMsg] 用户接受群邀请: inviteId=%s userId=%s groupId=%s", inviteID, req.UserID, iv.GroupId)
+	log.Printf("[GroupMsg] 用户接受群邀请: inviteId=%s userId=%s groupId=%s", inviteID, meID(r), iv.GroupId)
 	util.WriteJSON(w, 200, map[string]any{
 		"ok": true, "message": "已加入群聊", "groupId": iv.GroupId,
 		"groupName": groupName, "groupAvatar": avatarToProxy(util.StrVal(groupAvatar)),
@@ -2213,17 +2311,18 @@ func (h *Handler) inviteAccept(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) inviteReject(w http.ResponseWriter, r *http.Request) {
 	inviteID := r.PathValue("inviteId")
 	var req struct {
-		UserID string `json:"userId"`
 	}
 	if !util.DecodeJSON(w, r, &req) {
 		return
 	}
-	if req.UserID == "" {
-		util.WriteError(w, 400, "缺少 userId")
-		return
-	}
 	ctx := h.ctx(r)
-	iv, err := db.QueryRowToStruct[db.GroupInvite](ctx, h.deps.DB,
+	// pgx 严格模式：SELECT 部分列必须用字段精确匹配的 struct。
+	type groupInviteStatusRow struct {
+		ID        string `db:"id"`
+		InviteeId string `db:"inviteeId"`
+		Status    string `db:"status"`
+	}
+	iv, err := db.QueryRowToStruct[groupInviteStatusRow](ctx, h.deps.DB,
 		`SELECT "id","inviteeId","status" FROM "GroupInvite" WHERE "id"=$1`, inviteID)
 	if err != nil {
 		if db.IsNotFound(err) {
@@ -2233,7 +2332,7 @@ func (h *Handler) inviteReject(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if iv.InviteeId != req.UserID {
+	if iv.InviteeId != meID(r) {
 		util.WriteError(w, 403, "无权操作此邀请")
 		return
 	}
@@ -2250,6 +2349,6 @@ func (h *Handler) inviteReject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	log.Printf("[GroupMsg] 用户拒绝群邀请: inviteId=%s userId=%s", inviteID, req.UserID)
+	log.Printf("[GroupMsg] 用户拒绝群邀请: inviteId=%s userId=%s", inviteID, meID(r))
 	util.WriteJSON(w, 200, map[string]any{"ok": true, "message": "已拒绝群邀请"})
 }

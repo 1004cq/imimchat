@@ -610,7 +610,7 @@ export default function ChatDetailPage() {
   // ===== 群聊：加载群成员列表（用于 @ 提及）=====
   useEffect(() => {
     if (!chat?.groupId) return;
-    fetch(`/api/group/members?groupId=${chat.groupId}`)
+    authFetch(`/api/group/members?groupId=${chat.groupId}`)
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (data?.members && Array.isArray(data.members)) {

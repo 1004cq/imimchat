@@ -318,9 +318,9 @@ type hotTopicsResult struct {
 
 // ============ 批量查询 helpers ============
 
-// getUserLite 按 id 取精简用户。
-func (h *Handler) getUserLite(ctx context.Context, id string) *db.User {
-	u, err := db.QueryRowToStruct[db.User](ctx, h.deps.DB,
+// getUserLite 按 id 取精简用户（SELECT 6 列 → db.UserBrief，避免扫完整 db.User）。
+func (h *Handler) getUserLite(ctx context.Context, id string) *db.UserBrief {
+	u, err := db.QueryRowToStruct[db.UserBrief](ctx, h.deps.DB,
 		`SELECT "id","username","nickname","avatar","backgroundUrl","bio" FROM "User" WHERE "id"=$1`, id)
 	if err != nil {
 		return nil

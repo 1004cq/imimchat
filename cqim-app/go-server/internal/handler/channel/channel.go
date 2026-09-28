@@ -11,6 +11,7 @@ package channel
 // /resolve、/search 公开。
 
 import (
+	"context"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -55,9 +56,12 @@ func RegisterRoutes(mux *http.ServeMux, d *handler.Deps, engine *group.Engine) {
 
 // memberRole 查询用户在频道中的成员角色；不存在返回 ("", false, nil)。
 func (h *Handler) memberRole(r *http.Request, channelID, userID string) (string, bool, error) {
-	m, err := db.QueryRowToStruct[db.GroupMember](r.Context(), h.d.DB,
-		`SELECT "role" FROM "GroupMember" WHERE "groupId"=$1 AND "userId"=$2`, channelID, userID)
-	if err != nil {
+	// 注意：pgx RowToStructByName 为严格模式，SELECT 部分列必须用字段精确匹配的 struct。
+	var m struct {
+		Role string `db:"role"`
+	}
+	if err := h.d.DB.Pool.QueryRow(r.Context(),
+		`SELECT "role" FROM "GroupMember" WHERE "groupId"=$1 AND "userId"=$2`, channelID, userID).Scan(&m.Role); err != nil {
 		if db.IsNotFound(err) {
 			return "", false, nil
 		}
@@ -435,28 +439,42 @@ func (h *Handler) messages(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) my(w http.ResponseWriter, r *http.Request) {
 	u := middleware.UserFrom(r)
-	memberships, err := db.QueryToStructs[db.GroupMember](r.Context(), h.d.DB,
-		`SELECT m.* FROM "GroupMember" m JOIN "Group" g ON g."id"=m."groupId"
+	// 单条 JOIN 查出频道与成员角色：避免 N+1，且 SELECT 列与 struct 精确匹配
+	//（pgx RowToStructByName 为严格模式，不能用完整 db.Group 接部分列）。
+	type myChannelRow struct {
+		Role         string     `db:"role"`
+		JoinTime     time.Time  `db:"joinTime"`
+		ID           string     `db:"id"`
+		DialogId     *string    `db:"dialogId"`
+		Name         string     `db:"name"`
+		Username     *string    `db:"username"`
+		Avatar       *string    `db:"avatar"`
+		Type         string     `db:"type"`
+		IsPublic     bool       `db:"isPublic"`
+		MemberCount  int32      `db:"memberCount"`
+		Announcement *string    `db:"announcement"`
+		LastMsgSeq   int64      `db:"lastMsgSeq"`
+		LastMsgTime  *time.Time `db:"lastMsgTime"`
+	}
+	rows, err := db.QueryToStructs[myChannelRow](r.Context(), h.d.DB,
+		`SELECT m."role", m."joinTime",
+			g."id", g."dialogId", g."name", g."username", g."avatar", g."type", g."isPublic",
+			g."memberCount", g."announcement", g."lastMsgSeq", g."lastMsgTime"
+		 FROM "GroupMember" m JOIN "Group" g ON g."id"=m."groupId"
 		 WHERE m."userId"=$1 AND g."type"='channel' ORDER BY m."joinTime" DESC`, u.Id)
 	if err != nil {
 		util.WriteError(w, 500, err.Error())
 		return
 	}
-	channels := make([]map[string]any, 0, len(memberships))
-	for _, m := range memberships {
-		g, err := db.QueryRowToStruct[db.Group](r.Context(), h.d.DB,
-			`SELECT "id","dialogId","name","username","avatar","type","isPublic","memberCount","announcement","lastMsgSeq","lastMsgTime"
-			 FROM "Group" WHERE "id"=$1`, m.GroupId)
-		if err != nil {
-			continue
-		}
+	channels := make([]map[string]any, 0, len(rows))
+	for _, m := range rows {
 		channels = append(channels, map[string]any{
-			"id": g.Id, "dialogId": strVal(g.DialogId), "name": g.Name,
-			"username": strVal(g.Username), "avatar": avatarToProxy(strVal(g.Avatar)),
-			"type": g.Type, "isPublic": g.IsPublic, "memberCount": g.MemberCount,
-			"announcement": strVal(g.Announcement), "myRole": m.Role,
-			"lastMsgSeq":  strconv.FormatInt(g.LastMsgSeq, 10),
-			"lastMsgTime": g.LastMsgTime, "joinedAt": m.JoinTime,
+			"id": m.ID, "dialogId": strVal(m.DialogId), "name": m.Name,
+			"username": strVal(m.Username), "avatar": avatarToProxy(strVal(m.Avatar)),
+			"type": m.Type, "isPublic": m.IsPublic, "memberCount": m.MemberCount,
+			"announcement": strVal(m.Announcement), "myRole": m.Role,
+			"lastMsgSeq":  strconv.FormatInt(m.LastMsgSeq, 10),
+			"lastMsgTime": m.LastMsgTime, "joinedAt": m.JoinTime,
 		})
 	}
 	util.WriteJSON(w, 200, map[string]any{"channels": channels})
@@ -470,7 +488,19 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, 400, "请输入搜索关键词")
 		return
 	}
-	groups, err := db.QueryToStructs[db.Group](r.Context(), h.d.DB,
+	// 注意：pgx 严格模式，SELECT 部分列必须用字段精确匹配的 struct。
+	type channelSearchRow struct {
+		ID           string  `db:"id"`
+		DialogId     *string `db:"dialogId"`
+		Name         string  `db:"name"`
+		Username     *string `db:"username"`
+		Avatar       *string `db:"avatar"`
+		Type         string  `db:"type"`
+		IsPublic     bool    `db:"isPublic"`
+		MemberCount  int32   `db:"memberCount"`
+		Announcement *string `db:"announcement"`
+	}
+	groups, err := db.QueryToStructs[channelSearchRow](r.Context(), h.d.DB,
 		`SELECT "id","dialogId","name","username","avatar","type","isPublic","memberCount","announcement"
 		 FROM "Group"
 		 WHERE "type"='channel' AND "isPublic"=true
@@ -483,7 +513,7 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
 	channels := make([]map[string]any, 0, len(groups))
 	for _, g := range groups {
 		channels = append(channels, map[string]any{
-			"id": g.Id, "dialogId": strVal(g.DialogId), "name": g.Name,
+			"id": g.ID, "dialogId": strVal(g.DialogId), "name": g.Name,
 			"username": strVal(g.Username), "avatar": avatarToProxy(strVal(g.Avatar)),
 			"type": g.Type, "isPublic": g.IsPublic, "memberCount": g.MemberCount,
 			"announcement": strVal(g.Announcement),
@@ -576,9 +606,10 @@ func (h *Handler) adminAdd(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, 500, err.Error())
 		return
 	}
-	// 发送系统消息（异步，与 TS 一致）
+	// 发送系统消息（异步，与 TS 一致）。
+	// 必须用 WithoutCancel：r.Context() 在 handler 返回后即取消，否则消息大概率发不出。
 	go func() {
-		_, _, _ = h.engine.SendGroupMessage(r.Context(), group.SendParams{
+		_, _, _ = h.engine.SendGroupMessage(context.WithoutCancel(r.Context()), group.SendParams{
 			GroupID: req.ChannelID, SenderID: "system", SenderName: "系统",
 			MsgType: "system", Content: req.TargetUserID + " 已被提升为频道管理员",
 		})
@@ -717,7 +748,8 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 			content += c
 		}
 		go func() {
-			_, _, _ = h.engine.SendGroupMessage(r.Context(), group.SendParams{
+			// WithoutCancel：handler 返回后 r.Context() 即取消，异步发送必须脱离请求生命周期。
+			_, _, _ = h.engine.SendGroupMessage(context.WithoutCancel(r.Context()), group.SendParams{
 				GroupID: req.ChannelID, SenderID: "system", SenderName: "系统",
 				MsgType: "system", Content: content,
 			})

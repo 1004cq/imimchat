@@ -677,6 +677,9 @@ func (e *Engine) PullGroupMessages(ctx context.Context, p PullParams) (map[strin
 	if limit <= 0 {
 		limit = 50
 	}
+	if limit > 200 {
+		limit = 200
+	}
 	mode := "latest"
 	if beforeSeq != nil {
 		mode = "before"
@@ -684,14 +687,10 @@ func (e *Engine) PullGroupMessages(ctx context.Context, p PullParams) (map[strin
 		mode = "after"
 	}
 
-	tx, err := e.deps.DB.Pool.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
+	pool := e.deps.DB.Pool
 
 	var joinTime time.Time
-	if err := tx.QueryRow(ctx,
+	if err := pool.QueryRow(ctx,
 		`SELECT "joinTime" FROM "GroupMember" WHERE "groupId"=$1 AND "userId"=$2`,
 		groupID, userID).Scan(&joinTime); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -701,52 +700,63 @@ func (e *Engine) PullGroupMessages(ctx context.Context, p PullParams) (map[strin
 	}
 
 	var latestSeq int64
-	if err := tx.QueryRow(ctx,
+	if err := pool.QueryRow(ctx,
 		`SELECT COALESCE("lastMsgSeq",0) FROM "Group" WHERE "id"=$1`, groupID).Scan(&latestSeq); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
 	}
 
+	// pgx RowToStructByName 为严格模式：SELECT 部分列必须用字段精确匹配的 struct，
+	// 不能复用完整 db.GroupMessage（会报 cannot find field）。
+	type groupMessageRow struct {
+		ID         string    `db:"id"`
+		GroupId    string    `db:"groupId"`
+		Seq        int64     `db:"seq"`
+		SenderId   string    `db:"senderId"`
+		SenderName *string   `db:"senderName"`
+		MsgType    string    `db:"msgType"`
+		Content    string    `db:"content"`
+		ReplyToId  *string   `db:"replyToId"`
+		IsRevoked  bool      `db:"isRevoked"`
+		Extra      *string   `db:"extra"`
+		CreatedAt  time.Time `db:"createdAt"`
+	}
+
+	// 入群时间下推到 SQL：新成员看不到入群前的历史，且 hasMore 不会因应用层
+	// 过滤掉尾部消息而误判为 false。
+	msgCols := `"id","groupId","seq","senderId","senderName","msgType","content","replyToId","isRevoked","extra","createdAt"`
 	var rows pgx.Rows
+	var err error
 	switch mode {
 	case "before":
-		rows, err = tx.Query(ctx,
-			`SELECT "id","groupId","seq","senderId","senderName","msgType","content","replyToId","isRevoked","extra","createdAt"
-			 FROM "GroupMessage" WHERE "groupId"=$1 AND "seq" < $2 ORDER BY "seq" DESC LIMIT $3`,
-			groupID, *beforeSeq, limit+1)
+		rows, err = pool.Query(ctx,
+			`SELECT `+msgCols+`
+			 FROM "GroupMessage" WHERE "groupId"=$1 AND "seq" < $2 AND "createdAt" >= $3 ORDER BY "seq" DESC LIMIT $4`,
+			groupID, *beforeSeq, joinTime, limit+1)
 	case "after":
 		var a int64
 		if afterSeq != nil {
 			a = *afterSeq
 		}
-		rows, err = tx.Query(ctx,
-			`SELECT "id","groupId","seq","senderId","senderName","msgType","content","replyToId","isRevoked","extra","createdAt"
-			 FROM "GroupMessage" WHERE "groupId"=$1 AND "seq" > $2 ORDER BY "seq" ASC LIMIT $3`,
-			groupID, a, limit+1)
+		rows, err = pool.Query(ctx,
+			`SELECT `+msgCols+`
+			 FROM "GroupMessage" WHERE "groupId"=$1 AND "seq" > $2 AND "createdAt" >= $3 ORDER BY "seq" ASC LIMIT $4`,
+			groupID, a, joinTime, limit+1)
 	default:
-		rows, err = tx.Query(ctx,
-			`SELECT "id","groupId","seq","senderId","senderName","msgType","content","replyToId","isRevoked","extra","createdAt"
-			 FROM "GroupMessage" WHERE "groupId"=$1 ORDER BY "seq" DESC LIMIT $2`,
-			groupID, limit+1)
+		rows, err = pool.Query(ctx,
+			`SELECT `+msgCols+`
+			 FROM "GroupMessage" WHERE "groupId"=$1 AND "createdAt" >= $2 ORDER BY "seq" DESC LIMIT $3`,
+			groupID, joinTime, limit+1)
 	}
 	if err != nil {
 		return nil, err
 	}
-	messages, err := pgx.CollectRows(rows, pgx.RowToStructByName[db.GroupMessage])
+	messages, err := pgx.CollectRows(rows, pgx.RowToStructByName[groupMessageRow])
 	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 
-	// 应用层过滤入群前的历史
-	filtered := messages[:0]
-	for _, m := range messages {
-		if !m.CreatedAt.Before(joinTime) {
-			filtered = append(filtered, m)
-		}
-	}
-	hasMore := len(filtered) > limit
+	hasMore := len(messages) > limit
+	filtered := messages
 	if hasMore {
 		filtered = filtered[:limit]
 	}
@@ -791,7 +801,7 @@ func (e *Engine) PullGroupMessages(ctx context.Context, p PullParams) (map[strin
 			senderName = m.SenderId
 		}
 		pm := PulledMessage{
-			ID:           m.Id,
+			ID:           m.ID,
 			Seq:          m.Seq,
 			SenderID:     m.SenderId,
 			SenderName:   senderName,

@@ -8,7 +8,7 @@ import { X, Search, Check, Users, Loader2, ChevronRight } from 'lucide-react';
 import { DoveAvatar } from '@/components/DoveAvatar';
 import { toast } from 'sonner';
 import { useApp, useAppActions } from '@/contexts/AppContext';
-import { authApi } from '@/lib/authFetch';
+import { authApi, authFetch } from '@/lib/authFetch';
 
 interface Friend {
   id: string;
@@ -104,7 +104,7 @@ export const CreateGroupModal: React.FC<CreateGroupModalProps> = ({ onClose, onG
     }
     setCreating(true);
     try {
-      const res = await fetch('/api/group/create', {
+      const res = await authFetch('/api/group/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

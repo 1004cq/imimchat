@@ -12,6 +12,7 @@ import { ChevronLeft, Loader2, Download, Share2, MessageCircle, Copy } from 'luc
 import QRCode from 'qrcode';
 import { toast } from 'sonner';
 import { publicUrl as siteUrl } from '@/lib/publicUrl';
+import { authFetch } from '@/lib/authFetch';
 
 interface MemberAvatar {
   userId: string;
@@ -167,7 +168,7 @@ export const GroupQRCodePage: React.FC<GroupQRCodePageProps> = ({
       } else {
         try {
           const userId = localStorage.getItem('user_id') || '';
-          const res = await fetch('/api/group/qrcode', {
+          const res = await authFetch('/api/group/qrcode', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ groupId, userId }),

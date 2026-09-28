@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { CURRENT_USER, type UserPrivacySettings } from '@/lib/store';
 import { DoveAvatar } from '@/components/DoveAvatar';
-import { authApi } from '@/lib/authFetch';
+import { authApi, authFetch } from '@/lib/authFetch';
 import { toast } from 'sonner';
 import { useApp, useAppActions } from '@/contexts/AppContext';
 
@@ -571,7 +571,7 @@ export default function AddFriendPage({ onBack, initialTab = 'search' }: AddFrie
   const loadGroupInvites = useCallback(async () => {
     if (!state.isLoggedIn || !state.currentUser?.id) return;
     try {
-      const data = await fetch(`/api/group/invites?userId=${state.currentUser.id}&type=all`).then(r => r.json());
+      const data = await authFetch(`/api/group/invites?type=all`).then(r => r.json());
       setGroupInvites(data.invites || []);
     } catch (err: any) {
       console.error('加载群聊邀请失败:', err);
@@ -700,7 +700,7 @@ export default function AddFriendPage({ onBack, initialTab = 'search' }: AddFrie
       const userId = state.currentUser?.id;
       if (!userId) { toast.error('请先登录'); return; }
 
-      const res = await fetch(`/api/group/invite-accept/${id}`, {
+      const res = await authFetch(`/api/group/invite-accept/${id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId }),
@@ -741,7 +741,7 @@ export default function AddFriendPage({ onBack, initialTab = 'search' }: AddFrie
       const userId = state.currentUser?.id;
       if (!userId) { toast.error('请先登录'); return; }
 
-      const res = await fetch(`/api/group/invite-reject/${id}`, {
+      const res = await authFetch(`/api/group/invite-reject/${id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId }),

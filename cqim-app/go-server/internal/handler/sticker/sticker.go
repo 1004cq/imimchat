@@ -137,7 +137,7 @@ func RegisterRoutes(mux *http.ServeMux, d *handler.Deps) {
 	mux.Handle("GET /api/stickers/packs/{packId}", auth(http.HandlerFunc(h.packDetail)))
 	mux.Handle("GET /api/stickers/search", auth(http.HandlerFunc(h.search)))
 	mux.Handle("GET /api/stickers/status", auth(http.HandlerFunc(h.status)))
-	mux.Handle("POST /api/stickers/reload", auth(http.HandlerFunc(h.reload)))
+	mux.Handle("POST /api/stickers/reload", d.Auth.AdminAuth(http.HandlerFunc(h.reload)))
 }
 
 // resolveStickerDir 解析贴纸数据目录。

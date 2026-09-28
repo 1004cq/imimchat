@@ -200,9 +200,12 @@ func seedSystemConfigs(ctx context.Context, database *db.DB) {
 		"emailTemplates": `{"verifyCode":{"subject":"您的验证码","body":"<p>您的验证码是：<strong>{{code}}</strong>，{{expire}}分钟内有效。</p>","expireMinutes":5},"welcome":{"subject":"欢迎加入 CQIM","body":"<p>您好 {{username}}，欢迎注册 CQIM！</p>","enabled":true},"resetPassword":{"subject":"重置密码","body":"<p>点击以下链接重置密码：<a href=\"{{link}}\">重置密码</a>，链接{{expire}}分钟内有效。</p>","expireMinutes":30},"loginAlert":{"subject":"异地登录通知","body":"<p>检测到您的账号在新设备登录，请确认是否为本人操作。</p>","enabled":true}}`,
 	}
 	for key, value := range seeds {
-		_, _ = database.Exec(ctx,
-			`INSERT INTO "SystemConfig"("id","key","value","createdAt","updatedAt") VALUES($1,$2,$3,NOW(),NOW())
-ON CONFLICT("key") DO NOTHING`, util.NewID(), key, value)
+		// SystemConfig 表只有 (key, value, updatedAt) 三列，无 id/createdAt。
+		if _, err := database.Exec(ctx,
+			`INSERT INTO "SystemConfig"("key","value","updatedAt") VALUES($1,$2,NOW())
+ON CONFLICT("key") DO NOTHING`, key, value); err != nil {
+			log.Printf("[Seed] 写入系统配置失败: key=%s err=%v", key, err)
+		}
 	}
 }
 

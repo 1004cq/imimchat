@@ -64,11 +64,51 @@ export interface SignalEnvelope {
   usedOneTimePreKeyId?: number;
   /** 发起方使用的对端 Signed PreKey id */
   usedSignedPreKeyId?: number;
+  /**
+   * iOS 兼容别名：iOS 端发送/读取的字段名，语义与 used*PreKeyId 完全相同。
+   * 接收时 used* 与 recipient* 任一存在即可；发送时同时写入两套，保证双端可解析。
+   */
+  recipientOneTimePreKeyId?: number;
+  recipientSignedPreKeyId?: number;
   senderRatchetKey: string;
   previousCounter: number;
   counter: number;
   ciphertext: EncryptedPayload;
   timestamp: number;
+}
+
+/**
+ * 解析信封中的 PreKey ID（纯函数）。
+ * 兼容 iOS 字段名 recipient*PreKeyId（语义与 used*PreKeyId 完全相同）；
+ * 两套同时存在时 used* 优先。
+ */
+export function resolvePreKeyIds(envelope: SignalEnvelope): {
+  signedPreKeyId?: number;
+  oneTimePreKeyId?: number;
+} {
+  return {
+    signedPreKeyId: envelope.usedSignedPreKeyId ?? envelope.recipientSignedPreKeyId,
+    oneTimePreKeyId: envelope.usedOneTimePreKeyId ?? envelope.recipientOneTimePreKeyId,
+  };
+}
+
+/**
+ * 对端重建会话检测（纯函数）。
+ * 本地会话已建立（receiveChainKey 非空）且对端身份未变时，
+ * 若 prekey 携带了与上次不同的 ephemeral key，说明对端丢过会话后重新发起，
+ * 必须重建本地会话（否则用旧 rootKey 做 DH 棘轮，双方永久无法解密）。
+ * 同一把 ephemeral key 的重复 prekey（如网络重试/延迟到达）返回 false。
+ */
+export function isPeerRebuilt(
+  receiveChainKey: string | null | undefined,
+  lastPrekeyEphemeralKey: string | undefined,
+  senderEphemeralKey: string | undefined,
+): boolean {
+  return (
+    !!receiveChainKey &&
+    !!senderEphemeralKey &&
+    senderEphemeralKey !== lastPrekeyEphemeralKey
+  );
 }
 
 /** Double Ratchet 会话状态 */
@@ -122,12 +162,49 @@ export interface SessionInfo {
 }
 
 // ============================================================
+// SPA 账号切换 / 旧注册迁移的决策逻辑（纯函数，便于单测）
+// ============================================================
+
+/**
+ * SPA 内切换账号时是否需要重置内存中的密钥状态（纯函数）。
+ * 单例已初始化但 localStorage 中的登录用户变了（退出后直接登录另一账号、无页面刷新），
+ * 旧内存中的身份密钥/会话不可复用。
+ */
+export function shouldResetMemoryOnUserChange(
+  initialized: boolean,
+  ownerUserId: string | null,
+  currentUserId: string | null,
+): boolean {
+  return initialized && ownerUserId !== currentUserId;
+}
+
+export type RegistrationAction = 'load' | 'migrate-bind' | 'clear-regenerate' | 'generate';
+
+/**
+ * 本地注册信息的处理决策（纯函数）：
+ * - generate：无本地注册，全新生成
+ * - migrate-bind：老版本注册没有绑定 userId → 补写绑定、保留历史密钥（不能删）
+ * - load：注册归属当前用户（或未登录兜底）→ 直接加载
+ * - clear-regenerate：注册归属另一账号 → 清空后重新生成
+ */
+export function decideRegistrationAction(
+  existing: { userId?: string } | null | undefined,
+  currentUserId: string | null,
+): RegistrationAction {
+  if (!existing) return 'generate';
+  if (currentUserId && !existing.userId) return 'migrate-bind';
+  if (!currentUserId || existing.userId === currentUserId) return 'load';
+  return 'clear-regenerate';
+}
+
+// ============================================================
 // E2EEManager 单例
 // ============================================================
 
 export class E2EEManager {
   private store: SignalStore;
   private _initialized = false;
+  private _ownerUserId: string | null = null; // 单例绑定的登录用户：SPA 内切账号必须重置
   private _registrationId = 0;
   private _identityKeyPair: KeyPairB64 | null = null;
   private _signingKeyPair: KeyPairB64 | null = null;
@@ -170,14 +247,37 @@ export class E2EEManager {
    * - 如果没有，生成新的 Identity Key、Signed PreKey、One-Time PreKeys
    */
   async initialize(): Promise<void> {
-    if (this._initialized) return;
+    const currentUserId = typeof localStorage !== 'undefined' ? localStorage.getItem('user_id') : null;
+
+    // 单例必须绑定 owner：SPA 内退出后直接登录另一账号（无页面刷新）时，
+    // 旧内存中的身份密钥/会话不可复用，必须先重置再走正常初始化流程。
+    if (shouldResetMemoryOnUserChange(this._initialized, this._ownerUserId, currentUserId)) {
+      console.log('[E2EE] 检测到登录用户变化，重置内存中的密钥状态');
+      this._initialized = false;
+      this._registrationId = 0;
+      this._identityKeyPair = null;
+      this._signingKeyPair = null;
+      this._ownerUserId = null;
+      if (e2eeProxy.isWorkerAvailable) {
+        try { await e2eeProxy.reset(); } catch { /* worker 不可用时忽略 */ }
+      }
+    }
 
     await this.store.init();
 
     // 检查已有注册：必须与当前登录用户匹配，否则切账号后密钥错乱
-    const currentUserId = typeof localStorage !== 'undefined' ? localStorage.getItem('user_id') : null;
-    const existing = await this.store.getLocalRegistration();
-    if (existing && (!currentUserId || existing.userId === currentUserId)) {
+    let existing = await this.store.getLocalRegistration();
+
+    const action = decideRegistrationAction(existing, currentUserId);
+
+    // 老版本注册信息没有绑定 userId：补写绑定而非删除，避免误删历史身份密钥/会话
+    if (action === 'migrate-bind' && existing && currentUserId) {
+      existing = { ...existing, userId: currentUserId };
+      await this.store.saveLocalRegistration(existing);
+      console.log('[E2EE] 已为旧注册信息补写用户绑定，保留历史密钥');
+    }
+
+    if ((action === 'load' || action === 'migrate-bind') && existing) {
       this._registrationId = existing.registrationId;
       this._identityKeyPair = {
         pubKey: existing.identityKeyPair.pubKey,
@@ -188,6 +288,7 @@ export class E2EEManager {
         ?? null;
       await this.ensureSigningKeyPair();
       await this.ensureSignedPreKeyMatchesSigningKey();
+      this._ownerUserId = currentUserId;
       this._initialized = true;
       
       // 启动 Worker 代理（极致优化：计算密集型任务后台化）。
@@ -198,13 +299,14 @@ export class E2EEManager {
       return;
     }
 
-    if (existing && currentUserId && existing.userId !== currentUserId) {
+    if (action === 'clear-regenerate') {
       console.log('[E2EE] 检测到账号切换，清除旧密钥重新生成');
       await this.store.clearAll();
     }
 
     // 生成新的密钥材料
     await this.generateLocalKeys();
+    this._ownerUserId = currentUserId;
     this._initialized = true;
     
     // 启动 Worker 代理（极致优化：计算密集型任务后台化）。
@@ -676,9 +778,12 @@ export class E2EEManager {
       envelope.senderEphemeralKey = sessionData.ephemeralKey;
       if (sessionData.usedOneTimePreKeyId != null) {
         envelope.usedOneTimePreKeyId = sessionData.usedOneTimePreKeyId;
+        // iOS 兼容：同时写入 iOS 端读取的字段名
+        envelope.recipientOneTimePreKeyId = sessionData.usedOneTimePreKeyId;
       }
       if (sessionData.usedSignedPreKeyId != null) {
         envelope.usedSignedPreKeyId = sessionData.usedSignedPreKeyId;
+        envelope.recipientSignedPreKeyId = sessionData.usedSignedPreKeyId;
       }
     }
 
@@ -779,6 +884,21 @@ export class E2EEManager {
         return envelope.senderIdentityKey > this._identityKeyPair.pubKey;
       }
 
+      // 对端重建会话检测：本地会话已建立（有接收链）且对端身份未变，
+      // 但 prekey 用了新的 ephemeral key → 对端丢过会话后重新发起，必须重建。
+      // 否则会用旧 rootKey 做 DH 棘轮，双方 rootKey 不同，双向永久无法解密。
+      // 同一把 ephemeral key 的重复 prekey（如网络重试/延迟到达）则不重建。
+      if (
+        isPeerRebuilt(
+          state.receiveChainKey,
+          sessionData.lastPrekeyEphemeralKey,
+          envelope.senderEphemeralKey,
+        )
+      ) {
+        console.log('[E2EE] 对端重建了会话（新的 ephemeral key），替换本地会话');
+        return true;
+      }
+
       return false;
     } catch {
       return true;
@@ -807,9 +927,15 @@ export class E2EEManager {
 
     console.log('[E2EE] 作为响应方完成 X3DH，对端:', peerId);
 
+    // 兼容 iOS 字段名：recipient*PreKeyId（语义与 used*PreKeyId 完全相同）。
+    // iOS 发来的 prekey 信封里只有 recipient* 字段；没有别名会导致取错 PreKey，
+    // X3DH 两边 DH 结果长度不一致，rootKey 必然不同，会话永久无法解密。
+    const { signedPreKeyId: usedSignedPreKeyId, oneTimePreKeyId: usedOneTimePreKeyId } =
+      resolvePreKeyIds(envelope);
+
     let signedPreKey =
-      envelope.usedSignedPreKeyId != null
-        ? await this.store.getSignedPreKey(envelope.usedSignedPreKeyId)
+      usedSignedPreKeyId != null
+        ? await this.store.getSignedPreKey(usedSignedPreKeyId)
         : undefined;
     if (!signedPreKey) {
       const all = await this.store.getAllSignedPreKeys();
@@ -818,11 +944,11 @@ export class E2EEManager {
     if (!signedPreKey) throw new Error('没有可用的 Signed PreKey');
 
     let oneTimePreKey: PreKeyRecord | undefined;
-    if (envelope.usedOneTimePreKeyId != null) {
-      oneTimePreKey = await this.store.getPreKey(envelope.usedOneTimePreKeyId);
+    if (usedOneTimePreKeyId != null) {
+      oneTimePreKey = await this.store.getPreKey(usedOneTimePreKeyId);
       if (!oneTimePreKey) {
         throw new Error(
-          `One-Time PreKey ${envelope.usedOneTimePreKeyId} 不存在或已消耗`,
+          `One-Time PreKey ${usedOneTimePreKeyId} 不存在或已消耗`,
         );
       }
     }
@@ -885,6 +1011,9 @@ export class E2EEManager {
       sessionData: JSON.stringify({
         ratchetState,
         role: 'responder',
+        // 记录本次 prekey 的临时公钥：对端重建会话后会换新的 ephemeral key，
+        // 凭此可区分"对端重建"与"重复/延迟到达的旧 prekey"
+        lastPrekeyEphemeralKey: envelope.senderEphemeralKey,
       }),
       updatedAt: Date.now(),
     });

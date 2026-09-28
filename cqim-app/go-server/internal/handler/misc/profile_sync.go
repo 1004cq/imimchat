@@ -89,12 +89,24 @@ func PublishUserProfileUpdated(d *handler.Deps, u UserProfileSyncSource) error {
 	return d.Redis.Publish(ctx, profileSyncChannel, string(payload))
 }
 
+// profileSyncUserRow 是 PublishUserProfileUpdatedById 读取的精确列集合
+// （SELECT 只取这 7 列，不能扫完整 db.User，避免缺列零值混入广播）。
+type profileSyncUserRow struct {
+	Id            string    `db:"id"`
+	Nickname      *string   `db:"nickname"`
+	Avatar        *string   `db:"avatar"`
+	Username      string    `db:"username"`
+	Bio           *string   `db:"bio"`
+	BackgroundUrl *string   `db:"backgroundUrl"`
+	UpdatedAt     time.Time `db:"updatedAt"`
+}
+
 // PublishUserProfileUpdatedById 按 userId 从库读取并广播（管理员/遗留接口在 update 后调用）。
 // 用户不存在时静默返回 nil（与 TS 一致）。
 func PublishUserProfileUpdatedById(d *handler.Deps, userID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	u, err := db.QueryRowToStruct[db.User](ctx, d.DB,
+	u, err := db.QueryRowToStruct[profileSyncUserRow](ctx, d.DB,
 		`SELECT "id","nickname","avatar","username","bio","backgroundUrl","updatedAt" FROM "User" WHERE "id"=$1`, userID)
 	if err != nil {
 		if db.IsNotFound(err) {

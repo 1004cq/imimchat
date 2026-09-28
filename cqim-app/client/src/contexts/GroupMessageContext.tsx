@@ -7,6 +7,7 @@
 
 import React, { createContext, useContext, useCallback, useRef, useEffect, useReducer, type ReactNode } from 'react';
 import { loadGroupMessagesFromLocalDb, persistGroupMessages } from '@/lib/localdb';
+import { authFetch } from '@/lib/authFetch';
 
 // ============ 类型定义 ============
 
@@ -406,8 +407,8 @@ export function GroupMessageProvider({ children, userId }: { children: ReactNode
     }
 
     try {
-      const params = new URLSearchParams({ groupId, userId, limit: '50' });
-      const resp = await fetch(`/api/group/messages?${params}`);
+      const params = new URLSearchParams({ groupId, limit: '50' });
+      const resp = await authFetch(`/api/group/messages?${params}`);
       if (!resp.ok) throw new Error('加载失败');
       const data = await resp.json();
 
@@ -440,12 +441,12 @@ export function GroupMessageProvider({ children, userId }: { children: ReactNode
         ? Math.min(...gs.messages.map(m => m.seq))
         : undefined;
 
-      const params = new URLSearchParams({ groupId, userId, limit: '50' });
+      const params = new URLSearchParams({ groupId, limit: '50' });
       if (oldestSeq !== undefined && oldestSeq > 1) {
         params.set('beforeSeq', String(oldestSeq));
       }
 
-      const resp = await fetch(`/api/group/messages?${params}`);
+      const resp = await authFetch(`/api/group/messages?${params}`);
       if (!resp.ok) throw new Error('加载失败');
       const data = await resp.json();
 

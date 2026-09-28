@@ -231,8 +231,13 @@ func (h *Handler) findProfileUser(ctx context.Context, userID string) *profileUs
 
 var usernameRe = regexp.MustCompile(`^[a-zA-Z0-9_]{1,20}$`)
 
-// PUT /api/profile — 更新当前用户个人资料（optionalAuth）。
+// PUT /api/profile — 更新当前用户个人资料（必须登录，且只能改自己的资料）。
 func (h *Handler) putProfile(w http.ResponseWriter, r *http.Request) {
+	tokenUser := middleware.UserFrom(r)
+	if tokenUser == nil {
+		util.WriteError(w, 401, "未登录")
+		return
+	}
 	var body struct {
 		UserID        string  `json:"userId"`
 		Name          *string `json:"name"`
@@ -250,12 +255,12 @@ func (h *Handler) putProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID := body.UserID
-	if userID == "" {
-		userID = "me"
-	}
-	tokenUser := middleware.UserFrom(r)
-	if (userID == "me" || userID == "") && tokenUser != nil {
+	if userID == "" || userID == "me" {
 		userID = tokenUser.Id
+	}
+	if userID != tokenUser.Id {
+		util.WriteError(w, 403, "无权修改他人资料")
+		return
 	}
 	ctx := r.Context()
 

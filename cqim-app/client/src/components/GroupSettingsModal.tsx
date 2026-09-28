@@ -12,6 +12,7 @@ import { DoveAvatar } from '@/components/DoveAvatar';
 import { GroupQRCodePage } from '@/components/GroupQRCodePage';
 import { toast } from 'sonner';
 import { publicUrl, publicHostPath } from '@/lib/publicUrl';
+import { authFetch } from '@/lib/authFetch';
 
 interface GroupInfo {
   id: string;
@@ -119,7 +120,7 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
   useEffect(() => {
     const fetchGroupInfo = async () => {
       try {
-        const res = await fetch(`/api/group/info?groupId=${encodeURIComponent(groupId)}`);
+        const res = await authFetch(`/api/group/info?groupId=${encodeURIComponent(groupId)}`);
         if (!res.ok) throw new Error('获取群信息失败');
         const data = await res.json();
         setGroupInfo(data);
@@ -128,7 +129,7 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
         setAnnouncement(data.announcement || '');
 
         // 获取我的角色
-        const membersRes = await fetch(`/api/group/members?groupId=${encodeURIComponent(groupId)}`);
+        const membersRes = await authFetch(`/api/group/members?groupId=${encodeURIComponent(groupId)}`);
         if (membersRes.ok) {
           const membersData = await membersRes.json();
           const me = membersData.members?.find((m: any) => m.userId === currentUserId);
@@ -152,7 +153,7 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
   const fetchMembers = useCallback(async () => {
     setLoadingMembers(true);
     try {
-      const res = await fetch(`/api/group/members?groupId=${encodeURIComponent(groupId)}`);
+      const res = await authFetch(`/api/group/members?groupId=${encodeURIComponent(groupId)}`);
       if (!res.ok) throw new Error('获取成员列表失败');
       const data = await res.json();
       setMembers(data.members || []);
@@ -166,7 +167,7 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
   const fetchInviteLinks = useCallback(async () => {
     setLoadingInviteLinks(true);
     try {
-      const res = await fetch(`/api/group/invite/list?groupId=${encodeURIComponent(groupId)}`);
+      const res = await authFetch(`/api/group/invite/list?groupId=${encodeURIComponent(groupId)}`);
       if (!res.ok) throw new Error('获取邀请链接失败');
       const data = await res.json();
       setInviteLinks(Array.isArray(data.links) ? data.links : []);
@@ -214,7 +215,7 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
 
     setCreatingInvite(true);
     try {
-      const res = await fetch('/api/group/invite/create', {
+      const res = await authFetch('/api/group/invite/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -257,7 +258,7 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
   const handleRevokeInvite = useCallback(async (hash: string) => {
     if (!confirm('确定要撤销这个邀请链接吗？')) return;
     try {
-      const res = await fetch('/api/group/invite/revoke', {
+      const res = await authFetch('/api/group/invite/revoke', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ hash, creatorId: currentUserId }),
@@ -277,7 +278,7 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
     if (name.trim() === (groupInfo?.name || currentGroupName)) { setEditingName(false); return; }
     setSaving(true);
     try {
-      const res = await fetch('/api/group/update/name', {
+      const res = await authFetch('/api/group/update/name', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ groupId, userId: currentUserId, name: name.trim() }),
@@ -304,7 +305,7 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
     if (username === (groupInfo?.username || '')) { setEditingUsername(false); return; }
     setSaving(true);
     try {
-      const res = await fetch('/api/group/update/username', {
+      const res = await authFetch('/api/group/update/username', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ groupId, userId: currentUserId, username: username || null }),
@@ -336,7 +337,7 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
       setUploadingAvatar(true);
       try {
         const base64 = dataUrl.split(',')[1];
-        const res = await fetch('/api/group/update/avatar', {
+        const res = await authFetch('/api/group/update/avatar', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ groupId, userId: currentUserId, dataBase64: base64, mimeType: file.type }),
@@ -361,7 +362,7 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
   const handleSaveAnnouncement = useCallback(async () => {
     setSavingAnnouncement(true);
     try {
-      const res = await fetch('/api/group/announcement', {
+      const res = await authFetch('/api/group/announcement', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ groupId, userId: currentUserId, announcement: announcement.trim() || null }),
@@ -383,7 +384,7 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
     if (!confirm('确定要退出该群聊吗？')) return;
     setOperating(true);
     try {
-      const res = await fetch('/api/group/leave', {
+      const res = await authFetch('/api/group/leave', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ groupId, userId: currentUserId }),
@@ -405,7 +406,7 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
     if (!confirm('确定要解散该群聊吗？此操作不可撤销！')) return;
     setOperating(true);
     try {
-      const res = await fetch('/api/group/dissolve', {
+      const res = await authFetch('/api/group/dissolve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ groupId, ownerId: currentUserId }),
@@ -427,7 +428,7 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
     if (!confirm('确定要将该成员移出群聊吗？')) return;
     setOperating(true);
     try {
-      const res = await fetch('/api/group/kick', {
+      const res = await authFetch('/api/group/kick', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ groupId, operatorId: currentUserId, targetUserId }),
@@ -449,7 +450,7 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
   const handleToggleAdmin = useCallback(async (targetUserId: string, isCurrentlyAdmin: boolean) => {
     setOperating(true);
     try {
-      const res = await fetch('/api/group/admin/set', {
+      const res = await authFetch('/api/group/admin/set', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ groupId, ownerId: currentUserId, targetUserId, isAdmin: !isCurrentlyAdmin }),
@@ -473,7 +474,7 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
     if (!confirm('确定要将群主转让给该成员吗？转让后你将变为管理员。')) return;
     setOperating(true);
     try {
-      const res = await fetch('/api/group/transfer', {
+      const res = await authFetch('/api/group/transfer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ groupId, ownerId: currentUserId, newOwnerId }),
@@ -496,7 +497,7 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
   const handleMute = useCallback(async (targetUserId: string, duration: number) => {
     setOperating(true);
     try {
-      const res = await fetch('/api/group/mute', {
+      const res = await authFetch('/api/group/mute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ groupId, operatorId: currentUserId, targetUserId, duration }),

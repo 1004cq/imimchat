@@ -668,7 +668,7 @@ func (h *Handler) publish(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, 401, "未登录")
 		return
 	}
-	if !checkLimit(publishLimiter, "publish:" + me.Id) {
+	if !checkLimit(publishLimiter, "publish:"+me.Id) {
 		util.WriteError(w, 429, "发布过于频繁，请稍后再试")
 		return
 	}
@@ -876,6 +876,28 @@ func (h *Handler) myMoments(w http.ResponseWriter, r *http.Request) {
 	util.WriteJSON(w, 200, map[string]any{"moments": items})
 }
 
+// canViewMoment 判断调用者是否有权查看单条动态（与 list feed 的可见性规则一致）。
+func (h *Handler) canViewMoment(ctx context.Context, me *db.User, m *db.Moment) bool {
+	switch m.Visibility {
+	case "private":
+		return me != nil && me.Id == m.UserId
+	case "friends":
+		if me == nil {
+			return false
+		}
+		if me.Id == m.UserId {
+			return true
+		}
+		friendIDs, err := h.getFriendIDs(ctx, me.Id)
+		if err != nil {
+			return false
+		}
+		return containsStr(friendIDs, m.UserId)
+	default: // public
+		return true
+	}
+}
+
 // detail 获取单条动态（未登录结果走 Redis 缓存 2 分钟）。
 func (h *Handler) detail(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -897,6 +919,13 @@ func (h *Handler) detail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if notFound {
+		util.WriteError(w, 404, "动态不存在")
+		return
+	}
+
+	// 可见性校验（与 list feed 一致）：private 仅作者本人；friends 仅作者好友；
+	// 未登录只能看 public。之前缺失此检查，匿名可读私密动态全文。
+	if !h.canViewMoment(ctx, me, m) {
 		util.WriteError(w, 404, "动态不存在")
 		return
 	}
@@ -991,7 +1020,7 @@ func (h *Handler) like(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, 401, "未登录")
 		return
 	}
-	if !checkLimit(likeLimiter, "like:" + me.Id) {
+	if !checkLimit(likeLimiter, "like:"+me.Id) {
 		util.WriteError(w, 429, "操作过于频繁，请稍后再试")
 		return
 	}
@@ -1074,7 +1103,7 @@ func (h *Handler) postComment(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, 400, "评论内容超出长度限制（1000 字）")
 		return
 	}
-	if !checkLimit(commentLimiter, "comment:" + me.Id) {
+	if !checkLimit(commentLimiter, "comment:"+me.Id) {
 		util.WriteError(w, 429, "评论过于频繁，请稍后再试")
 		return
 	}

@@ -37,11 +37,32 @@ type convItem struct {
 	Peer          convPeer `json:"peer"`
 }
 
+// homeUserRow 与 homeAnnouncementRow：pgx RowToStructByName 为严格模式，
+// SELECT 部分列时必须用字段精确匹配的 struct，不能复用完整 models。
+type homeUserRow struct {
+	ID        string    `db:"id"`
+	Username  string    `db:"username"`
+	Nickname  *string   `db:"nickname"`
+	Avatar    *string   `db:"avatar"`
+	Bio       *string   `db:"bio"`
+	Role      string    `db:"role"`
+	Phone     *string   `db:"phone"`
+	CreatedAt time.Time `db:"createdAt"`
+}
+
+type homeAnnouncementRow struct {
+	ID        string    `db:"id"`
+	Title     string    `db:"title"`
+	Content   string    `db:"content"`
+	Type      string    `db:"type"`
+	CreatedAt time.Time `db:"createdAt"`
+}
+
 func (h *Handler) homeSync(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	userID := middleware.UserFrom(r).Id
 
-	user, err := db.QueryRowToStruct[db.User](ctx, h.deps.DB,
+	user, err := db.QueryRowToStruct[homeUserRow](ctx, h.deps.DB,
 		`SELECT "id","username","nickname","avatar","bio","role","phone","createdAt" FROM "User" WHERE "id"=$1`, userID)
 	if err != nil {
 		if db.IsNotFound(err) {
@@ -53,7 +74,7 @@ func (h *Handler) homeSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ann, err := db.QueryRowToStruct[db.Announcement](ctx, h.deps.DB,
+	ann, err := db.QueryRowToStruct[homeAnnouncementRow](ctx, h.deps.DB,
 		`SELECT "id","title","content","type","createdAt" FROM "Announcement" WHERE "isActive"=true ORDER BY "createdAt" DESC LIMIT 1`)
 	if err != nil && !db.IsNotFound(err) {
 		log.Printf("[HomeSync] 查询公告失败: %v", err)
@@ -85,7 +106,7 @@ func (h *Handler) homeSync(w http.ResponseWriter, r *http.Request) {
 	groups := h.getUserGroups(ctx, userID)
 
 	userJSON := map[string]any{
-		"id":        user.Id,
+		"id":        user.ID,
 		"username":  user.Username,
 		"nickname":  user.Nickname,
 		"avatar":    avatarToProxy(util.StrVal(user.Avatar)),
@@ -97,7 +118,7 @@ func (h *Handler) homeSync(w http.ResponseWriter, r *http.Request) {
 	var annJSON any
 	if ann != nil {
 		annJSON = map[string]any{
-			"id": ann.Id, "title": ann.Title, "content": ann.Content,
+			"id": ann.ID, "title": ann.Title, "content": ann.Content,
 			"type": ann.Type, "createdAt": ann.CreatedAt,
 		}
 	}

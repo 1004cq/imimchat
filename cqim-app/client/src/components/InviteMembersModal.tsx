@@ -9,7 +9,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { X, Search, Check, Users, Loader2, ChevronLeft, UserPlus } from 'lucide-react';
 import { DoveAvatar } from '@/components/DoveAvatar';
 import { toast } from 'sonner';
-import { authApi } from '@/lib/authFetch';
+import { authApi, authFetch } from '@/lib/authFetch';
 
 interface Friend {
   id: string;
@@ -114,7 +114,7 @@ export const InviteMembersModal: React.FC<InviteMembersModalProps> = ({
     }
     setInviting(true);
     try {
-      const res = await fetch('/api/group/invite-members', {
+      const res = await authFetch('/api/group/invite-members', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

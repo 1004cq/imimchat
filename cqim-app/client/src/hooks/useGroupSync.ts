@@ -14,6 +14,7 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { toast } from 'sonner';
 import { CURRENT_USER } from '@/lib/store';
 import { e2eeProxy } from '@/lib/e2ee/WorkerProxy';
+import { authFetch } from '@/lib/authFetch';
 import {
   loadGroupMessagesFromLocalDb,
   persistGroupMessages,
@@ -314,16 +315,12 @@ export function useGroupSync(options: UseGroupSyncOptions) {
 
   const pullMessages = useCallback(async (afterSeq?: number): Promise<GroupMessage[]> => {
     try {
-      const params = new URLSearchParams({
-        groupId,
-        userId,
-        limit: String(pageSize),
-      });
+      const params = new URLSearchParams({ groupId, limit: String(pageSize) });
       if (afterSeq !== undefined) {
         params.set('afterSeq', String(afterSeq));
       }
 
-      const resp = await fetch(`/api/group/messages?${params}`);
+      const resp = await authFetch(`/api/group/messages?${params}`);
       if (!resp.ok) throw new Error('拉取失败');
 
       const data = await resp.json();
@@ -452,17 +449,13 @@ export function useGroupSync(options: UseGroupSyncOptions) {
         ? Math.min(...currentMessages.map(m => m.seq))
         : undefined;
 
-      const params = new URLSearchParams({
-        groupId,
-        userId,
-        limit: String(pageSize),
-      });
+      const params = new URLSearchParams({ groupId, limit: String(pageSize) });
 
       if (oldestSeq !== undefined && oldestSeq > 1) {
         params.set('beforeSeq', String(oldestSeq));
       }
 
-      const resp = await fetch(`/api/group/messages?${params}`);
+      const resp = await authFetch(`/api/group/messages?${params}`);
       if (!resp.ok) throw new Error('拉取失败');
       const data = await resp.json();
 

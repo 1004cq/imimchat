@@ -12,7 +12,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { UserPlus, Users, Check, Loader2, AlertCircle, ArrowLeft, LogIn, Copy, Share2 } from 'lucide-react';
 import { DoveAvatar } from '@/components/DoveAvatar';
 import { toast } from 'sonner';
-import { authApi } from '@/lib/authFetch';
+import { authApi, authFetch } from '@/lib/authFetch';
 import { publicUrl } from '@/lib/publicUrl';
 
 // ============ 类型定义 ============
@@ -181,7 +181,7 @@ export default function InviteLinkPage() {
     }
     setActionState('loading');
     try {
-      const res = await fetch('/api/group/join', {
+      const res = await authFetch('/api/group/join', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -218,7 +218,7 @@ export default function InviteLinkPage() {
     }
     setActionState('loading');
     try {
-      const res = await fetch('/api/group/invite/join', {
+      const res = await authFetch('/api/group/invite/join', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

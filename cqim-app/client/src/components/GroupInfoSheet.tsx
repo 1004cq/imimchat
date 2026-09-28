@@ -15,6 +15,7 @@ import { InviteMembersModal } from '@/components/InviteMembersModal';
 import { useRemoteProfileSync, mergeProfileUpdate } from '@/hooks/useRemoteProfileSync';
 import { toast } from 'sonner';
 import { SettingRow } from '@/components/sheets/SheetPrimitives';
+import { authFetch } from '@/lib/authFetch';
 
 interface MemberInfo {
   id: string;
@@ -127,8 +128,8 @@ export const GroupInfoSheet: React.FC<GroupInfoSheetProps> = ({
     if (!groupId) return;
     setLoading(true);
     Promise.all([
-      fetch(`/api/group/info?groupId=${encodeURIComponent(groupId)}`).then(r => r.json()),
-      fetch(`/api/group/members?groupId=${encodeURIComponent(groupId)}`).then(r => r.json()),
+      authFetch(`/api/group/info?groupId=${encodeURIComponent(groupId)}`).then(r => r.json()),
+      authFetch(`/api/group/members?groupId=${encodeURIComponent(groupId)}`).then(r => r.json()),
     ]).then(([info, memberList]) => {
       setGroupInfo(info);
       const list: MemberInfo[] = Array.isArray(memberList) ? memberList : (memberList.members || []);
@@ -155,7 +156,7 @@ export const GroupInfoSheet: React.FC<GroupInfoSheetProps> = ({
     if (savingNickname) return;
     setSavingNickname(true);
     try {
-      const res = await fetch('/api/group/member/nickname', {
+      const res = await authFetch('/api/group/member/nickname', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ groupId, userId: currentUserId, nickname: nicknameInput.trim() }),
@@ -179,7 +180,7 @@ export const GroupInfoSheet: React.FC<GroupInfoSheetProps> = ({
     if (savingGroupName || !groupNameInput.trim()) return;
     setSavingGroupName(true);
     try {
-      const res = await fetch('/api/group/update/name', {
+      const res = await authFetch('/api/group/update/name', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ groupId, userId: currentUserId, name: groupNameInput.trim() }),
@@ -206,7 +207,7 @@ export const GroupInfoSheet: React.FC<GroupInfoSheetProps> = ({
     if (savingGroupUsername) return;
     setSavingGroupUsername(true);
     try {
-      const res = await fetch('/api/group/update/username', {
+      const res = await authFetch('/api/group/update/username', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ groupId, userId: currentUserId, username: nextUsername || null }),
@@ -246,7 +247,7 @@ export const GroupInfoSheet: React.FC<GroupInfoSheetProps> = ({
       setUploadingAvatar(true);
       try {
         const base64 = dataUrl.split(',')[1];
-        const res = await fetch('/api/group/update/avatar', {
+        const res = await authFetch('/api/group/update/avatar', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ groupId, userId: currentUserId, dataBase64: base64, mimeType: file.type }),
@@ -271,7 +272,7 @@ export const GroupInfoSheet: React.FC<GroupInfoSheetProps> = ({
     if (savingAnnouncement) return;
     setSavingAnnouncement(true);
     try {
-      const res = await fetch('/api/group/announcement', {
+      const res = await authFetch('/api/group/announcement', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ groupId, userId: currentUserId, announcement: announcementInput.trim() }),
@@ -298,8 +299,8 @@ export const GroupInfoSheet: React.FC<GroupInfoSheetProps> = ({
     if (addedCount > 0) {
       // 重新加载群信息和成员
       Promise.all([
-        fetch(`/api/group/info?groupId=${encodeURIComponent(groupId)}`).then(r => r.json()),
-        fetch(`/api/group/members?groupId=${encodeURIComponent(groupId)}`).then(r => r.json()),
+        authFetch(`/api/group/info?groupId=${encodeURIComponent(groupId)}`).then(r => r.json()),
+        authFetch(`/api/group/members?groupId=${encodeURIComponent(groupId)}`).then(r => r.json()),
       ]).then(([info, memberList]) => {
         setGroupInfo(info);
         const list: MemberInfo[] = Array.isArray(memberList) ? memberList : (memberList.members || []);
@@ -314,7 +315,7 @@ export const GroupInfoSheet: React.FC<GroupInfoSheetProps> = ({
   const fetchInviteLinks = useCallback(async () => {
     setLoadingInviteLinks(true);
     try {
-      const res = await fetch(`/api/group/invite/list?groupId=${encodeURIComponent(groupId)}`);
+      const res = await authFetch(`/api/group/invite/list?groupId=${encodeURIComponent(groupId)}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || '获取邀请链接失败');
       setInviteLinks(Array.isArray(data.links) ? data.links : []);
@@ -367,7 +368,7 @@ export const GroupInfoSheet: React.FC<GroupInfoSheetProps> = ({
 
     setCreatingInvite(true);
     try {
-      const res = await fetch('/api/group/invite/create', {
+      const res = await authFetch('/api/group/invite/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -410,7 +411,7 @@ export const GroupInfoSheet: React.FC<GroupInfoSheetProps> = ({
   const handleRevokeInviteLink = useCallback(async (hash: string) => {
     if (!confirm('确定要撤销这个邀请链接吗？')) return;
     try {
-      const res = await fetch('/api/group/invite/revoke', {
+      const res = await authFetch('/api/group/invite/revoke', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ hash, creatorId: currentUserId }),
