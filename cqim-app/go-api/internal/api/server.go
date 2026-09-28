@@ -33,6 +33,7 @@ type user struct {
 	Phone         *string   `json:"phone"`
 	Email         *string   `json:"email"`
 	Avatar        *string   `json:"avatar"`
+	BackgroundURL *string   `json:"backgroundUrl"`
 	Bio           *string   `json:"bio"`
 	Gender        string    `json:"gender"`
 	Region        string    `json:"region"`
@@ -175,7 +176,7 @@ func (s *Server) findSessionUser(ctx context.Context, token string) (user, error
 
 	const query = `
 		SELECT u."id", u."dialogId", u."username", u."nickname", u."phone", u."email",
-		       u."avatar", u."bio", COALESCE(u."gender", ''), COALESCE(u."region", ''),
+		       u."avatar", u."backgroundUrl", u."bio", COALESCE(u."gender", ''), COALESCE(u."region", ''),
 		       COALESCE(u."birthday", ''), u."isBot", u."phoneVerified", u."emailVerified",
 		       u."createdAt", u."updatedAt", u."isBanned", u."banReason"
 		FROM "UserSession" AS s
@@ -189,7 +190,7 @@ func (s *Server) findSessionUser(ctx context.Context, token string) (user, error
 	var banReason *string
 	err := s.db.QueryRow(ctx, query, token).Scan(
 		&currentUser.ID, &currentUser.DialogID, &currentUser.Username, &currentUser.Nickname,
-		&currentUser.Phone, &currentUser.Email, &currentUser.Avatar, &currentUser.Bio,
+		&currentUser.Phone, &currentUser.Email, &currentUser.Avatar, &currentUser.BackgroundURL, &currentUser.Bio,
 		&currentUser.Gender, &currentUser.Region, &currentUser.Birthday, &currentUser.IsBot,
 		&currentUser.PhoneVerified, &currentUser.EmailVerified, &currentUser.CreatedAt,
 		&updatedAt, &banned, &banReason,

@@ -25,6 +25,17 @@ func TestSafeAvatarURL(t *testing.T) {
 	}
 }
 
+func TestUserJSONIncludesBackgroundURL(t *testing.T) {
+	backgroundURL := "/api/media/cover"
+	payload, err := json.Marshal(user{ID: "user-1", Username: "0", BackgroundURL: &backgroundURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(payload), `"backgroundUrl":"/api/media/cover"`) {
+		t.Fatalf("backgroundUrl missing from user JSON: %s", payload)
+	}
+}
+
 func TestUserRoutesJSONNotPlain404(t *testing.T) {
 	handler := (&Server{}).Handler()
 	cases := []struct {
