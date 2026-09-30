@@ -15,9 +15,62 @@
  */
 
 import { Router, Request, Response } from 'express';
+import crypto from 'crypto';
 import prisma from './db.js';
+import { userAuth } from './auth.js';
 
 const mlsRouter = Router();
+
+const DEVICE_JOIN_PREFIX = 'mls:device-join:';
+const DEVICE_JOIN_TTL_MS = 10 * 60 * 1000;
+const DEVICE_JOIN_CLAIM_MS = 60 * 1000;
+
+type DeviceJoinRecord = {
+  requestId: string;
+  groupId: string;
+  userId: string;
+  deviceId: string;
+  memberId: string;
+  keyPackage: any;
+  status: 'pending' | 'claimed' | 'completed';
+  createdAt: string;
+  expiresAt: string;
+  claimedBy?: string;
+  claimUntil?: string;
+  welcome?: any;
+  senderIdentityKey?: string;
+};
+
+function deviceJoinRequestId(groupId: string, userId: string, deviceId: string): string {
+  return crypto.createHash('sha256').update(`${groupId}\u0000${userId}\u0000${deviceId}`).digest('hex');
+}
+
+function deviceJoinKey(requestId: string): string {
+  return `${DEVICE_JOIN_PREFIX}${requestId}`;
+}
+
+async function isGroupMember(groupId: string, userId: string): Promise<boolean> {
+  return !!(await prisma.groupMember.findUnique({
+    where: { groupId_userId: { groupId, userId } },
+    select: { userId: true },
+  }));
+}
+
+function parseDeviceJoinRecord(value?: string | null): DeviceJoinRecord | null {
+  if (!value) return null;
+  try { return JSON.parse(value) as DeviceJoinRecord; } catch { return null; }
+}
+
+function deviceJoinRoute(handler: (req: Request, res: Response) => Promise<unknown>) {
+  return async (req: Request, res: Response) => {
+    try {
+      await handler(req, res);
+    } catch (err: any) {
+      console.error('[MLS] 设备加入处理失败:', err?.message || err);
+      if (!res.headersSent) res.status(500).json({ error: '设备加入处理失败' });
+    }
+  };
+}
 
 // ============================================================
 // 1. KeyPackage 管理
@@ -503,7 +556,159 @@ mlsRouter.get('/pending-commits', async (req: Request, res: Response) => {
 });
 
 // ============================================================
-// 4. 身份密钥管理
+// 4. 同账号多设备加入
+// ============================================================
+
+mlsRouter.post('/device-join/request', userAuth, deviceJoinRoute(async (req: Request, res: Response) => {
+  const authUserId = String((req as any).user?.id || '');
+  const { groupId, deviceId, keyPackage } = req.body || {};
+  if (!groupId || !deviceId || !keyPackage?.initKey || !keyPackage?.leafKey) {
+    return res.status(400).json({ error: '缺少设备加入参数' });
+  }
+  if (keyPackage.userId !== authUserId) return res.status(400).json({ error: 'KeyPackage 用户不匹配' });
+  if (!authUserId || !(await isGroupMember(String(groupId), authUserId))) {
+    return res.status(403).json({ error: '非群成员' });
+  }
+
+  const normalizedDeviceId = String(deviceId).slice(0, 128);
+  const requestId = deviceJoinRequestId(String(groupId), authUserId, normalizedDeviceId);
+  const existing = await prisma.systemConfig.findUnique({ where: { key: deviceJoinKey(requestId) } });
+  const existingRecord = parseDeviceJoinRecord(existing?.value);
+  if (existingRecord && Date.parse(existingRecord.expiresAt) > Date.now()
+    && (existingRecord.status === 'completed'
+      || (existingRecord.status === 'claimed' && Date.parse(existingRecord.claimUntil || '') > Date.now()))) {
+    return res.json({ ok: true, requestId, status: existingRecord.status });
+  }
+  const now = Date.now();
+  const record: DeviceJoinRecord = {
+    requestId,
+    groupId: String(groupId),
+    userId: authUserId,
+    deviceId: normalizedDeviceId,
+    memberId: `${authUserId}#ios#${normalizedDeviceId}`,
+    keyPackage,
+    status: 'pending',
+    createdAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + DEVICE_JOIN_TTL_MS).toISOString(),
+  };
+  await prisma.systemConfig.upsert({
+    where: { key: deviceJoinKey(requestId) },
+    update: { value: JSON.stringify(record) },
+    create: { key: deviceJoinKey(requestId), value: JSON.stringify(record) },
+  });
+  res.json({ ok: true, requestId, status: 'pending' });
+}));
+
+mlsRouter.get('/device-join/pending', userAuth, deviceJoinRoute(async (req: Request, res: Response) => {
+  const authUserId = String((req as any).user?.id || '');
+  const groupId = String(req.query.groupId || '');
+  if (!groupId) return res.status(400).json({ error: '缺少 groupId' });
+  if (!authUserId || !(await isGroupMember(groupId, authUserId))) return res.status(403).json({ error: '非群成员' });
+  const now = Date.now();
+  const configs = await prisma.systemConfig.findMany({ where: { key: { startsWith: DEVICE_JOIN_PREFIX } } });
+  const requests = configs.map(config => parseDeviceJoinRecord(config.value)).filter((record): record is DeviceJoinRecord => {
+    if (!record || record.groupId !== groupId || Date.parse(record.expiresAt) <= now) return false;
+    return record.status === 'pending'
+      || (record.status === 'claimed' && Date.parse(record.claimUntil || '') <= now);
+  });
+  res.json({ requests });
+}));
+
+mlsRouter.post('/device-join/claim', userAuth, deviceJoinRoute(async (req: Request, res: Response) => {
+  const authUserId = String((req as any).user?.id || '');
+  const requestId = String(req.body?.requestId || '');
+  if (!requestId) return res.status(400).json({ error: '缺少 requestId' });
+  const key = deviceJoinKey(requestId);
+  const config = await prisma.systemConfig.findUnique({ where: { key } });
+  const record = parseDeviceJoinRecord(config?.value);
+  if (!config || !record) return res.status(404).json({ error: '设备请求不存在' });
+  if (!(await isGroupMember(record.groupId, authUserId))) return res.status(403).json({ error: '非群成员' });
+  const now = Date.now();
+  if (Date.parse(record.expiresAt) <= now) return res.status(410).json({ error: '设备请求已过期' });
+  if (record.status === 'completed') return res.status(409).json({ error: '设备请求已完成' });
+  if (record.status === 'claimed' && Date.parse(record.claimUntil || '') > now) {
+    return res.status(409).json({ error: '设备请求正在处理' });
+  }
+  const claimed: DeviceJoinRecord = { ...record, status: 'claimed', claimedBy: authUserId, claimUntil: new Date(now + DEVICE_JOIN_CLAIM_MS).toISOString() };
+  const updated = await prisma.systemConfig.updateMany({ where: { key, value: config.value }, data: { value: JSON.stringify(claimed) } });
+  if (updated.count !== 1) return res.status(409).json({ error: '设备请求已被其他客户端处理' });
+  res.json({ request: claimed });
+}));
+
+mlsRouter.post('/device-join/complete', userAuth, deviceJoinRoute(async (req: Request, res: Response) => {
+  const authUserId = String((req as any).user?.id || '');
+  const { requestId, welcome, senderIdentityKey } = req.body || {};
+  if (!requestId || !welcome || !senderIdentityKey) return res.status(400).json({ error: '缺少 Welcome 参数' });
+  const key = deviceJoinKey(String(requestId));
+  const config = await prisma.systemConfig.findUnique({ where: { key } });
+  const record = parseDeviceJoinRecord(config?.value);
+  if (!config || !record) return res.status(404).json({ error: '设备请求不存在' });
+  if (record.status !== 'claimed' || record.claimedBy !== authUserId) {
+    return res.status(409).json({ error: '设备请求未由当前客户端认领' });
+  }
+  const now = Date.now();
+  if (Date.parse(record.expiresAt) <= now || Date.parse(record.claimUntil || '') <= now) {
+    return res.status(410).json({ error: '设备请求认领已过期' });
+  }
+  const memberLeaf = welcome.members?.[record.memberId];
+  if (welcome.groupId !== record.groupId || !Number.isInteger(welcome.epoch) || welcome.epoch < 0
+    || memberLeaf === undefined || memberLeaf !== welcome.leafIndex
+    || typeof welcome.encryptedGroupInfo?.ciphertext !== 'string'
+    || typeof welcome.encryptedGroupInfo?.iv !== 'string') {
+    return res.status(400).json({ error: 'Welcome 内容与设备请求不匹配' });
+  }
+  const completed: DeviceJoinRecord = { ...record, status: 'completed', welcome, senderIdentityKey: String(senderIdentityKey) };
+  const updated = await prisma.systemConfig.updateMany({ where: { key, value: config.value }, data: { value: JSON.stringify(completed) } });
+  if (updated.count !== 1) return res.status(409).json({ error: '设备请求状态已变化' });
+
+  const mlsKey = `mls:group:${record.groupId}`;
+  const existing = await prisma.systemConfig.findUnique({ where: { key: mlsKey } });
+  let publicState: any = {};
+  if (existing?.value) { try { publicState = JSON.parse(existing.value); } catch {} }
+  Object.assign(publicState, {
+    enabled: true,
+    epoch: welcome.epoch,
+    members: welcome.members,
+    treeSnapshot: welcome.treeSnapshot,
+    updatedAt: new Date().toISOString(),
+  });
+  await prisma.systemConfig.upsert({
+    where: { key: mlsKey },
+    update: { value: JSON.stringify(publicState) },
+    create: { key: mlsKey, value: JSON.stringify(publicState) },
+  });
+  res.json({ ok: true, epoch: welcome.epoch });
+}));
+
+mlsRouter.get('/device-join/welcome', userAuth, deviceJoinRoute(async (req: Request, res: Response) => {
+  const authUserId = String((req as any).user?.id || '');
+  const groupId = String(req.query.groupId || '');
+  const deviceId = String(req.query.deviceId || '');
+  if (!groupId || !deviceId) return res.status(400).json({ error: '缺少设备参数' });
+  const requestId = deviceJoinRequestId(groupId, authUserId, deviceId);
+  const config = await prisma.systemConfig.findUnique({ where: { key: deviceJoinKey(requestId) } });
+  const record = parseDeviceJoinRecord(config?.value);
+  if (!record || record.userId !== authUserId) return res.json({ ready: false });
+  if (record.status !== 'completed' || !record.welcome || !record.senderIdentityKey) {
+    return res.json({ ready: false, requestId });
+  }
+  res.json({ ready: true, requestId, welcome: record.welcome, senderIdentityKey: record.senderIdentityKey });
+}));
+
+mlsRouter.post('/device-join/ack', userAuth, deviceJoinRoute(async (req: Request, res: Response) => {
+  const authUserId = String((req as any).user?.id || '');
+  const requestId = String(req.body?.requestId || '');
+  if (!requestId) return res.status(400).json({ error: '缺少 requestId' });
+  const key = deviceJoinKey(requestId);
+  const config = await prisma.systemConfig.findUnique({ where: { key } });
+  const record = parseDeviceJoinRecord(config?.value);
+  if (!record || record.userId !== authUserId) return res.status(404).json({ error: '设备请求不存在' });
+  await prisma.systemConfig.deleteMany({ where: { key } });
+  res.json({ ok: true });
+}));
+
+// ============================================================
+// 5. 身份密钥管理
 // ============================================================
 
 /**

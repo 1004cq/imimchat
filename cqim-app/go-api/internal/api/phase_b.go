@@ -24,6 +24,7 @@ const (
 
 func (s *Server) registerPhaseBRoutes(mux *http.ServeMux) {
 	s.registerLegacyRoutes(mux)
+	s.registerMLSDeviceRoutes(mux)
 	mux.HandleFunc("POST /api/presence", s.requireUser(s.setPresence))
 	mux.HandleFunc("GET /api/presence", s.requireUser(s.getPresence))
 	s.registerPushRoutes(mux)
