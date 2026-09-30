@@ -21,6 +21,7 @@ import type {
   MLSWelcome,
   MLSKeyPackage,
 } from '../lib/e2ee/MLSCrypto';
+import { authFetch } from '../lib/authFetch';
 
 // ============================================================
 // 类型
@@ -198,6 +199,74 @@ export function useMLSGroup(options: UseMLSGroupOptions): UseMLSGroupReturn {
       ws.removeEventListener('message', handleMessage);
     };
   }, [ws, enabled, isReady, groupId]);
+
+  // ============ 同账号新设备加入 ============
+
+  useEffect(() => {
+    if (!enabled || !isReady || !hasMLSState || !ws) return;
+
+    let cancelled = false;
+    let processing = false;
+
+    const processDeviceRequests = async () => {
+      if (cancelled || processing || ws.readyState !== WebSocket.OPEN) return;
+      const manager = managerRef.current;
+      if (!manager) return;
+      processing = true;
+      try {
+        const pendingResponse = await authFetch(
+          `/api/mls/device-join/pending?groupId=${encodeURIComponent(groupId)}`
+        );
+        if (!pendingResponse.ok) return;
+        const pendingData = await pendingResponse.json();
+        const requests = Array.isArray(pendingData?.requests) ? pendingData.requests : [];
+
+        for (const request of requests) {
+          if (cancelled || !request?.requestId || !request?.memberId || !request?.keyPackage) break;
+          const claimResponse = await authFetch('/api/mls/device-join/claim', {
+            method: 'POST',
+            body: JSON.stringify({ requestId: request.requestId }),
+          });
+          if (!claimResponse.ok) continue;
+
+          const { welcome, commit } = await manager.addMember(
+            groupId,
+            request.memberId,
+            request.keyPackage as MLSKeyPackage
+          );
+          const completeResponse = await authFetch('/api/mls/device-join/complete', {
+            method: 'POST',
+            body: JSON.stringify({
+              requestId: request.requestId,
+              welcome,
+              senderIdentityKey: manager.getIdentityPublicKey(),
+            }),
+          });
+          if (!completeResponse.ok) {
+            throw new Error((await completeResponse.json().catch(() => ({})))?.error || '设备 Welcome 保存失败');
+          }
+
+          ws.send(JSON.stringify({
+            type: 'mls_update_keys',
+            payload: { groupId, commit },
+          }));
+          setEpoch(commit.epoch);
+          setStatus(await manager.getGroupStatus(groupId));
+        }
+      } catch (err) {
+        console.error('[useMLSGroup] 处理新设备加入失败:', err);
+      } finally {
+        processing = false;
+      }
+    };
+
+    void processDeviceRequests();
+    const timer = window.setInterval(processDeviceRequests, 4_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [enabled, isReady, hasMLSState, groupId, ws]);
 
   // ============ 加密消息 ============
 
