@@ -416,6 +416,9 @@ export class E2EEManager {
     }
 
     const data = await resp.json();
+    if (data.preKey?.keyId == null || !data.preKey?.publicKey) {
+      throw new Error(`无法获取用户 ${peerId} 的安全凭证 (Bundle): 一次性密钥不可用`);
+    }
     const bundle: PreKeyBundle = {
       registrationId: data.registrationId,
       identityKey: data.identityKey,
@@ -525,12 +528,14 @@ export class E2EEManager {
 
     let dhResults = concatBuffers(dh1, dh2, dh3);
 
-    // DH4（如果有 One-Time PreKey）
-    if (bundle.oneTimePreKey) {
-      const remoteOneTimePub = await importPublicKey(bundle.oneTimePreKey);
-      const dh4 = await ecdh(ephemeralKP.privateKey, remoteOneTimePub);
-      dhResults = concatBuffers(dhResults, dh4);
+    // DH4 是这套 v2 信封的一部分。缺少它时继续派生会得到与响应方
+    // 不同的根密钥，必须在写入会话之前失败。
+    if (bundle.oneTimePreKeyId == null || !bundle.oneTimePreKey) {
+      throw new Error('一次性密钥不可用，已停止建立加密会话');
     }
+    const remoteOneTimePub = await importPublicKey(bundle.oneTimePreKey);
+    const dh4 = await ecdh(ephemeralKP.privateKey, remoteOneTimePub);
+    dhResults = concatBuffers(dhResults, dh4);
 
     // 使用 HKDF 派生根密钥
     const salt = new Uint8Array(32).buffer;

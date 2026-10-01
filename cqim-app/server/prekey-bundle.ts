@@ -22,6 +22,21 @@ export interface StoredPreKey {
   publicKey: string;
 }
 
+const MAX_CONSUMED_PREKEY_IDS = 2048;
+
+export function normalizeConsumedPreKeyIds(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  const ids = new Set<number>();
+  for (const item of value) {
+    if (typeof item === 'number' && Number.isFinite(item)) ids.add(item);
+  }
+  return Array.from(ids).slice(-MAX_CONSUMED_PREKEY_IDS);
+}
+
+export function rememberConsumedPreKey(value: unknown, keyId: number): number[] {
+  return normalizeConsumedPreKeyIds([...normalizeConsumedPreKeyIds(value), keyId]);
+}
+
 /** Web 端只接受 WebCrypto 导出的 P-256 SPKI，旧的 32 字节 raw key 必须丢弃。 */
 export function isValidP256SPKIPublicKey(value: unknown): value is string {
   if (typeof value !== 'string' || value.length === 0) return false;
@@ -48,10 +63,30 @@ export function filterValidP256PreKeys(value: unknown): StoredPreKey[] {
   ));
 }
 
-export function mergeValidP256PreKeys(existing: unknown, incoming: unknown): StoredPreKey[] {
+/**
+ * Returns one valid one-time key and a pool that no longer contains it.
+ * Keeping this operation explicit prevents callers from accidentally sending
+ * the same key and writing it back to storage afterwards.
+ */
+export function takeOneValidP256PreKey(value: unknown, consumedIds: unknown = []): {
+  preKey: StoredPreKey | null;
+  remaining: StoredPreKey[];
+} {
+  const consumed = new Set(normalizeConsumedPreKeyIds(consumedIds));
+  const [preKey, ...remaining] = filterValidP256PreKeys(value)
+    .filter(item => !consumed.has(item.keyId));
+  return { preKey: preKey ?? null, remaining };
+}
+
+export function mergeValidP256PreKeys(
+  existing: unknown,
+  incoming: unknown,
+  consumedIds: unknown = [],
+): StoredPreKey[] {
+  const consumed = new Set(normalizeConsumedPreKeyIds(consumedIds));
   const keyMap = new Map<number, string>();
   for (const item of [...filterValidP256PreKeys(existing), ...filterValidP256PreKeys(incoming)]) {
-    keyMap.set(item.keyId, item.publicKey);
+    if (!consumed.has(item.keyId)) keyMap.set(item.keyId, item.publicKey);
   }
   return Array.from(keyMap.entries()).map(([keyId, publicKey]) => ({ keyId, publicKey }));
 }

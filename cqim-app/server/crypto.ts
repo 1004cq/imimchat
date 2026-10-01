@@ -19,7 +19,10 @@ import {
   filterValidP256PreKeys,
   isValidP256SPKIPublicKey,
   mergeValidP256PreKeys,
+  normalizeConsumedPreKeyIds,
+  rememberConsumedPreKey,
   resolveSigningPublicKey,
+  takeOneValidP256PreKey,
 } from './prekey-bundle.js';
 import { userAuth } from './auth.js';
 
@@ -303,6 +306,13 @@ router.post('/register-bundle', userAuth, requireOwnCryptoMaterial, async (req: 
       return res.status(400).json({ error: 'E2EE Bundle 缺少有效签名公钥' });
     }
 
+    let previousBundle: Record<string, any> = {};
+    try { previousBundle = JSON.parse(existingBundle?.value || '{}'); } catch {}
+    const sameIdentity = previousBundle.identityKey === identityKey;
+    const consumedPreKeyIds = sameIdentity
+      ? normalizeConsumedPreKeyIds(previousBundle.consumedPreKeyIds)
+      : [];
+
     // 存储 ECDH 身份公钥、ECDSA 签名公钥和签名预密钥
     await prisma.systemConfig.upsert({
       where: { key: `e2ee:bundle:${userId}` },
@@ -312,6 +322,7 @@ router.post('/register-bundle', userAuth, requireOwnCryptoMaterial, async (req: 
           identityKey,
           signingPublicKey: storedSigningPublicKey,
           signedPreKey,
+          consumedPreKeyIds,
           updatedAt: new Date().toISOString(),
         }),
       },
@@ -322,6 +333,7 @@ router.post('/register-bundle', userAuth, requireOwnCryptoMaterial, async (req: 
           identityKey,
           signingPublicKey: storedSigningPublicKey,
           signedPreKey,
+          consumedPreKeyIds,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         }),
@@ -329,16 +341,14 @@ router.post('/register-bundle', userAuth, requireOwnCryptoMaterial, async (req: 
     });
 
     // 身份密钥轮换时替换旧池；同一身份重注册时只保留合法 P-256 SPKI。
-    let previousIdentityKey = '';
-    try { previousIdentityKey = JSON.parse(existingBundle?.value || '{}').identityKey || ''; } catch {}
     const existingConfig = await prisma.systemConfig.findUnique({
       where: { key: `e2ee:prekeys:${userId}` },
     });
     let existingKeys: unknown = [];
-    if (previousIdentityKey === identityKey && existingConfig?.value) {
+    if (sameIdentity && existingConfig?.value) {
       try { existingKeys = JSON.parse(existingConfig.value); } catch {}
     }
-    const mergedKeys = mergeValidP256PreKeys(existingKeys, preKeys);
+    const mergedKeys = mergeValidP256PreKeys(existingKeys, preKeys, consumedPreKeyIds);
     await prisma.systemConfig.upsert({
       where: { key: `e2ee:prekeys:${userId}` },
       update: { value: JSON.stringify(mergedKeys) },
@@ -390,16 +400,36 @@ router.get('/get-bundle', async (req: Request, res: Response) => {
 
     if (preKeysConfig?.value) {
       const storedPreKeys = JSON.parse(preKeysConfig.value);
-      const validPreKeys = filterValidP256PreKeys(storedPreKeys);
       // 先过滤旧 raw key，再消费第一个合法 SPKI；一次请求即可修复污染池。
-      oneTimePreKey = validPreKeys.shift();
-      await prisma.systemConfig.update({
-        where: { key: `e2ee:prekeys:${userId}` },
-        data: { value: JSON.stringify(validPreKeys) },
-      });
+      const taken = takeOneValidP256PreKey(storedPreKeys, bundle.consumedPreKeyIds);
+      oneTimePreKey = taken.preKey || undefined;
       if (oneTimePreKey) {
-        console.log(`[Crypto] 消费用户 ${userId} 的 PreKey #${oneTimePreKey.keyId}, 剩余: ${validPreKeys.length}`);
+        bundle.consumedPreKeyIds = rememberConsumedPreKey(
+          bundle.consumedPreKeyIds,
+          oneTimePreKey.keyId,
+        );
+        bundle.updatedAt = new Date().toISOString();
+        await prisma.$transaction([
+          prisma.systemConfig.update({
+            where: { key: `e2ee:prekeys:${userId}` },
+            data: { value: JSON.stringify(taken.remaining) },
+          }),
+          prisma.systemConfig.update({
+            where: { key: `e2ee:bundle:${userId}` },
+            data: { value: JSON.stringify(bundle) },
+          }),
+        ]);
+        console.log(`[Crypto] 消费用户 ${userId} 的 PreKey #${oneTimePreKey.keyId}, 剩余: ${taken.remaining.length}`);
+      } else {
+        await prisma.systemConfig.update({
+          where: { key: `e2ee:prekeys:${userId}` },
+          data: { value: JSON.stringify(taken.remaining) },
+        });
       }
+    }
+
+    if (!oneTimePreKey) {
+      return res.status(409).json({ error: '用户暂无可用的一次性 E2EE 密钥，请稍后重试' });
     }
 
     res.json({
@@ -407,7 +437,7 @@ router.get('/get-bundle', async (req: Request, res: Response) => {
       identityKey: bundle.identityKey,
       signingPublicKey: bundle.signingPublicKey || null,
       signedPreKey: bundle.signedPreKey,
-      preKey: oneTimePreKey || null,
+      preKey: oneTimePreKey,
     });
   } catch (err: any) {
     console.error('[Crypto] 获取 Bundle 失败:', err.message);
@@ -428,6 +458,9 @@ router.get('/prekey-count', async (req: Request, res: Response) => {
   }
 
   try {
+    const bundleConfig = await prisma.systemConfig.findUnique({
+      where: { key: `e2ee:bundle:${userId}` },
+    });
     const preKeysConfig = await prisma.systemConfig.findUnique({
       where: { key: `e2ee:prekeys:${userId}` },
     });
@@ -435,7 +468,13 @@ router.get('/prekey-count', async (req: Request, res: Response) => {
     let count = 0;
     if (preKeysConfig?.value) {
       const preKeys = JSON.parse(preKeysConfig.value);
-      count = filterValidP256PreKeys(preKeys).length;
+      let consumedPreKeyIds: number[] = [];
+      try {
+        consumedPreKeyIds = normalizeConsumedPreKeyIds(
+          JSON.parse(bundleConfig?.value || '{}').consumedPreKeyIds,
+        );
+      } catch {}
+      count = mergeValidP256PreKeys([], preKeys, consumedPreKeyIds).length;
     }
 
     res.json({ count });
@@ -462,6 +501,15 @@ router.post('/replenish-prekeys', userAuth, requireOwnCryptoMaterial, async (req
   }
 
   try {
+    const bundleConfig = await prisma.systemConfig.findUnique({
+      where: { key: `e2ee:bundle:${userId}` },
+    });
+    let consumedPreKeyIds: number[] = [];
+    try {
+      consumedPreKeyIds = normalizeConsumedPreKeyIds(
+        JSON.parse(bundleConfig?.value || '{}').consumedPreKeyIds,
+      );
+    } catch {}
     const existingConfig = await prisma.systemConfig.findUnique({
       where: { key: `e2ee:prekeys:${userId}` },
     });
@@ -470,7 +518,7 @@ router.post('/replenish-prekeys', userAuth, requireOwnCryptoMaterial, async (req
       try { existingKeys = JSON.parse(existingConfig.value); } catch {}
     }
 
-    const mergedKeys = mergeValidP256PreKeys(existingKeys, validIncoming);
+    const mergedKeys = mergeValidP256PreKeys(existingKeys, validIncoming, consumedPreKeyIds);
 
     await prisma.systemConfig.upsert({
       where: { key: `e2ee:prekeys:${userId}` },

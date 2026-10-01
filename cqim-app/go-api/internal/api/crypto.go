@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"math"
 	"net/http"
 	"regexp"
 	"time"
@@ -30,6 +31,59 @@ var (
 type e2eePreKey struct {
 	KeyID     any    `json:"keyId"`
 	PublicKey string `json:"publicKey"`
+}
+
+const maxConsumedPreKeyIDs = 2048
+
+func numericPreKeyID(value any) (float64, bool) {
+	id, ok := value.(float64)
+	return id, ok && !math.IsNaN(id) && !math.IsInf(id, 0)
+}
+
+func preKeyIDToken(value any) string {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+func normalizeConsumedPreKeyIDs(value any) []any {
+	items, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	seen := make(map[string]bool, len(items))
+	out := make([]any, 0, len(items))
+	for _, item := range items {
+		if _, valid := numericPreKeyID(item); !valid {
+			continue
+		}
+		token := preKeyIDToken(item)
+		if token == "" || seen[token] {
+			continue
+		}
+		seen[token] = true
+		out = append(out, item)
+	}
+	if len(out) > maxConsumedPreKeyIDs {
+		out = out[len(out)-maxConsumedPreKeyIDs:]
+	}
+	return out
+}
+
+func rememberConsumedPreKey(value any, keyID any) []any {
+	items := append(normalizeConsumedPreKeyIDs(value), keyID)
+	return normalizeConsumedPreKeyIDs(items)
+}
+
+func consumedPreKeySet(value any) map[string]bool {
+	consumed := normalizeConsumedPreKeyIDs(value)
+	out := make(map[string]bool, len(consumed))
+	for _, item := range consumed {
+		out[preKeyIDToken(item)] = true
+	}
+	return out
 }
 
 func isValidP256SPKIPublicKey(value string) bool {
@@ -48,11 +102,27 @@ func isValidP256SPKIPublicKey(value string) bool {
 func filterValidP256PreKeys(keys []e2eePreKey) []e2eePreKey {
 	out := make([]e2eePreKey, 0, len(keys))
 	for _, item := range keys {
-		if item.KeyID != nil && isValidP256SPKIPublicKey(item.PublicKey) {
+		if _, ok := numericPreKeyID(item.KeyID); ok && isValidP256SPKIPublicKey(item.PublicKey) {
 			out = append(out, item)
 		}
 	}
 	return out
+}
+
+func takeOneValidP256PreKey(keys []e2eePreKey, consumedIDs any) (*e2eePreKey, []e2eePreKey) {
+	valid := filterValidP256PreKeys(keys)
+	consumed := consumedPreKeySet(consumedIDs)
+	available := make([]e2eePreKey, 0, len(valid))
+	for _, item := range valid {
+		if !consumed[preKeyIDToken(item.KeyID)] {
+			available = append(available, item)
+		}
+	}
+	if len(available) == 0 {
+		return nil, nil
+	}
+	taken := available[0]
+	return &taken, available[1:]
 }
 
 func signedPreKeyPublicKey(value any) string {
@@ -145,14 +215,21 @@ func (s *Server) upsertSystemConfig(ctx context.Context, key, value string) erro
 }
 
 func mergePreKeys(existing, incoming []e2eePreKey) []e2eePreKey {
+	return mergePreKeysExcludingConsumed(existing, incoming, nil)
+}
+
+func mergePreKeysExcludingConsumed(existing, incoming []e2eePreKey, consumedIDs any) []e2eePreKey {
 	seen := map[string]int{}
+	consumed := consumedPreKeySet(consumedIDs)
 	out := make([]e2eePreKey, 0, len(existing)+len(incoming))
 	add := func(item e2eePreKey) {
-		if item.KeyID == nil || !isValidP256SPKIPublicKey(item.PublicKey) {
+		if _, ok := numericPreKeyID(item.KeyID); !ok || !isValidP256SPKIPublicKey(item.PublicKey) {
 			return
 		}
-		id, _ := json.Marshal(item.KeyID)
-		key := string(id)
+		key := preKeyIDToken(item.KeyID)
+		if consumed[key] {
+			return
+		}
 		if i, ok := seen[key]; ok {
 			out[i] = item
 			return
@@ -307,12 +384,22 @@ func (s *Server) cryptoRegisterBundle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	previousBundle := map[string]any{}
+	if existing != "" {
+		_ = json.Unmarshal([]byte(existing), &previousBundle)
+	}
+	sameIdentity := previousBundle["identityKey"] == in.IdentityKey
+	consumedPreKeyIDs := []any{}
+	if sameIdentity {
+		consumedPreKeyIDs = normalizeConsumedPreKeyIDs(previousBundle["consumedPreKeyIds"])
+	}
 	bundle := map[string]any{
-		"registrationId":   in.RegistrationID,
-		"identityKey":      in.IdentityKey,
-		"signingPublicKey": storedSigningPublicKey,
-		"signedPreKey":     in.SignedPreKey,
-		"updatedAt":        now,
+		"registrationId":    in.RegistrationID,
+		"identityKey":       in.IdentityKey,
+		"signingPublicKey":  storedSigningPublicKey,
+		"signedPreKey":      in.SignedPreKey,
+		"consumedPreKeyIds": consumedPreKeyIDs,
+		"updatedAt":         now,
 	}
 	if existing == "" {
 		bundle["createdAt"] = now
@@ -330,14 +417,7 @@ func (s *Server) cryptoRegisterBundle(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "注册 Bundle 失败"})
 		return
 	}
-	keepExisting := false
-	if existing != "" {
-		var previous struct {
-			IdentityKey string `json:"identityKey"`
-		}
-		keepExisting = json.Unmarshal([]byte(existing), &previous) == nil && previous.IdentityKey == in.IdentityKey
-	}
-	if _, err := s.mergeStoredPreKeys(r.Context(), in.UserID, in.PreKeys, keepExisting); err != nil {
+	if _, err := s.mergeStoredPreKeys(r.Context(), in.UserID, in.PreKeys, sameIdentity, consumedPreKeyIDs); err != nil {
 		log.Printf("[Crypto] 注册 Bundle 失败: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "注册 Bundle 失败"})
 		return
@@ -373,7 +453,7 @@ func (s *Server) cryptoGetBundle(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "E2EE Bundle 格式无效，请重新注册"})
 		return
 	}
-	var oneTime any
+	var oneTime *e2eePreKey
 	preRaw, preFound, err := s.systemConfigValue(r.Context(), "e2ee:prekeys:"+userID)
 	if err != nil {
 		log.Printf("[Crypto] 获取 Bundle 失败: %v", err)
@@ -387,20 +467,30 @@ func (s *Server) cryptoGetBundle(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "获取 Bundle 失败"})
 			return
 		}
-		validPreKeys := filterValidP256PreKeys(preKeys)
-		if len(validPreKeys) > 0 {
-			oneTime = validPreKeys[0]
-			validPreKeys = validPreKeys[1:]
-		}
-		remaining, _ := json.Marshal(validPreKeys)
-		if err := s.upsertSystemConfig(r.Context(), "e2ee:prekeys:"+userID, string(remaining)); err != nil {
+		var remainingPreKeys []e2eePreKey
+		oneTime, remainingPreKeys = takeOneValidP256PreKey(preKeys, bundle["consumedPreKeyIds"])
+		remaining, _ := json.Marshal(remainingPreKeys)
+		if oneTime != nil {
+			bundle["consumedPreKeyIds"] = rememberConsumedPreKey(bundle["consumedPreKeyIds"], oneTime.KeyID)
+			bundle["updatedAt"] = time.Now().UTC().Format(time.RFC3339Nano)
+			bundleRaw, _ := json.Marshal(bundle)
+			if err := s.persistPreKeyConsumption(r.Context(), userID, string(remaining), string(bundleRaw)); err != nil {
+				log.Printf("[Crypto] 获取 Bundle 失败: %v", err)
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "获取 Bundle 失败"})
+				return
+			}
+		} else if err := s.upsertSystemConfig(r.Context(), "e2ee:prekeys:"+userID, string(remaining)); err != nil {
 			log.Printf("[Crypto] 获取 Bundle 失败: %v", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "获取 Bundle 失败"})
 			return
 		}
 		if oneTime != nil {
-			log.Printf("[Crypto] 消费用户 %s 的合法 PreKey, 剩余: %d", userID, len(validPreKeys))
+			log.Printf("[Crypto] 消费用户 %s 的合法 PreKey, 剩余: %d", userID, len(remainingPreKeys))
 		}
+	}
+	if oneTime == nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "用户暂无可用的一次性 E2EE 密钥，请稍后重试"})
+		return
 	}
 	signing := bundle["signingPublicKey"]
 	if signing == nil || signing == "" {
@@ -431,7 +521,10 @@ func (s *Server) cryptoPreKeyCount(w http.ResponseWriter, r *http.Request) {
 	if found && raw != "" {
 		var preKeys []e2eePreKey
 		if json.Unmarshal([]byte(raw), &preKeys) == nil {
-			count = len(filterValidP256PreKeys(preKeys))
+			bundleRaw, _, _ := s.systemConfigValue(r.Context(), "e2ee:bundle:"+userID)
+			var bundle map[string]any
+			_ = json.Unmarshal([]byte(bundleRaw), &bundle)
+			count = len(mergePreKeysExcludingConsumed(nil, preKeys, bundle["consumedPreKeyIds"]))
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"count": count})
@@ -451,7 +544,15 @@ func (s *Server) cryptoReplenishPreKeys(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "没有有效的 P-256 PreKey"})
 		return
 	}
-	merged, err := s.mergeStoredPreKeys(r.Context(), in.UserID, validIncoming, true)
+	bundleRaw, _, err := s.systemConfigValue(r.Context(), "e2ee:bundle:"+in.UserID)
+	if err != nil {
+		log.Printf("[Crypto] 补充 PreKeys 失败: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "补充失败"})
+		return
+	}
+	var bundle map[string]any
+	_ = json.Unmarshal([]byte(bundleRaw), &bundle)
+	merged, err := s.mergeStoredPreKeys(r.Context(), in.UserID, validIncoming, true, bundle["consumedPreKeyIds"])
 	if err != nil {
 		log.Printf("[Crypto] 补充 PreKeys 失败: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "补充失败"})
@@ -461,7 +562,7 @@ func (s *Server) cryptoReplenishPreKeys(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "totalCount": len(merged)})
 }
 
-func (s *Server) mergeStoredPreKeys(ctx context.Context, userID string, incoming []e2eePreKey, keepExisting bool) ([]e2eePreKey, error) {
+func (s *Server) mergeStoredPreKeys(ctx context.Context, userID string, incoming []e2eePreKey, keepExisting bool, consumedIDs any) ([]e2eePreKey, error) {
 	raw, _, err := s.systemConfigValue(ctx, "e2ee:prekeys:"+userID)
 	if err != nil {
 		return nil, err
@@ -470,7 +571,7 @@ func (s *Server) mergeStoredPreKeys(ctx context.Context, userID string, incoming
 	if keepExisting {
 		existing = parsePreKeys(raw)
 	}
-	merged := mergePreKeys(existing, incoming)
+	merged := mergePreKeysExcludingConsumed(existing, incoming, consumedIDs)
 	out, err := json.Marshal(merged)
 	if err != nil {
 		return nil, err
@@ -479,4 +580,26 @@ func (s *Server) mergeStoredPreKeys(ctx context.Context, userID string, incoming
 		return nil, err
 	}
 	return merged, nil
+}
+
+func (s *Server) persistPreKeyConsumption(ctx context.Context, userID, preKeysValue, bundleValue string) error {
+	if s.db == nil {
+		return errDatabaseUnavailable
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	for key, value := range map[string]string{
+		"e2ee:prekeys:" + userID: preKeysValue,
+		"e2ee:bundle:" + userID:  bundleValue,
+	} {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO "SystemConfig" ("key","value","updatedAt") VALUES ($1,$2,NOW())
+			ON CONFLICT ("key") DO UPDATE SET "value"=EXCLUDED."value","updatedAt"=NOW()`, key, value); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }

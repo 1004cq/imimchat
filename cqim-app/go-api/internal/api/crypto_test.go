@@ -94,6 +94,56 @@ func TestP256PreKeyValidationFiltersLegacyRawKey(t *testing.T) {
 	}
 }
 
+func TestTakeOneValidP256PreKeyDoesNotReturnConsumedKey(t *testing.T) {
+	first := e2eePreKey{KeyID: 7.0, PublicKey: testP256SPKI(t)}
+	second := e2eePreKey{KeyID: 8.0, PublicKey: testP256SPKI(t)}
+	taken, remaining := takeOneValidP256PreKey([]e2eePreKey{first, second}, nil)
+	if taken == nil || taken.PublicKey != first.PublicKey {
+		t.Fatalf("unexpected taken key %#v", taken)
+	}
+	if len(remaining) != 1 || remaining[0].PublicKey != second.PublicKey {
+		t.Fatalf("unexpected remaining keys %#v", remaining)
+	}
+	for _, item := range remaining {
+		if item.PublicKey == taken.PublicKey {
+			t.Fatal("consumed key was returned to the pool")
+		}
+	}
+}
+
+func TestTakeOneValidP256PreKeyRejectsEmptyPool(t *testing.T) {
+	taken, remaining := takeOneValidP256PreKey(nil, nil)
+	if taken != nil || len(remaining) != 0 {
+		t.Fatalf("expected empty result, got taken=%#v remaining=%#v", taken, remaining)
+	}
+}
+
+func TestConsumedPreKeyCannotBeTakenOrMergedAgain(t *testing.T) {
+	consumed := e2eePreKey{KeyID: 21.0, PublicKey: testP256SPKI(t)}
+	fresh := e2eePreKey{KeyID: 22.0, PublicKey: testP256SPKI(t)}
+	consumedIDs := []any{21.0}
+
+	taken, remaining := takeOneValidP256PreKey([]e2eePreKey{consumed, fresh}, consumedIDs)
+	if taken == nil || taken.KeyID != fresh.KeyID || len(remaining) != 0 {
+		t.Fatalf("unexpected take result taken=%#v remaining=%#v", taken, remaining)
+	}
+	merged := mergePreKeysExcludingConsumed(nil, []e2eePreKey{consumed, fresh}, consumedIDs)
+	if len(merged) != 1 || merged[0].KeyID != fresh.KeyID {
+		t.Fatalf("consumed key returned to pool: %#v", merged)
+	}
+}
+
+func TestNormalizeConsumedPreKeyIDs(t *testing.T) {
+	got := normalizeConsumedPreKeyIDs([]any{1.0, 1.0, "2", nil, 3.0})
+	if len(got) != 2 || got[0] != 1.0 || got[1] != 3.0 {
+		t.Fatalf("unexpected consumed ids %#v", got)
+	}
+	remembered := rememberConsumedPreKey(got, 4.0)
+	if len(remembered) != 3 || remembered[2] != 4.0 {
+		t.Fatalf("unexpected remembered ids %#v", remembered)
+	}
+}
+
 func TestGetBundleNeverPlainText404(t *testing.T) {
 	server := &Server{}
 	handler := server.Handler()

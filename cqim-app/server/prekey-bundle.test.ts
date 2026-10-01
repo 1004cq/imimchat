@@ -4,7 +4,10 @@ import {
   filterValidP256PreKeys,
   isValidP256SPKIPublicKey,
   mergeValidP256PreKeys,
+  normalizeConsumedPreKeyIds,
+  rememberConsumedPreKey,
   resolveSigningPublicKey,
+  takeOneValidP256PreKey,
 } from './prekey-bundle.ts';
 
 function p256SPKI(): string {
@@ -60,5 +63,35 @@ describe('P-256 PreKey validation', () => {
       { keyId: 2, publicKey: replacement },
       { keyId: 3, publicKey: incoming },
     ]);
+  });
+
+  it('removes a delivered one-time key from the returned pool', () => {
+    const first = { keyId: 7, publicKey: p256SPKI() };
+    const second = { keyId: 8, publicKey: p256SPKI() };
+    const taken = takeOneValidP256PreKey([first, second]);
+    expect(taken.preKey).toEqual(first);
+    expect(taken.remaining).toEqual([second]);
+    expect(taken.remaining).not.toContainEqual(first);
+  });
+
+  it('returns no key for an empty or invalid pool', () => {
+    expect(takeOneValidP256PreKey([])).toEqual({ preKey: null, remaining: [] });
+    expect(takeOneValidP256PreKey([{ keyId: 1, publicKey: 'invalid' }]))
+      .toEqual({ preKey: null, remaining: [] });
+  });
+
+  it('never merges an already consumed key back into the pool', () => {
+    const consumed = { keyId: 21, publicKey: p256SPKI() };
+    const fresh = { keyId: 22, publicKey: p256SPKI() };
+    expect(mergeValidP256PreKeys([], [consumed, fresh], [21])).toEqual([fresh]);
+    expect(takeOneValidP256PreKey([consumed, fresh], [21])).toEqual({
+      preKey: fresh,
+      remaining: [],
+    });
+  });
+
+  it('deduplicates and remembers consumed key ids', () => {
+    expect(normalizeConsumedPreKeyIds([1, 1, '2', null, 3])).toEqual([1, 3]);
+    expect(rememberConsumedPreKey([1, 3], 4)).toEqual([1, 3, 4]);
   });
 });
