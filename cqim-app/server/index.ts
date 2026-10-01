@@ -1360,6 +1360,19 @@ async function handleMessage(client: SignalClient, raw: string) {
       break;
     }
 
+    // ===== 私聊 E2EE 会话重置同步 =====
+    case "private_session_reset": {
+      const targetUserId = msg.to || msg.payload?.peerId;
+      if (targetUserId && targetUserId !== client.userId) {
+        sendTo(targetUserId, {
+          type: 'private_session_reset' as any,
+          from: client.userId,
+          payload: { peerId: client.userId },
+        });
+      }
+      break;
+    }
+
     // ===== 应用层心跳（刷新 Redis 在线状态 TTL） =====
     case "heartbeat": {
       if (client.userId) {

@@ -20,7 +20,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { springBadge } from '@/lib/animations';
 import {
   clearChatScrollAnchor,
-  loadChatScrollAnchor,
   saveChatScrollAnchor,
 } from '@/lib/chatScrollAnchor';
 
@@ -220,32 +219,43 @@ export const VirtualMessageList = memo(forwardRef<VirtualMessageListHandle, Virt
   const getKey = useCallback((msg: VirtualMessageItem, index: number) => `${msg.id || msg.seq || 'message'}-${index}`, []);
   const getHeight = useCallback((msg: VirtualMessageItem, index: number) => rowHeightsRef.current.get(getKey(msg, index)) || estimatedRowHeight, [estimatedRowHeight, getKey]);
 
+  // 前缀高度表：避免滚动时反复从第 0 条消息累加高度。
+  // layoutVersion 在 ResizeObserver 测量完成后递增，因此缓存会在高度变化后重建。
+  const offsets = useMemo(() => {
+    const next = new Array<number>(safeMessages.length + 1);
+    next[0] = 0;
+    for (let i = 0; i < safeMessages.length; i += 1) {
+      next[i + 1] = next[i] + getHeight(safeMessages[i], i);
+    }
+    return next;
+  }, [getHeight, layoutVersion, safeMessages]);
+
+  const findIndexAtOffset = useCallback((target: number) => {
+    let low = 0;
+    let high = safeMessages.length;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      if (offsets[mid + 1] <= target) low = mid + 1;
+      else high = mid;
+    }
+    return Math.min(low, Math.max(0, safeMessages.length - 1));
+  }, [offsets, safeMessages.length]);
+
   const getRange = useCallback(() => {
-    const startLimit = Math.max(0, scrollTop - OVERSCAN_PX);
-    const endLimit = scrollTop + viewportHeight + OVERSCAN_PX;
-    let offset = 0;
-    let start = 0;
-    let end = safeMessages.length;
-    for (let i = 0; i < safeMessages.length; i += 1) {
-      const next = offset + getHeight(safeMessages[i], i);
-      if (next >= startLimit) { start = i; break; }
-      offset = next;
-    }
-    offset = 0;
-    for (let i = 0; i < safeMessages.length; i += 1) {
-      offset += getHeight(safeMessages[i], i);
-      if (offset >= endLimit) { end = i + 1; break; }
-    }
+    if (safeMessages.length === 0) return { start: 0, end: 0 };
+    const start = findIndexAtOffset(Math.max(0, scrollTop - OVERSCAN_PX));
+    const end = Math.min(
+      safeMessages.length,
+      findIndexAtOffset(scrollTop + viewportHeight + OVERSCAN_PX) + 2,
+    );
     return { start, end };
-  }, [getHeight, safeMessages, scrollTop, viewportHeight]);
+  }, [findIndexAtOffset, safeMessages.length, scrollTop, viewportHeight]);
 
   const getOffsetBefore = useCallback((index: number) => {
-    let offset = 0;
-    for (let i = 0; i < index; i += 1) offset += getHeight(safeMessages[i], i);
-    return offset;
-  }, [getHeight, safeMessages]);
+    return offsets[Math.max(0, Math.min(index, offsets.length - 1))] || 0;
+  }, [offsets]);
 
-  const totalHeight = safeMessages.reduce((sum, msg, index) => sum + getHeight(msg, index), 0);
+  const totalHeight = offsets[safeMessages.length] || 0;
   const { start, end } = getRange();
 
   const getVisibleAnchorMessageId = useCallback((): string | null => {
@@ -319,12 +329,13 @@ export const VirtualMessageList = memo(forwardRef<VirtualMessageListHandle, Virt
     persistAnchor,
   }), [scrollToBottom, getVisibleAnchorMessageId, persistAnchor]);
 
-  // 切换会话：重置恢复状态，并加载该会话锚点
+  // 切换会话：默认从最新消息开始，避免重新打开聊天停在旧阅读位置。
+  // 用户仍可在当前页面主动上滑查看历史；新消息到达时会沿用当前位置。
   useLayoutEffect(() => {
     activeChatIdRef.current = chatId || null;
     restoreAttemptsRef.current = 0;
     if (chatId) {
-      pendingAnchorRef.current = loadChatScrollAnchor(chatId);
+      pendingAnchorRef.current = null;
     } else {
       pendingAnchorRef.current = undefined;
     }

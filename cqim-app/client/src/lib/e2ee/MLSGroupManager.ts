@@ -1089,8 +1089,6 @@ export class MLSGroupManager {
     }
 
     try {
-      await this.uploadKeyPackage().catch(() => {});
-
       if (await this.hasMLSState(groupId)) {
         await this.applyPendingCommits(groupId);
         return { ready: true, recoveredVia: 'local' };
