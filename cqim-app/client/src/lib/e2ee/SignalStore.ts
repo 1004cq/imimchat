@@ -52,6 +52,7 @@ export interface LocalRegistration {
   identityKeyPair: KeyPairB64;   // ECDH Identity Key
   signingKeyPair?: KeyPairB64;   // ECDSA 签名密钥（Signed PreKey 专用）
   createdAt: number;
+  nextPreKeyId?: number;
 }
 
 // ============================================================
@@ -229,6 +230,15 @@ export class SignalStore {
   async saveSession(record: SessionRecord): Promise<void> {
     const db = this.ensureDB();
     await db.put(STORES.SESSION, record);
+  }
+
+  /** Persist authenticated receive state and consume its OPK atomically. */
+  async commitReceived(record: SessionRecord, preKeyId?: number, identity?: IdentityRecord): Promise<void> {
+    const tx = this.ensureDB().transaction([STORES.SESSION, STORES.PREKEY, STORES.IDENTITY], 'readwrite');
+    await tx.objectStore(STORES.SESSION).put(record);
+    if (preKeyId != null) await tx.objectStore(STORES.PREKEY).delete(preKeyId);
+    if (identity) await tx.objectStore(STORES.IDENTITY).put(identity);
+    await tx.done;
   }
 
   async getSession(peerId: string): Promise<SessionRecord | undefined> {

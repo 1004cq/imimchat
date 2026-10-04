@@ -16,8 +16,41 @@ import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import prisma from './db.js';
 import { resolveSigningPublicKey } from './prekey-bundle.js';
+import { userAuth } from './auth.js';
+import { consumePreKey, mergePreKeys, type PreKeyPool } from './prekey-pool.js';
+import type { Prisma } from '@prisma/client';
 
 const router = Router();
+router.use(userAuth);
+router.use((req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (req.method === 'POST' && req.body?.userId && req.body.userId !== (req as any).user.id) {
+    return res.status(403).json({ error: '不能修改其他用户的密钥' });
+  }
+  next();
+});
+
+// All pool readers/writers use the SAME database lock, including across Node
+// processes. Keep the legacy available-array format for existing consumers.
+async function withPreKeyLock<T>(userId: string, work: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+  return prisma.$transaction(async tx => {
+    // executeRaw avoids asking Prisma to deserialize PostgreSQL's void type.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`e2ee:${userId}`}))`;
+    return work(tx);
+  });
+}
+
+async function readPool(tx: Prisma.TransactionClient, userId: string): Promise<PreKeyPool> {
+  const available = await tx.systemConfig.findUnique({ where: { key: `e2ee:prekeys:${userId}` } });
+  const consumed = await tx.systemConfig.findUnique({ where: { key: `e2ee:consumed-prekeys:${userId}` } });
+  return { available: available ? JSON.parse(available.value) : [], consumed: consumed ? JSON.parse(consumed.value) : [] };
+}
+
+async function writePool(tx: Prisma.TransactionClient, userId: string, pool: PreKeyPool): Promise<void> {
+  for (const [key, value] of [[`e2ee:prekeys:${userId}`, pool.available], [`e2ee:consumed-prekeys:${userId}`, pool.consumed]] as const) {
+    await tx.systemConfig.upsert({ where: { key }, update: { value: JSON.stringify(value) }, create: { key, value: JSON.stringify(value) } });
+  }
+}
 
 // ============================================================
 // 1. AES-256-GCM 加解密工具（服务端存储加密）
@@ -269,7 +302,8 @@ router.post('/register-bundle', async (req: Request, res: Response) => {
   }
 
   try {
-    const existingBundle = await prisma.systemConfig.findUnique({
+    await withPreKeyLock(userId, async tx => {
+    const existingBundle = await tx.systemConfig.findUnique({
       where: { key: `e2ee:bundle:${userId}` },
     });
     const storedSigningPublicKey = resolveSigningPublicKey(
@@ -279,7 +313,7 @@ router.post('/register-bundle', async (req: Request, res: Response) => {
     );
 
     // 存储 ECDH 身份公钥、ECDSA 签名公钥和签名预密钥
-    await prisma.systemConfig.upsert({
+    await tx.systemConfig.upsert({
       where: { key: `e2ee:bundle:${userId}` },
       update: {
         value: JSON.stringify({
@@ -303,29 +337,14 @@ router.post('/register-bundle', async (req: Request, res: Response) => {
       },
     });
 
-    // 存储 One-Time PreKeys（追加模式，不覆盖已有的）
-    if (Array.isArray(preKeys) && preKeys.length > 0) {
-      // 获取已有的 preKeys
-      const existingConfig = await prisma.systemConfig.findUnique({
-        where: { key: `e2ee:prekeys:${userId}` },
-      });
-      let existingKeys: Array<{ keyId: number; publicKey: string }> = [];
-      if (existingConfig?.value) {
-        try { existingKeys = JSON.parse(existingConfig.value); } catch {}
-      }
-
-      // 合并新旧 preKeys（去重）
-      const keyMap = new Map<number, string>();
-      existingKeys.forEach(k => keyMap.set(k.keyId, k.publicKey));
-      preKeys.forEach((k: { keyId: number; publicKey: string }) => keyMap.set(k.keyId, k.publicKey));
-      const mergedKeys = Array.from(keyMap.entries()).map(([keyId, publicKey]) => ({ keyId, publicKey }));
-
-      await prisma.systemConfig.upsert({
-        where: { key: `e2ee:prekeys:${userId}` },
-        update: { value: JSON.stringify(mergedKeys) },
-        create: { key: `e2ee:prekeys:${userId}`, value: JSON.stringify(mergedKeys) },
-      });
-    }
+    const sameIdentity = existingBundle && JSON.parse(existingBundle.value).identityKey === identityKey;
+    const pool = sameIdentity ? await readPool(tx, userId) : { available: [], consumed: [] };
+    // Validate ID conflicts before pruning keys absent from the uploaded pool.
+    if (Array.isArray(preKeys)) mergePreKeys(pool, preKeys);
+    // A full registration advertises exactly the private keys still retained
+    // by this installation. Preserve tombstones, not stale available keys.
+    await writePool(tx, userId, mergePreKeys({ available: Array.isArray(preKeys) ? [] : pool.available, consumed: pool.consumed }, Array.isArray(preKeys) ? preKeys : []));
+    });
 
     console.log(`[Crypto] 用户 ${userId} 注册 PreKey Bundle 成功, preKeys: ${preKeys?.length || 0}`);
     res.json({ success: true });
@@ -348,43 +367,29 @@ router.get('/get-bundle', async (req: Request, res: Response) => {
   }
 
   try {
-    // 获取身份公钥和签名预密钥
-    const bundleConfig = await prisma.systemConfig.findUnique({
+    const result = await withPreKeyLock(userId, async tx => {
+    const bundleConfig = await tx.systemConfig.findUnique({
       where: { key: `e2ee:bundle:${userId}` },
     });
 
     if (!bundleConfig?.value) {
-      return res.status(404).json({ error: '用户未注册 E2EE Bundle' });
+      return null;
     }
 
     const bundle = JSON.parse(bundleConfig.value);
 
-    // 获取并消费一个 One-Time PreKey
-    let oneTimePreKey: { keyId: number; publicKey: string } | undefined;
-    const preKeysConfig = await prisma.systemConfig.findUnique({
-      where: { key: `e2ee:prekeys:${userId}` },
-    });
-
-    if (preKeysConfig?.value) {
-      const preKeys: Array<{ keyId: number; publicKey: string }> = JSON.parse(preKeysConfig.value);
-      if (preKeys.length > 0) {
-        // 取出第一个并从列表中移除（消费）
-        oneTimePreKey = preKeys.shift();
-        await prisma.systemConfig.update({
-          where: { key: `e2ee:prekeys:${userId}` },
-          data: { value: JSON.stringify(preKeys) },
-        });
-        console.log(`[Crypto] 消费用户 ${userId} 的 PreKey #${oneTimePreKey!.keyId}, 剩余: ${preKeys.length}`);
-      }
-    }
-
-    res.json({
+    const consumed = consumePreKey(await readPool(tx, userId));
+    if (consumed.key) await writePool(tx, userId, consumed.pool);
+    return {
       registrationId: bundle.registrationId,
       identityKey: bundle.identityKey,
       signingPublicKey: bundle.signingPublicKey || null,
       signedPreKey: bundle.signedPreKey,
-      preKey: oneTimePreKey || null,
+      preKey: consumed.key || null,
+    };
     });
+    if (!result) return res.status(404).json({ error: '用户未注册 E2EE Bundle' });
+    res.json(result);
   } catch (err: any) {
     console.error('[Crypto] 获取 Bundle 失败:', err.message);
     res.status(500).json({ error: '获取 Bundle 失败' });
@@ -398,6 +403,7 @@ router.get('/get-bundle', async (req: Request, res: Response) => {
  */
 router.get('/prekey-count', async (req: Request, res: Response) => {
   const { userId } = req.query as { userId: string };
+  if (userId !== (req as any).user.id) return res.status(403).json({ error: '只能查询自己的密钥池' });
 
   if (!userId) {
     return res.status(400).json({ error: '缺少 userId' });
@@ -434,27 +440,14 @@ router.post('/replenish-prekeys', async (req: Request, res: Response) => {
   }
 
   try {
-    const existingConfig = await prisma.systemConfig.findUnique({
-      where: { key: `e2ee:prekeys:${userId}` },
+    const count = await withPreKeyLock(userId, async tx => {
+      const bundle = await tx.systemConfig.findUnique({ where: { key: `e2ee:bundle:${userId}` } });
+      if (!bundle) throw new Error('Register identity before replenishing');
+      const pool = mergePreKeys(await readPool(tx, userId), preKeys);
+      await writePool(tx, userId, pool);
+      return pool.available.length;
     });
-    let existingKeys: Array<{ keyId: number; publicKey: string }> = [];
-    if (existingConfig?.value) {
-      try { existingKeys = JSON.parse(existingConfig.value); } catch {}
-    }
-
-    const keyMap = new Map<number, string>();
-    existingKeys.forEach(k => keyMap.set(k.keyId, k.publicKey));
-    preKeys.forEach((k: { keyId: number; publicKey: string }) => keyMap.set(k.keyId, k.publicKey));
-    const mergedKeys = Array.from(keyMap.entries()).map(([keyId, publicKey]) => ({ keyId, publicKey }));
-
-    await prisma.systemConfig.upsert({
-      where: { key: `e2ee:prekeys:${userId}` },
-      update: { value: JSON.stringify(mergedKeys) },
-      create: { key: `e2ee:prekeys:${userId}`, value: JSON.stringify(mergedKeys) },
-    });
-
-    console.log(`[Crypto] 用户 ${userId} 补充 ${preKeys.length} 个 PreKeys, 总计: ${mergedKeys.length}`);
-    res.json({ success: true, totalCount: mergedKeys.length });
+    res.json({ success: true, totalCount: count });
   } catch (err: any) {
     console.error('[Crypto] 补充 PreKeys 失败:', err.message);
     res.status(500).json({ error: '补充失败' });

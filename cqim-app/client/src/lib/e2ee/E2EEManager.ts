@@ -56,6 +56,7 @@ export interface PreKeyBundle {
 
 /** 加密后的消息信封 */
 export interface SignalEnvelope {
+  version?: number;
   type: 'prekey' | 'message';  // prekey = 首条消息含 X3DH 信息
   senderRegistrationId: number;
   senderIdentityKey: string;
@@ -64,6 +65,8 @@ export interface SignalEnvelope {
   usedOneTimePreKeyId?: number;
   /** 发起方使用的对端 Signed PreKey id */
   usedSignedPreKeyId?: number;
+  recipientSignedPreKeyId?: number;
+  recipientOneTimePreKeyId?: number;
   senderRatchetKey: string;
   previousCounter: number;
   counter: number;
@@ -73,6 +76,8 @@ export interface SignalEnvelope {
 
 /** Double Ratchet 会话状态 */
 interface RatchetState {
+  skippedMessageKeys?: Record<string, string>;
+  retiredRatchetKeys?: string[];
   // DH 棘轮
   dhSendingKeyPair: KeyPairB64;
   dhReceivingKey: string | null;
@@ -126,6 +131,20 @@ export interface SessionInfo {
 // ============================================================
 
 export class E2EEManager {
+  private operations = new Map<string, Promise<void>>();
+
+  /** Serialize the complete read/derive/commit, including across tabs/workers. */
+  private async withPeer<T>(peerId: string, work: () => Promise<T>): Promise<T> {
+    if (typeof navigator !== 'undefined' && navigator.locks) {
+      return navigator.locks.request(`imim-e2ee:${peerId}`, work);
+    }
+    const previous = this.operations.get(peerId) ?? Promise.resolve();
+    const result = previous.then(work);
+    const settled = result.then(() => {}, () => {});
+    this.operations.set(peerId, settled);
+    try { return await result; }
+    finally { if (this.operations.get(peerId) === settled) this.operations.delete(peerId); }
+  }
   private store: SignalStore;
   private _initialized = false;
   private _registrationId = 0;
@@ -171,6 +190,12 @@ export class E2EEManager {
    */
   async initialize(): Promise<void> {
     if (this._initialized) return;
+    await this.withPeer('$initialize', () => this.initializeLocked());
+    await this.initializeWorkerIfAvailable();
+  }
+
+  private async initializeLocked(): Promise<void> {
+    if (this._initialized) return;
 
     await this.store.init();
 
@@ -191,7 +216,6 @@ export class E2EEManager {
       
       // 启动 Worker 代理（极致优化：计算密集型任务后台化）。
       // Worker 不可用时继续保留主线程实现，不能阻断登录。
-      await this.initializeWorkerIfAvailable();
 
       console.log('[E2EE] 已加载本地密钥，Registration ID:', this._registrationId);
       return;
@@ -202,7 +226,6 @@ export class E2EEManager {
     this._initialized = true;
     
     // 启动 Worker 代理（极致优化：计算密集型任务后台化）。
-    await this.initializeWorkerIfAvailable();
 
     console.log('[E2EE] 密钥生成完成，Registration ID:', this._registrationId);
   }
@@ -212,7 +235,7 @@ export class E2EEManager {
     const userId = typeof localStorage !== 'undefined' ? localStorage.getItem('user_id') || '' : '';
     if (!userId) return;
     try {
-      await e2eeProxy.init(userId);
+      await e2eeProxy.init(userId, localStorage.getItem('user_token') || '');
     } catch (error) {
       console.warn('[E2EE] Worker 初始化失败，回退主线程:', error);
     }
@@ -288,7 +311,10 @@ export class E2EEManager {
         signedPreKeySignature: latest.signature,
       });
     } catch {
-      await this.generateSignedPreKey(latest.id);
+      // Issued bundles refer to this exact key ID/public key. Re-sign in place;
+      // replacing its private key makes delayed first messages undecryptable.
+      await this.store.saveSignedPreKey({ ...latest,
+        signature: await signSignedPreKey(signing.privKey, latest.keyPair.pubKey) });
     }
   }
 
@@ -310,6 +336,7 @@ export class E2EEManager {
   /** 批量生成 One-Time PreKeys */
   async generatePreKeys(startId: number, count: number): Promise<void> {
     for (let i = 0; i < count; i++) {
+      if (await this.store.getPreKey(startId + i)) throw new Error('PreKey ID 已存在，拒绝覆盖私钥');
       const keyPair = await generateKeyPair();
       const exported = await exportKeyPair(keyPair);
       await this.store.savePreKey({
@@ -351,6 +378,16 @@ export class E2EEManager {
    * 将本地 PreKey Bundle 注册到服务器
    * 应在初始化完成后调用
    */
+  private accessToken = '';
+
+  setAccessToken(token: string): void { this.accessToken = token; }
+
+  private authHeaders(): Record<string, string> {
+    const token = typeof localStorage !== 'undefined' ? localStorage.getItem('user_token') : this.accessToken;
+    if (!token) throw new Error('E2EE 密钥接口需要登录');
+    return { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+  }
+
   async registerBundleToServer(userId: string): Promise<void> {
     try {
       const bundle = await this.getLocalPreKeyBundle();
@@ -362,7 +399,7 @@ export class E2EEManager {
 
       const resp = await fetch('/api/crypto/register-bundle', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.authHeaders(),
         body: JSON.stringify({
           userId,
           registrationId: bundle.registrationId,
@@ -380,10 +417,11 @@ export class E2EEManager {
       if (resp.ok) {
         console.log('[E2EE] Bundle 已注册到服务器');
       } else {
-        console.error('[E2EE] Bundle 注册失败:', await resp.text());
+        throw new Error(`E2EE Bundle 注册失败 (${resp.status})`);
       }
     } catch (err) {
       console.error('[E2EE] Bundle 注册网络错误:', err);
+      throw err;
     }
   }
 
@@ -392,7 +430,7 @@ export class E2EEManager {
    * 强制要求从服务器获取，禁止使用 Mock Bundle
    */
   async fetchRemoteBundle(peerId: string): Promise<PreKeyBundle> {
-    const resp = await fetch(`/api/crypto/get-bundle?userId=${encodeURIComponent(peerId)}`);
+    const resp = await fetch(`/api/crypto/get-bundle?userId=${encodeURIComponent(peerId)}`, { headers: this.authHeaders(), cache: 'no-store' });
     if (!resp.ok) {
       const errorText = await resp.text();
       throw new Error(`无法获取用户 ${peerId} 的安全凭证 (Bundle): ${errorText}`);
@@ -410,13 +448,7 @@ export class E2EEManager {
       oneTimePreKey: data.preKey?.publicKey,
     };
 
-    // 保存对端 Identity Key（TOFU）
-    await this.store.saveIdentity({
-      userId: peerId,
-      identityKey: data.identityKey,
-      trusted: true,
-      addedAt: Date.now(),
-    });
+    await assertValidSignedPreKey(bundle);
 
     console.log(`[E2EE] 从服务器成功获取到 ${peerId} 的真实 Bundle`);
     return bundle;
@@ -426,26 +458,31 @@ export class E2EEManager {
    * 检查并补充服务端的 One-Time PreKeys
    */
   async checkAndReplenishServerPreKeys(userId: string, threshold: number = 5): Promise<void> {
+    return this.withPeer('$prekeys', () => this.checkAndReplenishServerPreKeysLocked(userId, threshold));
+  }
+
+  private async checkAndReplenishServerPreKeysLocked(userId: string, threshold: number): Promise<void> {
     try {
-      const resp = await fetch(`/api/crypto/prekey-count?userId=${encodeURIComponent(userId)}`);
+      const resp = await fetch(`/api/crypto/prekey-count?userId=${encodeURIComponent(userId)}`, { headers: this.authHeaders(), cache: 'no-store' });
       if (!resp.ok) return;
       const { count } = await resp.json();
 
       if (count < threshold) {
         // 生成新的 PreKeys
-        const startId = Date.now() % 100000;
+        const startId = await this.reservePreKeyIds(20);
         await this.generatePreKeys(startId, 20);
         const newPreKeys = await this.store.getAllPreKeys();
-        const preKeysPayload = newPreKeys.slice(-20).map(pk => ({
+        const preKeysPayload = newPreKeys.filter(pk => pk.id >= startId && pk.id < startId + 20).map(pk => ({
           keyId: pk.id,
           publicKey: pk.keyPair.pubKey,
         }));
 
-        await fetch('/api/crypto/replenish-prekeys', {
+        const uploaded = await fetch('/api/crypto/replenish-prekeys', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: this.authHeaders(),
           body: JSON.stringify({ userId, preKeys: preKeysPayload }),
         });
+        if (!uploaded.ok) throw new Error(`PreKey 补充失败 (${uploaded.status})`);
         console.log(`[E2EE] 已补充 ${preKeysPayload.length} 个 PreKeys 到服务器`);
       }
     } catch (err) {
@@ -472,6 +509,10 @@ export class E2EEManager {
    * 3. 使用 HKDF 从 DH 结果派生根密钥
    */
   async establishSession(peerId: string, bundle: PreKeyBundle): Promise<void> {
+    return this.withPeer(peerId, () => this.establishSessionLocked(peerId, bundle));
+  }
+
+  private async establishSessionLocked(peerId: string, bundle: PreKeyBundle): Promise<void> {
     if (!this._identityKeyPair) throw new Error('E2EE 未初始化');
 
     // 检查是否已有会话
@@ -486,6 +527,9 @@ export class E2EEManager {
     // 验证对端 Signed PreKey 签名：必须用 ECDSA signingPublicKey，不能用 ECDH identityKey
     try {
       await assertValidSignedPreKey(bundle);
+      if ((bundle.oneTimePreKeyId != null) !== !!bundle.oneTimePreKey) {
+        throw new Error('不完整的一次性预密钥 Bundle');
+      }
     } catch (err: any) {
       const msg = err?.message || String(err);
       if (msg.includes('对端安全凭证')) throw err;
@@ -609,6 +653,10 @@ export class E2EEManager {
    * 使用 Double Ratchet 的对称棘轮步骤
    */
   async encrypt(peerId: string, plaintext: string): Promise<SignalEnvelope> {
+    return this.withPeer(peerId, () => this.encryptLocked(peerId, plaintext));
+  }
+
+  private async encryptLocked(peerId: string, plaintext: string): Promise<SignalEnvelope> {
     if (!this._identityKeyPair) throw new Error('E2EE 未初始化');
 
     // 获取或建立会话
@@ -616,7 +664,7 @@ export class E2EEManager {
     if (!sessionRecord) {
       // 自动建立会话：优先从服务器获取 Bundle
       const bundle = await this.fetchRemoteBundle(peerId);
-      await this.establishSession(peerId, bundle);
+      await this.establishSessionLocked(peerId, bundle);
       sessionRecord = await this.store.getSession(peerId);
     }
 
@@ -654,6 +702,7 @@ export class E2EEManager {
       state.sendCounter === 1 &&
       !state.receiveChainKey;
     const envelope: SignalEnvelope = {
+      version: 2,
       type: isFirstMessage ? 'prekey' : 'message',
       senderRegistrationId: this._registrationId,
       senderIdentityKey: this._identityKeyPair.pubKey,
@@ -672,6 +721,8 @@ export class E2EEManager {
       if (sessionData.usedSignedPreKeyId != null) {
         envelope.usedSignedPreKeyId = sessionData.usedSignedPreKeyId;
       }
+      envelope.recipientSignedPreKeyId = envelope.usedSignedPreKeyId;
+      envelope.recipientOneTimePreKeyId = envelope.usedOneTimePreKeyId;
     }
 
     console.log(`[E2EE] 消息已加密 → ${peerId}, counter: ${state.sendCounter}`);
@@ -683,58 +734,74 @@ export class E2EEManager {
    * 使用 Double Ratchet 的对称棘轮步骤
    */
   async decrypt(peerId: string, envelope: SignalEnvelope): Promise<string> {
-    if (!this._identityKeyPair) throw new Error('E2EE 未初始化');
+    return this.withPeer(peerId, () => this.decryptLocked(peerId, envelope));
+  }
 
-    let sessionRecord = await this.store.getSession(peerId);
+  private async decryptLocked(peerId: string, envelope: SignalEnvelope): Promise<string> {
+    if (!this._identityKeyPair) throw new Error('E2EE 未初始化');
+    if (envelope.version != null && envelope.version !== 2) throw new Error('不支持的加密版本');
+    if (envelope.recipientSignedPreKeyId != null && envelope.usedSignedPreKeyId != null && envelope.recipientSignedPreKeyId !== envelope.usedSignedPreKeyId ||
+        envelope.recipientOneTimePreKeyId != null && envelope.usedOneTimePreKeyId != null && envelope.recipientOneTimePreKeyId !== envelope.usedOneTimePreKeyId) {
+      throw new Error('冲突的预密钥标识');
+    }
+    if (!Number.isSafeInteger(envelope.counter) || envelope.counter < 1 ||
+        !Number.isSafeInteger(envelope.previousCounter) || envelope.previousCounter < 0) {
+      throw new Error('无效的加密消息计数');
+    }
+    envelope = {
+      ...envelope,
+      usedSignedPreKeyId: envelope.recipientSignedPreKeyId ?? envelope.usedSignedPreKeyId,
+      usedOneTimePreKeyId: envelope.recipientOneTimePreKeyId ?? envelope.usedOneTimePreKeyId,
+    };
+    const sessionRecord = await this.store.getSession(peerId);
+    let sessionData = sessionRecord ? JSON.parse(sessionRecord.sessionData) : null;
+    let consumedPreKeyId: number | undefined;
+    const cacheKey = `${envelope.senderRatchetKey}:${envelope.counter}`;
+    const cachedKey = sessionData?.ratchetState.skippedMessageKeys?.[cacheKey];
+    if (cachedKey) {
+      const plaintext = await aesDecrypt(envelope.ciphertext, base64ToBuffer(cachedKey));
+      delete sessionData.ratchetState.skippedMessageKeys[cacheKey];
+      await this.store.commitReceived({ peerId, sessionData: JSON.stringify(sessionData), updatedAt: Date.now() });
+      return bufferToString(plaintext);
+    }
+    if (sessionData?.ratchetState.retiredRatchetKeys?.includes(envelope.senderRatchetKey)) {
+      throw new Error('旧棘轮消息已处理或超出乱序窗口');
+    }
 
     // PreKey 消息：作为响应方完成 X3DH（不可再走发起方 establishSession）
     if (envelope.type === 'prekey') {
       const shouldReplace =
-        !sessionRecord || this.shouldReplaceSessionForPreKey(sessionRecord, envelope);
+        !sessionRecord || (envelope.senderRatchetKey !== sessionData.ratchetState.dhReceivingKey &&
+          this.shouldReplaceSessionForPreKey(sessionRecord, envelope));
       if (shouldReplace) {
-        if (sessionRecord) {
-          console.log('[E2EE] 替换现有会话以处理对端 PreKey 消息');
-          await this.store.removeSession(peerId);
-        }
-        await this.establishSessionAsResponder(peerId, envelope);
-        sessionRecord = await this.store.getSession(peerId);
+        // Candidate only: do not consume a prekey or replace a healthy session
+        // until the ciphertext has authenticated successfully.
+        const previousState: RatchetState | undefined = sessionData?.ratchetState;
+        sessionData = await this.establishSessionAsResponder(peerId, envelope);
+        sessionData.ratchetState.retiredRatchetKeys = [
+          ...(previousState?.retiredRatchetKeys ?? []), ...(previousState?.dhReceivingKey ? [previousState.dhReceivingKey] : []),
+        ].slice(-128);
+        consumedPreKeyId = envelope.usedOneTimePreKeyId;
       }
     }
 
-    if (!sessionRecord) {
+    if (!sessionData) {
       throw new Error(`没有与 ${peerId} 的加密会话`);
     }
 
-    const sessionData = JSON.parse(sessionRecord.sessionData);
     const state: RatchetState = sessionData.ratchetState;
 
     // 检查是否需要 DH 棘轮步骤
     if (envelope.senderRatchetKey !== state.dhReceivingKey) {
+      await this.skipReceiveKeys(state, envelope.previousCounter);
+      if (state.dhReceivingKey) {
+        state.retiredRatchetKeys = [...(state.retiredRatchetKeys ?? []), state.dhReceivingKey].slice(-128);
+      }
       await this.performDHRatchet(state, envelope.senderRatchetKey);
     }
-
-    // 对称棘轮步骤：从 receiveChainKey 派生消息密钥
-    if (!state.receiveChainKey) {
-      // 首次接收，使用发送链密钥的镜像
-      const chainKey = base64ToBuffer(state.sendChainKey || state.rootKey);
-      const { messageKey, nextChainKey } = await deriveMessageKeys(chainKey);
-      state.receiveChainKey = bufferToBase64(nextChainKey);
-
-      // 解密
-      const plainBuf = await aesDecrypt(envelope.ciphertext, messageKey);
-      state.receiveCounter++;
-
-      // 保存
-      sessionData.ratchetState = state;
-      await this.store.saveSession({
-        peerId,
-        sessionData: JSON.stringify(sessionData),
-        updatedAt: Date.now(),
-      });
-
-      return bufferToString(plainBuf);
-    }
-
+    if (envelope.counter <= state.receiveCounter) throw new Error('消息已解密，不能倒退当前棘轮');
+    await this.skipReceiveKeys(state, envelope.counter - 1);
+    if (!state.receiveChainKey) throw new Error('加密接收链不存在');
     // 正常对称棘轮
     const chainKey = base64ToBuffer(state.receiveChainKey);
     const { messageKey, nextChainKey } = await deriveMessageKeys(chainKey);
@@ -747,14 +814,29 @@ export class E2EEManager {
     state.receiveCounter++;
 
     sessionData.ratchetState = state;
-    await this.store.saveSession({
+    await this.store.commitReceived({
       peerId,
       sessionData: JSON.stringify(sessionData),
       updatedAt: Date.now(),
-    });
+    }, consumedPreKeyId, consumedPreKeyId != null || envelope.type === 'prekey' ? {
+      userId: peerId, identityKey: envelope.senderIdentityKey, trusted: true, addedAt: Date.now(),
+    } : undefined);
 
     console.log(`[E2EE] 消息已解密 ← ${peerId}, counter: ${state.receiveCounter}`);
     return bufferToString(plainBuf);
+  }
+
+  private async skipReceiveKeys(state: RatchetState, until: number): Promise<void> {
+    const skipped = state.skippedMessageKeys ??= {};
+    const gap = Math.max(0, until - state.receiveCounter);
+    if (gap + Object.keys(skipped).length > 128) throw new Error('乱序消息超出安全窗口');
+    if (gap > 0 && (!state.receiveChainKey || !state.dhReceivingKey)) throw new Error('缺少接收链');
+    while (state.receiveCounter < until) {
+      const derived = await deriveMessageKeys(base64ToBuffer(state.receiveChainKey!));
+      state.receiveCounter++;
+      skipped[`${state.dhReceivingKey}:${state.receiveCounter}`] = bufferToBase64(derived.messageKey);
+      state.receiveChainKey = bufferToBase64(derived.nextChainKey);
+    }
   }
 
   /**
@@ -785,7 +867,7 @@ export class E2EEManager {
         return envelope.senderIdentityKey > this._identityKeyPair.pubKey;
       }
 
-      return false;
+      return envelope.senderRatchetKey !== state.dhReceivingKey;
     } catch {
       return true;
     }
@@ -802,7 +884,7 @@ export class E2EEManager {
   private async establishSessionAsResponder(
     peerId: string,
     envelope: SignalEnvelope,
-  ): Promise<void> {
+  ): Promise<{ ratchetState: RatchetState; role: string }> {
     if (!this._identityKeyPair) throw new Error('E2EE 未初始化');
     if (!envelope.senderEphemeralKey) {
       throw new Error('PreKey 消息缺少 senderEphemeralKey');
@@ -817,7 +899,7 @@ export class E2EEManager {
       envelope.usedSignedPreKeyId != null
         ? await this.store.getSignedPreKey(envelope.usedSignedPreKeyId)
         : undefined;
-    if (!signedPreKey) {
+    if (!signedPreKey && envelope.usedSignedPreKeyId == null) {
       const all = await this.store.getAllSignedPreKeys();
       signedPreKey = all[all.length - 1];
     }
@@ -879,27 +961,7 @@ export class E2EEManager {
       initialized: true,
     };
 
-    await this.store.saveSession({
-      peerId,
-      sessionData: JSON.stringify({
-        ratchetState,
-        role: 'responder',
-      }),
-      updatedAt: Date.now(),
-    });
-
-    await this.store.saveIdentity({
-      userId: peerId,
-      identityKey: envelope.senderIdentityKey,
-      trusted: true,
-      addedAt: Date.now(),
-    });
-
-    if (oneTimePreKey) {
-      await this.store.removePreKey(oneTimePreKey.id);
-    }
-
-    console.log('[E2EE] 响应方 X3DH 完成，会话已建立');
+    return { ratchetState, role: 'responder' };
   }
 
   /** 响应方首次发送前：基于当前对端棘轮公钥创建发送链（info=imim-ratchet） */
@@ -1049,7 +1111,7 @@ export class E2EEManager {
 
   /** 重置与对端的会话 */
   async resetSession(peerId: string): Promise<void> {
-    await this.store.removeSession(peerId);
+    await this.withPeer(peerId, () => this.store.removeSession(peerId));
     console.log('[E2EE] 已重置与', peerId, '的会话');
   }
 
@@ -1067,9 +1129,22 @@ export class E2EEManager {
 
   /** 补充 One-Time PreKeys（当数量不足时） */
   async replenishPreKeysIfNeeded(threshold: number = 5): Promise<void> {
+    return this.withPeer('$prekeys', () => this.replenishPreKeysLocked(threshold));
+  }
+
+  private async reservePreKeyIds(count: number): Promise<number> {
+    const registration = await this.store.getLocalRegistration();
+    if (!registration) throw new Error('E2EE 未初始化');
+    const keys = await this.store.getAllPreKeys();
+    const start = Math.max(registration.nextPreKeyId || 0, Date.now(), ...keys.map(key => key.id + 1));
+    await this.store.saveLocalRegistration({ ...registration, nextPreKeyId: start + count });
+    return start;
+  }
+
+  private async replenishPreKeysLocked(threshold: number): Promise<void> {
     const count = await this.store.getPreKeyCount();
     if (count < threshold) {
-      const newStartId = count + 100; // 避免 ID 冲突
+      const newStartId = await this.reservePreKeyIds(20);
       await this.generatePreKeys(newStartId, 20);
       console.log('[E2EE] 已补充 20 个 One-Time PreKeys');
     }
