@@ -123,6 +123,9 @@ export class WorkerProxy {
   async signalDecrypt(peerId: string, envelope: SignalEnvelope): Promise<string> {
     return this.callWorker<string>('signal_decrypt', { peerId, envelope });
   }
+  async signalReset(peerId: string): Promise<void> {
+    return this.callWorker<void>('signal_reset', { peerId });
+  }
 
   async signalEncryptFile(fileBuffer: ArrayBuffer): Promise<{ ciphertext: ArrayBuffer; fileKey: string; iv: string }> {
     return this.callWorker('signal_encrypt_file', { fileBuffer }, [fileBuffer]);

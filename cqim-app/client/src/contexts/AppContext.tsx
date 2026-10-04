@@ -3,6 +3,8 @@
  */
 import React, { createContext, useContext, useReducer, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { createStore, useStore } from 'zustand';
+import type { StoreApi } from 'zustand';
+import { authenticatedSignalUrl } from '@/lib/e2ee/signal-url';
 import {
   type Chat, type Message, type MomentPost, type CallState, type BurnAfterReadTimer,
   MOCK_CHATS, MOCK_MESSAGES, MOCK_MOMENTS, CURRENT_USER,
@@ -688,7 +690,7 @@ interface AppZustandStore {
 
 // 延迟初始化：在模块加载时创建 store，使用 getInitialState() 作为初始值
 // 这样 useStore 一开始就有正确的值，当 AppProvider 更新 store 时，Zustand 会触发所有订阅者重渲染
-let appZustandStore: ReturnType<typeof createStore<AppZustandStore>>;
+let appZustandStore: StoreApi<AppZustandStore>;
 
 function getAppZustandStore() {
   if (!appZustandStore) {
@@ -1038,9 +1040,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!state.isLoggedIn) return;
 
     const currentUserId = state.currentUser?.id || 'me';
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host;
-    const wsUrl = `${protocol}//${host}/signal?userId=${encodeURIComponent(currentUserId)}`;
 
     let closedByEffect = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1082,6 +1081,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         try { existing.close(); } catch {}
         botWsRef.current = null;
       }
+      const wsUrl = authenticatedSignalUrl(currentUserId);
+      if (!wsUrl) return;
       const ws = new WebSocket(wsUrl);
       botWsRef.current = ws;
 
@@ -1105,6 +1106,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
+          if (msg.type === 'e2ee_session_reset' && typeof msg.from === 'string' && msg.from) {
+            const reset = async () => {
+              if (e2eeProxy.isReady) await e2eeProxy.signalReset(msg.from);
+              else {
+                const { E2EEManager } = await import('../lib/e2ee/E2EEManager');
+                await E2EEManager.shared().resetSession(msg.from);
+              }
+            };
+            void reset().catch(() => console.warn('[E2EE] 无法处理安全会话重建请求'));
+            return;
+          }
 
           // ===== BOT 消息推送 =====
           if (msg.type === 'bot_message') {

@@ -1,5 +1,5 @@
 import express from "express";
-import { createServer } from "http";
+import { createServer, type IncomingMessage } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import path from "path";
 import fs from "fs";
@@ -69,6 +69,7 @@ import groupRouter, {
 } from "./group-message";
 import { publicUrl } from "./public-url";
 import mediaRouter from './media-router.js';
+import { authenticateSignal, sessionResetSignal } from './signal-auth.js';
 import { ensureMediaBucket, saveMedia } from './media-storage.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -577,6 +578,7 @@ interface SignalClient {
   ws: WebSocket;
   userId: string;
   roomId?: string;
+  lastSessionResetAt?: number;
 }
 
 interface SignalMessage {
@@ -611,6 +613,7 @@ interface SignalMessage {
     | "private_send"       // 发送私聊消息
     | "private_message"    // 服务器推送私聊消息
     | "private_typing"     // 正在输入状态
+    | "e2ee_session_reset" // Explicit peer recovery; never inferred from history
     // ===== 已读回执信令 =====
     | "read_receipt"       // 已读回执（私聊）
     // ===== 在线状态信令 =====
@@ -645,6 +648,7 @@ interface SignalMessage {
 
 /** userId -> SignalClient */
 const clients = new Map<string, SignalClient>();
+const authenticatedSignalUsers = new WeakMap<IncomingMessage, string>();
 /** roomId -> Set<userId> */
 const rooms = new Map<string, Set<string>>();
 
@@ -713,6 +717,20 @@ async function handleMessage(client: SignalClient, raw: string) {
   console.log(`[Signal] ${msg.type} from=${client.userId} to=${msg.to || msg.roomId || "*"}`);
 
   switch (msg.type) {
+    case "e2ee_session_reset": {
+      if (client.lastSessionResetAt && Date.now() - client.lastSessionResetAt < 30_000) break;
+      const reset = await sessionResetSignal(client.userId, msg.to, async peer => !!await prisma.chat.findFirst({
+        where: { OR: [
+          { participantA: client.userId, participantB: peer },
+          { participantA: peer, participantB: client.userId },
+        ] }, select: { id: true },
+      }));
+      if (reset) {
+        client.lastSessionResetAt = Date.now();
+        sendTo(reset.to, reset);
+      }
+      break;
+    }
     case "join": {
       const roomId = msg.roomId || `room-${msg.to || client.userId}`;
       client.roomId = roomId;
@@ -2510,21 +2528,16 @@ app.use("/api/home", homeRouter);
     const url = new URL(request.url || '/', 'http://localhost');
     const pathname = url.pathname;
     if (pathname === '/signal') {
-      // ★ WebSocket 鉴权增强：支持 URL 参数中的 token 验证
       const wsToken = url.searchParams.get('token');
-      if (wsToken) {
-        try {
-          const session = await prisma.userSession.findUnique({ where: { token: wsToken }, select: { userId: true, expiresAt: true, user: { select: { isBanned: true } } } });
-          if (!session || session.expiresAt < new Date() || session.user?.isBanned) {
-            console.warn(`[Signal] WebSocket 鉴权失败: token 无效或已过期`);
-            socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-            socket.destroy();
-            return;
-          }
-        } catch (err) {
-          console.error('[Signal] WebSocket 鉴权异常:', err);
-          // 鉴权异常时不拒绝连接，回退到 userId 参数方式
-        }
+      try {
+        const userId = await authenticateSignal(wsToken, url.searchParams.get('userId'), token =>
+          prisma.userSession.findUnique({ where: { token }, select: { userId: true, expiresAt: true, user: { select: { isBanned: true } } } }));
+        authenticatedSignalUsers.set(request, userId);
+      } catch {
+        // No URL/credential/error object logging, and no unauthenticated fallback.
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
+        return;
       }
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
@@ -2620,9 +2633,8 @@ app.use("/api/home", homeRouter);
   });
 
   wss.on("connection", (ws, req) => {
-    // 从 URL 参数获取 userId，例如 /signal?userId=me
-    const url = new URL(req.url || "/", "http://localhost");
-    const userId = url.searchParams.get("userId") || `user-${Date.now()}`;
+    const userId = authenticatedSignalUsers.get(req);
+    if (!userId) { ws.close(1008, 'Unauthorized'); return; }
 
     const client: SignalClient = { ws, userId };
     (client as any)._alive = true;
