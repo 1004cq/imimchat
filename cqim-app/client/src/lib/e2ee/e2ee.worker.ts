@@ -58,6 +58,11 @@ ctx.onmessage = async (event: MessageEvent) => {
         if (!e2eeManager) throw new Error('E2EE Worker 未初始化');
         ctx.postMessage({ id, type: 'signal_decrypt_ok', payload: await e2eeManager.decrypt(payload.peerId, payload.envelope) });
         return;
+      case 'signal_reset':
+        if (!e2eeManager) throw new Error('E2EE Worker 未初始化');
+        await e2eeManager.resetSession(payload.peerId);
+        ctx.postMessage({ id, type: 'signal_reset_ok', payload: true });
+        return;
 
       case 'signal_encrypt_file': {
         if (!e2eeManager) throw new Error('E2EE Worker 未初始化');

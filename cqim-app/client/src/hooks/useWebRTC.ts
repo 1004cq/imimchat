@@ -3,6 +3,7 @@
  * 封装真实 WebRTC 逻辑：RTCPeerConnection、getUserMedia、ICE 协商、多人 Mesh
  */
 import { useEffect, useRef, useCallback, useState } from "react";
+import { authenticatedSignalUrl } from '@/lib/e2ee/signal-url';
 
 // ============ 类型定义 ============
 
@@ -296,11 +297,8 @@ export function useWebRTC(options: UseWebRTCOptions): UseWebRTCReturn {
   // ============ 连接信令服务器 ============
 
   const connectSignal = useCallback(() => {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const host = window.location.host;
-    // ★ /signal 强制鉴权：token 必填，服务端以 session.userId 为准
-    const wsToken = localStorage.getItem("user_token") || "";
-    const wsUrl = `${protocol}//${host}/signal?userId=${encodeURIComponent(userId)}&token=${encodeURIComponent(wsToken)}`;
+    const wsUrl = authenticatedSignalUrl(userId);
+    if (!wsUrl) return;
 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
