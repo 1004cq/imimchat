@@ -39,8 +39,13 @@ ctx.onmessage = async (event: MessageEvent) => {
 
   try {
     switch (type) {
+      case 'set_auth':
+        e2eeManager?.setAccessToken(payload?.token || '');
+        ctx.postMessage({ id, type: 'set_auth_ok', payload: true });
+        return;
       case 'init':
         await ensureManagers(payload?.userId);
+        e2eeManager?.setAccessToken(payload?.token || '');
         ctx.postMessage({ id, type: 'init_ok', payload: true });
         return;
 
