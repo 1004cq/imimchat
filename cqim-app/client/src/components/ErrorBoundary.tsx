@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 import { AlertTriangle, RotateCcw } from "lucide-react";
-import { Component, ReactNode } from "react";
+import { Component, ReactNode, type ErrorInfo } from "react";
 
 interface Props {
   children: ReactNode;
@@ -19,6 +19,14 @@ class ErrorBoundary extends Component<Props, State> {
 
   static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    // 把组件栈打到控制台：生产包堆栈全是 vendor，靠这个定位到底是哪个页面/组件在提交阶段抛错。
+    console.error('[RootErrorBoundary] 捕获到渲染异常:', error);
+    if (info?.componentStack) {
+      console.error('[RootErrorBoundary] componentStack:', info.componentStack);
+    }
   }
 
   render() {

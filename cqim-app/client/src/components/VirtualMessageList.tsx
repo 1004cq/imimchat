@@ -66,6 +66,14 @@ const DEFAULT_ROW_HEIGHT = 76;
 const OVERSCAN_PX = 900;
 const LOAD_MORE_THRESHOLD = 240;
 
+/**
+ * 行 key 必须稳定：只用 messageId（回退 seq），绝不能拼接 index。
+ * 之前是 `${id}-${index}`，历史 prepend / 排序变化 / 解密状态刷新都会让整表
+ * key 全部失效，React 在提交阶段整表卸载重挂，是 removeChild 崩溃的结构性诱因。
+ * safeMessages 已保证每条消息都有 id 或 seq。
+ */
+export const getMessageKey = (msg: VirtualMessageItem): string => String(msg.id ?? msg.seq ?? '');
+
 function formatTime(ts: number): string {
   const d = new Date(ts);
   const now = new Date();
@@ -166,6 +174,14 @@ class MessageRowErrorBoundary extends React.Component<MessageRowErrorBoundaryPro
     console.error(`[MessageList] 单条消息渲染异常 messageId=${this.props.messageId}:`, error);
   }
 
+  componentDidUpdate(prevProps: MessageRowErrorBoundaryProps) {
+    // 行复用时换了一条消息：清掉旧的 fallback，让新消息有机会正常渲染。
+    // 只在 messageId 变化时重置，避免对同一条反复抛错的消息造成重试循环。
+    if (prevProps.messageId !== this.props.messageId && this.state.hasError) {
+      this.setState({ hasError: false });
+    }
+  }
+
   render() {
     if (this.state.hasError) {
       return (
@@ -217,8 +233,8 @@ export const VirtualMessageList = memo(forwardRef<VirtualMessageListHandle, Virt
   const [showNewMsgTip, setShowNewMsgTip] = useState(false);
   const [newMsgCount, setNewMsgCount] = useState(0);
 
-  const getKey = useCallback((msg: VirtualMessageItem, index: number) => `${msg.id || msg.seq || 'message'}-${index}`, []);
-  const getHeight = useCallback((msg: VirtualMessageItem, index: number) => rowHeightsRef.current.get(getKey(msg, index)) || estimatedRowHeight, [estimatedRowHeight, getKey]);
+  const getKey = useCallback((msg: VirtualMessageItem) => getMessageKey(msg), []);
+  const getHeight = useCallback((msg: VirtualMessageItem) => rowHeightsRef.current.get(getKey(msg)) || estimatedRowHeight, [estimatedRowHeight, getKey]);
 
   const getRange = useCallback(() => {
     const startLimit = Math.max(0, scrollTop - OVERSCAN_PX);
@@ -227,13 +243,13 @@ export const VirtualMessageList = memo(forwardRef<VirtualMessageListHandle, Virt
     let start = 0;
     let end = safeMessages.length;
     for (let i = 0; i < safeMessages.length; i += 1) {
-      const next = offset + getHeight(safeMessages[i], i);
+      const next = offset + getHeight(safeMessages[i]);
       if (next >= startLimit) { start = i; break; }
       offset = next;
     }
     offset = 0;
     for (let i = 0; i < safeMessages.length; i += 1) {
-      offset += getHeight(safeMessages[i], i);
+      offset += getHeight(safeMessages[i]);
       if (offset >= endLimit) { end = i + 1; break; }
     }
     return { start, end };
@@ -241,11 +257,11 @@ export const VirtualMessageList = memo(forwardRef<VirtualMessageListHandle, Virt
 
   const getOffsetBefore = useCallback((index: number) => {
     let offset = 0;
-    for (let i = 0; i < index; i += 1) offset += getHeight(safeMessages[i], i);
+    for (let i = 0; i < index; i += 1) offset += getHeight(safeMessages[i]);
     return offset;
   }, [getHeight, safeMessages]);
 
-  const totalHeight = safeMessages.reduce((sum, msg, index) => sum + getHeight(msg, index), 0);
+  const totalHeight = safeMessages.reduce((sum, msg) => sum + getHeight(msg), 0);
   const { start, end } = getRange();
 
   const getVisibleAnchorMessageId = useCallback((): string | null => {
@@ -256,7 +272,7 @@ export const VirtualMessageList = memo(forwardRef<VirtualMessageListHandle, Virt
     const top = container.scrollTop + 12;
     let offset = 0;
     for (let i = 0; i < list.length; i += 1) {
-      const h = rowHeightsRef.current.get(`${list[i].id || list[i].seq || 'message'}-${i}`) || estimatedRowHeight;
+      const h = rowHeightsRef.current.get(getMessageKey(list[i])) || estimatedRowHeight;
       if (offset + h > top) return list[i].id || null;
       offset += h;
     }
@@ -305,7 +321,7 @@ export const VirtualMessageList = memo(forwardRef<VirtualMessageListHandle, Virt
     if (index < 0) return false;
     let offset = 0;
     for (let i = 0; i < index; i += 1) {
-      offset += rowHeightsRef.current.get(`${list[i].id || list[i].seq || 'message'}-${i}`) || estimatedRowHeight;
+      offset += rowHeightsRef.current.get(getMessageKey(list[i])) || estimatedRowHeight;
     }
     container.scrollTop = offset;
     setScrollTop(offset);
@@ -474,7 +490,7 @@ export const VirtualMessageList = memo(forwardRef<VirtualMessageListHandle, Virt
         <div style={{ height: totalHeight, position: 'relative' }}>
           {safeMessages.slice(start, end).map((msg, visibleIndex) => {
             const index = start + visibleIndex;
-            const key = getKey(msg, index);
+            const key = getKey(msg);
             const previous = index > 0 ? safeMessages[index - 1] : undefined;
             const isOwn = msg.senderId === currentUserId;
             return (
