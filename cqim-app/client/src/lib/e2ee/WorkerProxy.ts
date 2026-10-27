@@ -5,7 +5,7 @@
  * 状态在多个异步任务之间发生竞态；Worker 不可用时由调用方安全降级到主线程。
  */
 
-import type { SignalEnvelope } from './E2EEManager';
+import type { PreKeyBundle, SignalEnvelope } from './E2EEManager';
 
 type PendingTask = {
   resolve: (value: unknown) => void;
@@ -113,12 +113,24 @@ export class WorkerProxy {
     return this.initPromise;
   }
 
+  async signalEstablishSession(peerId: string, bundle: PreKeyBundle): Promise<void> {
+    return this.callWorker<void>('signal_establish_session', { peerId, bundle });
+  }
+
   async signalEncrypt(peerId: string, plaintext: string): Promise<SignalEnvelope> {
     return this.callWorker<SignalEnvelope>('signal_encrypt', { peerId, plaintext });
   }
 
   async signalDecrypt(peerId: string, envelope: SignalEnvelope): Promise<string> {
     return this.callWorker<string>('signal_decrypt', { peerId, envelope });
+  }
+
+  async signalDecryptArchived(peerId: string, envelope: SignalEnvelope): Promise<string> {
+    return this.callWorker<string>('signal_decrypt_archived', { peerId, envelope });
+  }
+
+  async signalResetSession(peerId: string): Promise<void> {
+    return this.callWorker<void>('signal_reset_session', { peerId });
   }
 
   async signalEncryptFile(fileBuffer: ArrayBuffer): Promise<{ ciphertext: ArrayBuffer; fileKey: string; iv: string }> {

@@ -15,9 +15,98 @@
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import prisma from './db.js';
-import { resolveSigningPublicKey } from './prekey-bundle.js';
+import { userAuth } from './auth.js';
+import {
+  mergeAndCapPreKeys,
+  resolveSigningPublicKey,
+  selectPreKeyForIssue,
+  type OneTimePreKey,
+} from './prekey-bundle.js';
 
 const router = Router();
+
+function parsePreKeys(value?: string | null): OneTimePreKey[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseConsumedIds(value?: string | null): number[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter(id => typeof id === 'number') : [];
+  } catch {
+    return [];
+  }
+}
+
+async function readPreKeyRows(userId: string) {
+  const prekeyKey = `e2ee:prekeys:${userId}`;
+  const consumedKey = `e2ee:prekeys:consumed:${userId}`;
+  const [preRow, consumedRow] = await Promise.all([
+    prisma.systemConfig.findUnique({ where: { key: prekeyKey } }),
+    prisma.systemConfig.findUnique({ where: { key: consumedKey } }),
+  ]);
+  return { prekeyKey, consumedKey, preRow, consumedRow };
+}
+
+/** 用整行 value 做比较写入，避免并发 get-bundle 把同一把 One-Time PreKey 发给两个人。 */
+async function compareAndSwapConfig(key: string, expected: string | null, next: string): Promise<boolean> {
+  if (expected === next) return true;
+  if (expected == null) {
+    try {
+      await prisma.systemConfig.create({ data: { key, value: next } });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  const updated = await prisma.systemConfig.updateMany({
+    where: { key, value: expected },
+    data: { value: next },
+  });
+  return updated.count === 1;
+}
+
+async function saveMergedPreKeys(userId: string, incoming: OneTimePreKey[]): Promise<OneTimePreKey[]> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const { prekeyKey, preRow, consumedRow } = await readPreKeyRows(userId);
+    const merged = mergeAndCapPreKeys(
+      parsePreKeys(preRow?.value),
+      incoming,
+      parseConsumedIds(consumedRow?.value),
+    );
+    const next = JSON.stringify(merged);
+    if (await compareAndSwapConfig(prekeyKey, preRow?.value ?? null, next)) return merged;
+  }
+  throw new Error('One-Time PreKey 写入冲突');
+}
+
+async function consumeOneTimePreKey(userId: string): Promise<OneTimePreKey | undefined> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const { prekeyKey, consumedKey, preRow, consumedRow } = await readPreKeyRows(userId);
+    const plan = selectPreKeyForIssue(parsePreKeys(preRow?.value), parseConsumedIds(consumedRow?.value));
+    if (!plan.taken) return undefined;
+
+    const consumedOk = await compareAndSwapConfig(
+      consumedKey,
+      consumedRow?.value ?? null,
+      JSON.stringify(plan.consumed),
+    );
+    if (!consumedOk) continue;
+
+    const preOk = await compareAndSwapConfig(prekeyKey, preRow?.value ?? null, JSON.stringify(plan.rest));
+    if (!preOk) continue;
+    console.log(`[Crypto] 消费用户 ${userId} 的 PreKey #${plan.taken.keyId}, 剩余: ${plan.rest.length}`);
+    return plan.taken;
+  }
+  throw new Error('One-Time PreKey 消费冲突');
+}
 
 // ============================================================
 // 1. AES-256-GCM 加解密工具（服务端存储加密）
@@ -141,10 +230,11 @@ export function verifyHMAC(message: string, signature: string, secret: string): 
  * 客户端生成 ECDH 密钥对后，将公钥注册到服务端。
  * 其他用户可以通过 /get-key 获取该公钥，完成密钥交换。
  */
-router.post('/register-key', async (req: Request, res: Response) => {
-  const { userId, publicKey, deviceId } = req.body;
+router.post('/register-key', userAuth, async (req: Request, res: Response) => {
+  const { publicKey, deviceId } = req.body;
+  const userId = (req as any).user.id;
 
-  if (!userId || !publicKey) {
+  if (!publicKey) {
     return res.status(400).json({ error: '缺少必要参数' });
   }
 
@@ -261,10 +351,11 @@ router.post('/verify-message', async (req: Request, res: Response) => {
  *   preKeys: Array<{ keyId: number, publicKey: string }>,  // One-Time PreKeys
  * }
  */
-router.post('/register-bundle', async (req: Request, res: Response) => {
-  const { userId, registrationId, identityKey, signingPublicKey, signedPreKey, preKeys } = req.body;
+router.post('/register-bundle', userAuth, async (req: Request, res: Response) => {
+  const { registrationId, identityKey, signingPublicKey, signedPreKey, preKeys } = req.body;
+  const userId = (req as any).user.id;
 
-  if (!userId || !identityKey || !signedPreKey) {
+  if (!identityKey || !signedPreKey) {
     return res.status(400).json({ error: '缺少必要参数' });
   }
 
@@ -303,28 +394,9 @@ router.post('/register-bundle', async (req: Request, res: Response) => {
       },
     });
 
-    // 存储 One-Time PreKeys（追加模式，不覆盖已有的）
+    // 只追加尚未消费的 One-Time PreKey。已下发的 keyId 不能被再次上传复活。
     if (Array.isArray(preKeys) && preKeys.length > 0) {
-      // 获取已有的 preKeys
-      const existingConfig = await prisma.systemConfig.findUnique({
-        where: { key: `e2ee:prekeys:${userId}` },
-      });
-      let existingKeys: Array<{ keyId: number; publicKey: string }> = [];
-      if (existingConfig?.value) {
-        try { existingKeys = JSON.parse(existingConfig.value); } catch {}
-      }
-
-      // 合并新旧 preKeys（去重）
-      const keyMap = new Map<number, string>();
-      existingKeys.forEach(k => keyMap.set(k.keyId, k.publicKey));
-      preKeys.forEach((k: { keyId: number; publicKey: string }) => keyMap.set(k.keyId, k.publicKey));
-      const mergedKeys = Array.from(keyMap.entries()).map(([keyId, publicKey]) => ({ keyId, publicKey }));
-
-      await prisma.systemConfig.upsert({
-        where: { key: `e2ee:prekeys:${userId}` },
-        update: { value: JSON.stringify(mergedKeys) },
-        create: { key: `e2ee:prekeys:${userId}`, value: JSON.stringify(mergedKeys) },
-      });
+      await saveMergedPreKeys(userId, preKeys);
     }
 
     console.log(`[Crypto] 用户 ${userId} 注册 PreKey Bundle 成功, preKeys: ${preKeys?.length || 0}`);
@@ -358,24 +430,11 @@ router.get('/get-bundle', async (req: Request, res: Response) => {
     }
 
     const bundle = JSON.parse(bundleConfig.value);
-
-    // 获取并消费一个 One-Time PreKey
-    let oneTimePreKey: { keyId: number; publicKey: string } | undefined;
-    const preKeysConfig = await prisma.systemConfig.findUnique({
-      where: { key: `e2ee:prekeys:${userId}` },
-    });
-
-    if (preKeysConfig?.value) {
-      const preKeys: Array<{ keyId: number; publicKey: string }> = JSON.parse(preKeysConfig.value);
-      if (preKeys.length > 0) {
-        // 取出第一个并从列表中移除（消费）
-        oneTimePreKey = preKeys.shift();
-        await prisma.systemConfig.update({
-          where: { key: `e2ee:prekeys:${userId}` },
-          data: { value: JSON.stringify(preKeys) },
-        });
-        console.log(`[Crypto] 消费用户 ${userId} 的 PreKey #${oneTimePreKey!.keyId}, 剩余: ${preKeys.length}`);
-      }
+    let oneTimePreKey: OneTimePreKey | undefined;
+    try {
+      oneTimePreKey = await consumeOneTimePreKey(userId);
+    } catch (err) {
+      console.warn('[Crypto] One-Time PreKey 消费失败，本次 Bundle 不带 OTP:', err);
     }
 
     res.json({
@@ -396,23 +455,13 @@ router.get('/get-bundle', async (req: Request, res: Response) => {
  * 查询用户剩余的 One-Time PreKey 数量
  * 客户端可以定期检查，当数量低于阈值时补充新的 PreKeys
  */
-router.get('/prekey-count', async (req: Request, res: Response) => {
-  const { userId } = req.query as { userId: string };
-
-  if (!userId) {
-    return res.status(400).json({ error: '缺少 userId' });
-  }
+router.get('/prekey-count', userAuth, async (req: Request, res: Response) => {
+  const userId = (req as any).user.id;
 
   try {
-    const preKeysConfig = await prisma.systemConfig.findUnique({
-      where: { key: `e2ee:prekeys:${userId}` },
-    });
-
-    let count = 0;
-    if (preKeysConfig?.value) {
-      const preKeys = JSON.parse(preKeysConfig.value);
-      count = Array.isArray(preKeys) ? preKeys.length : 0;
-    }
+    const { preRow, consumedRow } = await readPreKeyRows(userId);
+    const available = mergeAndCapPreKeys(parsePreKeys(preRow?.value), [], parseConsumedIds(consumedRow?.value), 10000);
+    const count = available.length;
 
     res.json({ count });
   } catch (err: any) {
@@ -426,32 +475,16 @@ router.get('/prekey-count', async (req: Request, res: Response) => {
  * 补充 One-Time PreKeys
  * body: { userId: string, preKeys: Array<{ keyId: number, publicKey: string }> }
  */
-router.post('/replenish-prekeys', async (req: Request, res: Response) => {
-  const { userId, preKeys } = req.body;
+router.post('/replenish-prekeys', userAuth, async (req: Request, res: Response) => {
+  const { preKeys } = req.body;
+  const userId = (req as any).user.id;
 
-  if (!userId || !Array.isArray(preKeys) || preKeys.length === 0) {
+  if (!Array.isArray(preKeys) || preKeys.length === 0) {
     return res.status(400).json({ error: '缺少必要参数' });
   }
 
   try {
-    const existingConfig = await prisma.systemConfig.findUnique({
-      where: { key: `e2ee:prekeys:${userId}` },
-    });
-    let existingKeys: Array<{ keyId: number; publicKey: string }> = [];
-    if (existingConfig?.value) {
-      try { existingKeys = JSON.parse(existingConfig.value); } catch {}
-    }
-
-    const keyMap = new Map<number, string>();
-    existingKeys.forEach(k => keyMap.set(k.keyId, k.publicKey));
-    preKeys.forEach((k: { keyId: number; publicKey: string }) => keyMap.set(k.keyId, k.publicKey));
-    const mergedKeys = Array.from(keyMap.entries()).map(([keyId, publicKey]) => ({ keyId, publicKey }));
-
-    await prisma.systemConfig.upsert({
-      where: { key: `e2ee:prekeys:${userId}` },
-      update: { value: JSON.stringify(mergedKeys) },
-      create: { key: `e2ee:prekeys:${userId}`, value: JSON.stringify(mergedKeys) },
-    });
+    const mergedKeys = await saveMergedPreKeys(userId, preKeys);
 
     console.log(`[Crypto] 用户 ${userId} 补充 ${preKeys.length} 个 PreKeys, 总计: ${mergedKeys.length}`);
     res.json({ success: true, totalCount: mergedKeys.length });

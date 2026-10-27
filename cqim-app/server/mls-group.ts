@@ -392,7 +392,9 @@ mlsRouter.get('/pending-welcome', async (req: Request, res: Response) => {
 
 /**
  * POST /api/mls/ack-welcome
- * 确认已处理 Welcome 消息
+ * 确认已处理 Welcome 消息。
+ * Welcome 是加密的恢复材料，不能在确认后删除：浏览器刷新、IndexedDB
+ * 损坏或换机时仍需要它重新建立本地 epoch 状态。
  */
 mlsRouter.post('/ack-welcome', async (req: Request, res: Response) => {
   const { groupId, userId } = req.body;
@@ -403,9 +405,18 @@ mlsRouter.post('/ack-welcome', async (req: Request, res: Response) => {
 
   try {
     const welcomeKey = `mls:welcome:${groupId}:${userId}`;
-    await prisma.systemConfig.deleteMany({
-      where: { key: welcomeKey },
-    });
+    const existing = await prisma.systemConfig.findUnique({ where: { key: welcomeKey } });
+    if (existing?.value) {
+      try {
+        const payload = JSON.parse(existing.value);
+        await prisma.systemConfig.update({
+          where: { key: welcomeKey },
+          data: { value: JSON.stringify({ ...payload, acknowledgedAt: new Date().toISOString() }) },
+        });
+      } catch {
+        // 保留原始密文，即使历史记录格式异常也不能删除恢复材料。
+      }
+    }
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: '确认失败' });
