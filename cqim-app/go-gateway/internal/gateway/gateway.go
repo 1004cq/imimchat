@@ -570,14 +570,24 @@ func (gw *Gateway) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	peerCount := 1
 	mode := "single"
 	if redisOK {
-		if keys, err := gw.rdb.Keys(gw.ctx, "gw:alive:*").Result(); err == nil {
-			peerCount = len(keys)
-			if peerCount == 0 {
-				peerCount = 1 // self may not have renewed yet
+		n := 0
+		var cursor uint64
+		for {
+			keys, next, err := gw.rdb.Scan(gw.ctx, cursor, "gw:alive:*", 50).Result()
+			if err != nil {
+				break
 			}
-			if peerCount > 1 {
-				mode = "multi"
+			n += len(keys)
+			cursor = next
+			if cursor == 0 {
+				break
 			}
+		}
+		if n > 0 {
+			peerCount = n
+		}
+		if peerCount > 1 {
+			mode = "multi"
 		}
 	}
 

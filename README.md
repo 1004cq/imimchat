@@ -70,6 +70,8 @@ curl -s http://127.0.0.1:8083/health   # nodeId=gw-2
 
 - Redis 中 `api:alive:*` / `gw:alive:*` 存活数 ≤ 1 → `mode=single`，走同源 `/signal`
 - 存活数 > 1 → `mode=multi`；若配置了 `PUBLIC_SIGNAL_URLS` 则按 `userId` 粘性选节点，否则仍走同源 `/signal`（由 Nginx LB 分发）
+- 环境变量 `DEPLOY_MODE=auto|single|multi` 可强制覆盖（默认 `auto`）
+- 每台设唯一 `API_NODE_ID` / `GATEWAY_NODE_ID`
 
 ```bash
 curl -s https://你的域名/api/runtime

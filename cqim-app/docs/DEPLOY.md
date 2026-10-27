@@ -86,6 +86,32 @@ docker compose exec minio /usr/local/bin/busybox wget -q -O /dev/null \
 7. 从通知或联系人进入正确会话
 8. 未读数字正确，进入会话后清零
 
+## 单机 / 多机模式
+
+系统按 Redis 存活键自动判定，客户端连信令前会请求 `GET /api/runtime`：
+
+| 条件 | `mode` | 客户端行为 |
+|------|--------|------------|
+| `api:alive:*` / `gw:alive:*` 各 ≤1 | `single` | 同源 `/signal` |
+| 任一类 >1 | `multi` | 有 Nginx LB → 仍同源 `/signal`；配了 `PUBLIC_SIGNAL_URLS` → 按 userId 粘性选节点 |
+
+强制覆盖（排障 / 切流）：
+
+```bash
+# .env
+DEPLOY_MODE=auto    # 默认
+# DEPLOY_MODE=single
+# DEPLOY_MODE=multi
+```
+
+单机：只用 `docker compose up -d`，`GATEWAY_NODE_ID` / `API_NODE_ID` 各一个即可。  
+多机：两台共用同一 Postgres / Redis / MinIO，节点 ID 互不相同，入口 Nginx 见 `deploy/nginx-lb.conf`。
+
+```bash
+curl -s https://你的域名/api/runtime
+# {"mode":"single"|"multi","apiCount":…,"gatewayCount":…,"signalPath":"/signal",…}
+```
+
 ## 多节点 Gateway（本地）
 
 同区域 2 个 Gateway + 共享 Redis（完整栈）：

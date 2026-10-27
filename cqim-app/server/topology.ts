@@ -50,13 +50,28 @@ export function getLocalApiNodeId(): string {
   return resolveNodeId();
 }
 
-function parseCsvUrls(raw: string | undefined): string[] {
+export function parseCsvUrls(raw: string | undefined): string[] {
   if (!raw) return [];
   return raw
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
     .map((u) => u.replace(/\/$/, ''));
+}
+
+/**
+ * DEPLOY_MODE=auto|single|multi（默认 auto）
+ * - auto: 按 Redis 存活键数量判定（api/gateway >1 → multi）
+ * - single / multi: 强制模式（运维切流或排障时用）
+ */
+export function resolveDeployMode(
+  apiCount: number,
+  gatewayCount: number,
+  envMode = process.env.DEPLOY_MODE,
+): DeployMode {
+  const raw = (envMode || 'auto').trim().toLowerCase();
+  if (raw === 'single' || raw === 'multi') return raw;
+  return apiCount > 1 || gatewayCount > 1 ? 'multi' : 'single';
 }
 
 async function scanAlive(prefix: string, kind: 'api' | 'gateway'): Promise<AliveNode[]> {
@@ -131,7 +146,7 @@ export async function getRuntimeTopology(): Promise<RuntimeTopology> {
 
   const apiCount = apis.length;
   const gatewayCount = gateways.length;
-  const mode: DeployMode = apiCount > 1 || gatewayCount > 1 ? 'multi' : 'single';
+  const mode = resolveDeployMode(apiCount, gatewayCount);
 
   return {
     mode,
