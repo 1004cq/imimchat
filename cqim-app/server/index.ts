@@ -1318,26 +1318,23 @@ async function handleMessage(client: SignalClient, raw: string) {
               });
             }
 
-            const { incrUnreadCount, invalidateConversationList, isUserOnline, redis } = await import('./redis.js');
+            const { incrUnreadCount, invalidateConversationList } = await import('./redis.js');
             await incrUnreadCount(peerId, pChatId, 1);
             await invalidateConversationList(client.userId);
             await invalidateConversationList(peerId);
 
             console.log(`[PrivateChat] 消息已发送: from=${client.userId} to=${peerId} chatId=${pChatId} wsDelivered=${delivered}`);
 
-            if (!delivered) {
-              const peerOnlineElsewhere = await isUserOnline(peerId).catch(() => false)
-                || Boolean(await redis.get(`user:online:${peerId}`).catch(() => null));
-              if (!peerOnlineElsewhere) {
-                await notifyPrivateMessagePush({
-                  toUserId: peerId,
-                  senderId: client.userId,
-                  chatId: pChatId,
-                  messageId: message.id,
-                  previewText: '🔒 [加密消息]',
-                });
-              }
-            }
+            // Background iOS may keep WebSocket open; WS delivery must not suppress
+            // the system alert. push-notify only skips when recipient is foreground
+            // in this exact chat.
+            void notifyPrivateMessagePush({
+              toUserId: peerId,
+              senderId: client.userId,
+              chatId: pChatId,
+              messageId: message.id,
+              previewText: '加密消息',
+            }).catch((error: unknown) => console.error('[APNs] private message notification failed:', error));
           } catch (err) {
             console.error('[PrivateChat] 发送失败:', err);
             failAck('发送失败，请重试');
