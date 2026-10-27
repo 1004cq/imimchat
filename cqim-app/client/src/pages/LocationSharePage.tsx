@@ -4,6 +4,7 @@
  * 功能：发起/加入共享、多人 Marker + 轨迹、限时/手动停止、距离显示
  */
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { authenticatedSignalUrl } from '@/lib/e2ee/signal-url';
 import {
   ArrowLeft, MapPin, Users, Clock, Navigation,
   Square, Loader2, AlertCircle, RefreshCw
@@ -191,8 +192,9 @@ export default function LocationSharePage({ chatId, chatName, shareId: initShare
   // ── WebSocket 连接 ──
   const connectWs = useCallback((sid: string, endAt: number) => {
     endTimeRef.current = endAt;
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${proto}//${window.location.host}/signal`);
+    const wsUrl = authenticatedSignalUrl();
+    if (!wsUrl) return;
+    const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
     ws.onopen = () => ws.send(JSON.stringify({ type: 'join_location_share', shareId: sid, userId: CURRENT_USER.id, nickname: CURRENT_USER.name }));
     ws.onmessage = (e) => {

@@ -96,11 +96,14 @@ export class WorkerProxy {
     return result;
   }
 
-  async init(userId: string): Promise<void> {
+  async init(userId: string, token: string = ''): Promise<void> {
     if (!this.worker) throw new Error('E2EE Worker not available');
-    if (this.ready) return;
+    if (this.ready) {
+      if (token) await this.callWorker<void>('set_auth', { token });
+      return;
+    }
     if (!this.initPromise) {
-      this.initPromise = this.callWorker<void>('init', { userId })
+      this.initPromise = this.callWorker<void>('init', { userId, token })
         .then(() => {
           this.ready = true;
         })
@@ -119,6 +122,9 @@ export class WorkerProxy {
 
   async signalDecrypt(peerId: string, envelope: SignalEnvelope): Promise<string> {
     return this.callWorker<string>('signal_decrypt', { peerId, envelope });
+  }
+  async signalReset(peerId: string): Promise<void> {
+    return this.callWorker<void>('signal_reset', { peerId });
   }
 
   async signalEncryptFile(fileBuffer: ArrayBuffer): Promise<{ ciphertext: ArrayBuffer; fileKey: string; iv: string }> {

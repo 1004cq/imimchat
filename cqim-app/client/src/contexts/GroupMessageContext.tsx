@@ -7,6 +7,7 @@
 
 import React, { createContext, useContext, useCallback, useRef, useEffect, useReducer, type ReactNode } from 'react';
 import { loadGroupMessagesFromLocalDb, persistGroupMessages } from '@/lib/localdb';
+import { authenticatedSignalUrl } from '@/lib/e2ee/signal-url';
 
 // ============ 类型定义 ============
 
@@ -251,14 +252,11 @@ export function GroupMessageProvider({ children, userId }: { children: ReactNode
   useEffect(() => {
     if (!userId) return;
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host;
-    // ★ /signal 强制鉴权：token 必填，服务端以 session.userId 为准
-    const wsToken = localStorage.getItem('user_token') || '';
-    const wsUrl = `${protocol}//${host}/signal?userId=${encodeURIComponent(userId)}&token=${encodeURIComponent(wsToken)}`;
     let reconnectTimer: ReturnType<typeof setTimeout>;
 
     const connect = () => {
+      const wsUrl = authenticatedSignalUrl(userId);
+      if (!wsUrl) return;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 

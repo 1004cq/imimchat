@@ -39,8 +39,13 @@ ctx.onmessage = async (event: MessageEvent) => {
 
   try {
     switch (type) {
+      case 'set_auth':
+        e2eeManager?.setAccessToken(payload?.token || '');
+        ctx.postMessage({ id, type: 'set_auth_ok', payload: true });
+        return;
       case 'init':
         await ensureManagers(payload?.userId);
+        e2eeManager?.setAccessToken(payload?.token || '');
         ctx.postMessage({ id, type: 'init_ok', payload: true });
         return;
 
@@ -52,6 +57,11 @@ ctx.onmessage = async (event: MessageEvent) => {
       case 'signal_decrypt':
         if (!e2eeManager) throw new Error('E2EE Worker 未初始化');
         ctx.postMessage({ id, type: 'signal_decrypt_ok', payload: await e2eeManager.decrypt(payload.peerId, payload.envelope) });
+        return;
+      case 'signal_reset':
+        if (!e2eeManager) throw new Error('E2EE Worker 未初始化');
+        await e2eeManager.resetSession(payload.peerId);
+        ctx.postMessage({ id, type: 'signal_reset_ok', payload: true });
         return;
 
       case 'signal_encrypt_file': {
