@@ -770,7 +770,7 @@ export default function ChatDetailPage() {
       try {
         // 通过 push-to-onebot 将消息上报给 AstrBot 处理
         // AstrBot 处理后会通过 send_private_msg 回调，后端再通过 WebSocket 推送 bot_message
-        const resp = await fetch('/api/push-to-onebot', {
+        const resp = await authFetch('/api/push-to-onebot', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1386,7 +1386,7 @@ export default function ChatDetailPage() {
         if (uploadResp.ok) {
           const uploadData = await uploadResp.json();
           // 4. 推送给 AstrBot
-          await fetch('/api/push-to-onebot', {
+          await authFetch('/api/push-to-onebot', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

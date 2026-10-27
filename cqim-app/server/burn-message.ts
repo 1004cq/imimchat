@@ -15,6 +15,7 @@
 
 import { Router, Request, Response } from 'express';
 import prisma from './db.js';
+import { userAuth } from './auth.js';
 
 const burnRouter = Router();
 
@@ -25,17 +26,47 @@ const burnRouter = Router();
 /**
  * POST /api/group/burn-message
  * 客户端通知服务器销毁群消息
+ *
+ * ★ 鉴权要求：
+ * 1. 调用者必须登录（userAuth）
+ * 2. 调用者必须是该消息所在群的成员
+ * 3. 该消息必须是阅后即焚消息（burnAfterRead 非空），防止滥用此接口擦除普通消息
  */
-burnRouter.post('/burn-message', async (req: Request, res: Response) => {
+burnRouter.post('/burn-message', userAuth, async (req: Request, res: Response) => {
   const { messageId, chatId } = req.body;
+  const userId = (req as any).user.id;
 
   if (!messageId) {
     return res.status(400).json({ error: '缺少 messageId' });
   }
 
   try {
+    const msg = await prisma.groupMessage.findUnique({
+      where: { id: messageId },
+      select: { id: true, groupId: true, burnAfterRead: true, isRevoked: true },
+    });
+    if (!msg) {
+      return res.status(404).json({ error: '消息不存在' });
+    }
+    if (msg.isRevoked) {
+      return res.json({ ok: true, alreadyBurned: true });
+    }
+    // 只有群成员可以销毁该群的阅后即焚消息
+    const member = await prisma.groupMember.findUnique({
+      where: { groupId_userId: { groupId: msg.groupId, userId } },
+      select: { id: true },
+    });
+    if (!member) {
+      console.warn(`[Burn] 非成员 ${userId} 尝试销毁群 ${msg.groupId} 的消息 ${messageId}，已拒绝`);
+      return res.status(403).json({ error: '非群成员，无权销毁该消息' });
+    }
+    // 只允许销毁标记为阅后即焚的消息
+    if (msg.burnAfterRead == null) {
+      return res.status(403).json({ error: '该消息不是阅后即焚消息' });
+    }
+
     // 标记消息为已撤回（软删除）并清空内容
-    await prisma.groupMessage.updateMany({
+    await prisma.groupMessage.update({
       where: { id: messageId },
       data: {
         isRevoked: true,
@@ -44,7 +75,7 @@ burnRouter.post('/burn-message', async (req: Request, res: Response) => {
       },
     });
 
-    console.log(`[Burn] 群消息 ${messageId} 已销毁`);
+    console.log(`[Burn] 群消息 ${messageId} 已被 ${userId} 销毁`);
     res.json({ ok: true });
   } catch (err: any) {
     console.error('[Burn] 销毁群消息失败:', err.message);

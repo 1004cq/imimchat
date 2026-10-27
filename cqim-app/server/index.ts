@@ -655,7 +655,12 @@ const WS_BACKPRESSURE_LIMIT = 65536;
 const _serializeCache = new WeakMap<object, string>();
 
 function sendTo(userId: string, msg: SignalMessage) {
-  trySendTo(userId, msg);
+  // ★ 跨节点投递（S12）：本机投递失败且本机根本没有该用户的连接时，
+  // 通过 Redis 发布，由持有该用户 /signal 连接的节点完成投递。
+  // （本机有连接但被背压时不发布——其他节点也没有该连接，发了也投递不了）
+  if (!trySendTo(userId, msg) && !clients.has(userId)) {
+    publishImPush(userId, msg);
+  }
 }
 
 /** 尝试 WS 投递；返回是否成功写入 socket（用于决定是否需要离线推送） */
@@ -811,6 +816,20 @@ async function handleMessage(client: SignalClient, raw: string) {
     case "group_join": {
       const { groupId } = msg.payload || {};
       if (groupId) {
+        // ★ 成员校验：非群成员禁止订阅群实时消息，防止窃听
+        const member = await prisma.groupMember.findUnique({
+          where: { groupId_userId: { groupId, userId: client.userId } },
+          select: { id: true },
+        }).catch(() => null);
+        if (!member) {
+          console.warn(`[GroupSignal] 非成员 ${client.userId} 尝试订阅群 ${groupId}，已拒绝`);
+          sendTo(client.userId, {
+            type: 'group_message' as any,
+            groupId,
+            payload: { error: '非群成员，无权订阅该群消息' },
+          });
+          break;
+        }
         joinGroupOnline(groupId, client.userId);
         console.log(`[GroupSignal] ${client.userId} 加入群在线: ${groupId}`);
       }
@@ -829,6 +848,20 @@ async function handleMessage(client: SignalClient, raw: string) {
     case "group_send": {
       const { groupId, content, msgType, senderName, replyToId, extra, localId } = msg.payload || {};
       if (groupId && content) {
+        // ★ 成员校验：非群成员禁止发送，防止向任意群注入消息
+        const member = await prisma.groupMember.findUnique({
+          where: { groupId_userId: { groupId, userId: client.userId } },
+          select: { id: true },
+        }).catch(() => null);
+        if (!member) {
+          console.warn(`[GroupSignal] 非成员 ${client.userId} 尝试向群 ${groupId} 发送消息，已拒绝`);
+          sendTo(client.userId, {
+            type: 'group_message' as any,
+            groupId,
+            payload: { ack: true, groupId, seq: -1, timestamp: Date.now(), localId: localId || '', error: '非群成员，无权发送消息' },
+          });
+          return;
+        }
         // 强制 MLS：业务消息必须是 mls_encrypted，拒绝明文 text
         const effectiveMsgType = msgType || 'mls_encrypted';
         if (effectiveMsgType !== 'mls_encrypted' && effectiveMsgType !== 'system') {
@@ -1422,6 +1455,20 @@ async function handleMessage(client: SignalClient, raw: string) {
       if (bdChatId && bdMsgId) {
         (async () => {
           try {
+            // ★ 授权校验：消息必须存在且归属该会话，调用者必须是会话参与者
+            const burnMsg = await prisma.privateMessage.findUnique({
+              where: { id: bdMsgId },
+              select: { id: true, chatId: true },
+            });
+            if (!burnMsg || burnMsg.chatId !== bdChatId) return;
+            const chat = await prisma.chat.findUnique({
+              where: { id: bdChatId },
+              select: { participantA: true, participantB: true },
+            });
+            if (!chat || (chat.participantA !== client.userId && chat.participantB !== client.userId)) {
+              console.warn(`[BurnAfterRead] 非会话参与者 ${client.userId} 尝试销毁消息 ${bdMsgId}，已拒绝`);
+              return;
+            }
             // 从数据库彻底删除消息
             await prisma.privateMessage.delete({ where: { id: bdMsgId } }).catch(() => {});
             // 通知对方也删除
@@ -1446,8 +1493,26 @@ async function handleMessage(client: SignalClient, raw: string) {
       // payload: { groupId, messageId, seq }
       const { groupId: recallGroupId, messageId: recallGroupMsgId, seq: recallSeq } = msg.payload || {};
       if (recallGroupId && recallGroupMsgId) {
+        // ★ 授权校验：消息必须归属该群；仅发送者本人或群管理员/群主可撤回
+        const targetMsg = await prisma.groupMessage.findUnique({
+          where: { id: recallGroupMsgId },
+          select: { id: true, groupId: true, senderId: true },
+        }).catch(() => null);
+        if (!targetMsg || targetMsg.groupId !== recallGroupId) break;
+        let canRecall = targetMsg.senderId === client.userId;
+        if (!canRecall) {
+          const recallMember = await prisma.groupMember.findUnique({
+            where: { groupId_userId: { groupId: recallGroupId, userId: client.userId } },
+            select: { role: true },
+          }).catch(() => null);
+          canRecall = !!recallMember && (recallMember.role === 'owner' || recallMember.role === 'admin');
+        }
+        if (!canRecall) {
+          console.warn(`[GroupRecall] ${client.userId} 无权撤回群 ${recallGroupId} 的消息 ${recallGroupMsgId}，已拒绝`);
+          break;
+        }
         // 尝试在数据库标记为已撤回
-        prisma.groupMessage.updateMany({
+        prisma.groupMessage.update({
           where: { id: recallGroupMsgId },
           data: { isRevoked: true },
         }).catch(err => console.error('[GroupRecall] DB更新失败:', err));
@@ -1776,8 +1841,10 @@ app.use("/api/home", homeRouter);
    * POST /api/ai-chat
    * 代理 OpenAI API，实现 BOT 聊天回复
    * Body: { messages: [{ role: 'user'|'assistant', content: string }] }
+   *
+   * ★ 需要登录：防止匿名调用盗刷服务端的 OpenAI 额度
    */
-  app.post('/api/ai-chat', async (req, res) => {
+  app.post('/api/ai-chat', userAuth, async (req, res) => {
     try {
       const { messages } = req.body as {
         messages: Array<{ role: string; content: string }>;
@@ -2177,13 +2244,10 @@ app.use("/api/home", homeRouter);
       msg.voiceUrl = voiceData.voiceUrl;
       msg.duration = voiceData.duration || 0;
     }
-    // 向群成员推送
+    // 向群成员推送（★ 跨节点：sendTo 本机 miss 时走 Redis 发布）
     if (group) {
       group.memberIds.forEach(uid => {
-        const client = clients.get(uid);
-        if (client && client.ws.readyState === WebSocket.OPEN) {
-          client.ws.send(JSON.stringify(msg));
-        }
+        sendTo(uid, msg);
       });
     }
     console.log(`[OneBot] BOT 群消息已推送到 chatId=${chatId}${voiceData ? ' [语音]' : ''}`);
@@ -2193,7 +2257,6 @@ app.use("/api/home", homeRouter);
    * 将 BOT 回复推送给指定用户
    */
   function broadcastBotMessageToUser(userId: string, text: string, voiceData?: { voiceUrl: string; duration?: number }) {
-    const client = clients.get(userId);
     const msg: any = {
       type: 'bot_message',
       chatId: 'cBOT',
@@ -2208,9 +2271,8 @@ app.use("/api/home", homeRouter);
       msg.voiceUrl = voiceData.voiceUrl;
       msg.duration = voiceData.duration || 0;
     }
-    if (client && client.ws.readyState === WebSocket.OPEN) {
-      client.ws.send(JSON.stringify(msg));
-    }
+    // ★ 跨节点：sendTo 本机 miss 时走 Redis 发布
+    sendTo(userId, msg);
     console.log(`[OneBot] BOT 私聊已推送到 userId=${userId}${voiceData ? ' [语音]' : ''}`);
   }
 
@@ -2416,14 +2478,18 @@ app.use("/api/home", homeRouter);
   /**
    * POST /api/push-to-onebot
    * 前端发送消息时，主动将消息推送给 AstrBot
-   * Body: { chatId, senderId, content, nickname, isGroup, groupId, voiceUrl?, isVoice? }
+   * Body: { chatId, content, nickname, isGroup, groupId, voiceUrl?, isVoice? }
+   *
+   * ★ 需要登录，且 senderId 强制取登录身份：防止伪造任意用户身份给 Bot 发消息
    */
-  app.post('/api/push-to-onebot', (req, res) => {
+  app.post('/api/push-to-onebot', userAuth, (req, res) => {
     if (onebotClients.size === 0) {
       return res.json({ ok: false, reason: 'no_astrbot_connected' });
     }
 
-    const { chatId, senderId, content, nickname, isGroup, groupId, voiceUrl, isVoice } = req.body;
+    // ★ 发送者身份以登录态为准，不再信任 body 里的 senderId
+    const senderId = (req as any).user.id;
+    const { chatId, content, nickname, isGroup, groupId, voiceUrl, isVoice } = req.body;
     const msgId = `im-${Date.now()}`;
 
     if (isVoice && voiceUrl) {
@@ -2507,21 +2573,31 @@ app.use("/api/home", homeRouter);
     const url = new URL(request.url || '/', 'http://localhost');
     const pathname = url.pathname;
     if (pathname === '/signal') {
-      // ★ WebSocket 鉴权增强：支持 URL 参数中的 token 验证
+      // ★ WebSocket 强制鉴权：token 必填；身份以 session.userId 为准，
+      // URL 上的 userId 参数不再被信任；鉴权异常时 fail-closed，直接拒绝。
       const wsToken = url.searchParams.get('token');
-      if (wsToken) {
-        try {
-          const session = await prisma.userSession.findUnique({ where: { token: wsToken }, select: { userId: true, expiresAt: true, user: { select: { isBanned: true } } } });
-          if (!session || session.expiresAt < new Date() || session.user?.isBanned) {
-            console.warn(`[Signal] WebSocket 鉴权失败: token 无效或已过期`);
-            socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-            socket.destroy();
-            return;
-          }
-        } catch (err) {
-          console.error('[Signal] WebSocket 鉴权异常:', err);
-          // 鉴权异常时不拒绝连接，回退到 userId 参数方式
+      if (!wsToken) {
+        console.warn('[Signal] WebSocket 鉴权失败: 缺少 token');
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      try {
+        const session = await prisma.userSession.findUnique({ where: { token: wsToken }, select: { userId: true, expiresAt: true, user: { select: { isBanned: true } } } });
+        if (!session || session.expiresAt < new Date() || session.user?.isBanned) {
+          console.warn(`[Signal] WebSocket 鉴权失败: token 无效、已过期或用户被封禁`);
+          socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+          socket.destroy();
+          return;
         }
+        // 把已验证的身份挂到 request 上，connection 处理器只认这个
+        (request as any).authUserId = session.userId;
+      } catch (err) {
+        console.error('[Signal] WebSocket 鉴权异常:', err);
+        // fail-closed：鉴权查询失败时拒绝连接，不回退到 userId 参数方式
+        socket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n');
+        socket.destroy();
+        return;
       }
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
@@ -2617,9 +2693,19 @@ app.use("/api/home", homeRouter);
   });
 
   wss.on("connection", (ws, req) => {
-    // 从 URL 参数获取 userId，例如 /signal?userId=me
+    // 身份只认 upgrade 阶段已验证的 session.userId，不再信任 URL 参数。
+    // URL 上的 userId 仅用于日志比对，发现冒充尝试时告警。
+    const userId = (req as any).authUserId as string | undefined;
+    if (!userId) {
+      console.warn('[Signal] 连接缺少已验证身份，拒绝');
+      try { ws.close(4401, 'unauthorized'); } catch {}
+      return;
+    }
     const url = new URL(req.url || "/", "http://localhost");
-    const userId = url.searchParams.get("userId") || `user-${Date.now()}`;
+    const claimedUserId = url.searchParams.get("userId");
+    if (claimedUserId && claimedUserId !== userId) {
+      console.warn(`[Signal] userId 参数(${claimedUserId})与 token 身份(${userId})不一致，已忽略该参数`);
+    }
 
     const client: SignalClient = { ws, userId };
     (client as any)._alive = true;
