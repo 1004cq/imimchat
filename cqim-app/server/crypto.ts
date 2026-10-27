@@ -15,9 +15,22 @@
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import prisma from './db.js';
+import { userAuth } from './auth.js';
 import { resolveSigningPublicKey } from './prekey-bundle.js';
 
 const router = Router();
+
+type OneTimePreKey = { keyId: number; publicKey: string };
+
+function mergeAndCapPreKeys(existingKeys: OneTimePreKey[], newKeys: OneTimePreKey[]): OneTimePreKey[] {
+  const keyMap = new Map<number, string>();
+  existingKeys.forEach(k => keyMap.set(k.keyId, k.publicKey));
+  newKeys.forEach(k => keyMap.set(k.keyId, k.publicKey));
+  return Array.from(keyMap.entries())
+    .map(([keyId, publicKey]) => ({ keyId, publicKey }))
+    .sort((a, b) => a.keyId - b.keyId)
+    .slice(-100);
+}
 
 // ============================================================
 // 1. AES-256-GCM 加解密工具（服务端存储加密）
@@ -141,10 +154,11 @@ export function verifyHMAC(message: string, signature: string, secret: string): 
  * 客户端生成 ECDH 密钥对后，将公钥注册到服务端。
  * 其他用户可以通过 /get-key 获取该公钥，完成密钥交换。
  */
-router.post('/register-key', async (req: Request, res: Response) => {
-  const { userId, publicKey, deviceId } = req.body;
+router.post('/register-key', userAuth, async (req: Request, res: Response) => {
+  const { publicKey, deviceId } = req.body;
+  const userId = (req as any).user.id;
 
-  if (!userId || !publicKey) {
+  if (!publicKey) {
     return res.status(400).json({ error: '缺少必要参数' });
   }
 
@@ -261,10 +275,11 @@ router.post('/verify-message', async (req: Request, res: Response) => {
  *   preKeys: Array<{ keyId: number, publicKey: string }>,  // One-Time PreKeys
  * }
  */
-router.post('/register-bundle', async (req: Request, res: Response) => {
-  const { userId, registrationId, identityKey, signingPublicKey, signedPreKey, preKeys } = req.body;
+router.post('/register-bundle', userAuth, async (req: Request, res: Response) => {
+  const { registrationId, identityKey, signingPublicKey, signedPreKey, preKeys } = req.body;
+  const userId = (req as any).user.id;
 
-  if (!userId || !identityKey || !signedPreKey) {
+  if (!identityKey || !signedPreKey) {
     return res.status(400).json({ error: '缺少必要参数' });
   }
 
@@ -314,11 +329,8 @@ router.post('/register-bundle', async (req: Request, res: Response) => {
         try { existingKeys = JSON.parse(existingConfig.value); } catch {}
       }
 
-      // 合并新旧 preKeys（去重）
-      const keyMap = new Map<number, string>();
-      existingKeys.forEach(k => keyMap.set(k.keyId, k.publicKey));
-      preKeys.forEach((k: { keyId: number; publicKey: string }) => keyMap.set(k.keyId, k.publicKey));
-      const mergedKeys = Array.from(keyMap.entries()).map(([keyId, publicKey]) => ({ keyId, publicKey }));
+      // 合并、按 keyId 排序，并只保留最大的 100 个 One-Time PreKeys
+      const mergedKeys = mergeAndCapPreKeys(existingKeys, preKeys);
 
       await prisma.systemConfig.upsert({
         where: { key: `e2ee:prekeys:${userId}` },
@@ -396,12 +408,8 @@ router.get('/get-bundle', async (req: Request, res: Response) => {
  * 查询用户剩余的 One-Time PreKey 数量
  * 客户端可以定期检查，当数量低于阈值时补充新的 PreKeys
  */
-router.get('/prekey-count', async (req: Request, res: Response) => {
-  const { userId } = req.query as { userId: string };
-
-  if (!userId) {
-    return res.status(400).json({ error: '缺少 userId' });
-  }
+router.get('/prekey-count', userAuth, async (req: Request, res: Response) => {
+  const userId = (req as any).user.id;
 
   try {
     const preKeysConfig = await prisma.systemConfig.findUnique({
@@ -426,10 +434,11 @@ router.get('/prekey-count', async (req: Request, res: Response) => {
  * 补充 One-Time PreKeys
  * body: { userId: string, preKeys: Array<{ keyId: number, publicKey: string }> }
  */
-router.post('/replenish-prekeys', async (req: Request, res: Response) => {
-  const { userId, preKeys } = req.body;
+router.post('/replenish-prekeys', userAuth, async (req: Request, res: Response) => {
+  const { preKeys } = req.body;
+  const userId = (req as any).user.id;
 
-  if (!userId || !Array.isArray(preKeys) || preKeys.length === 0) {
+  if (!Array.isArray(preKeys) || preKeys.length === 0) {
     return res.status(400).json({ error: '缺少必要参数' });
   }
 
@@ -442,10 +451,7 @@ router.post('/replenish-prekeys', async (req: Request, res: Response) => {
       try { existingKeys = JSON.parse(existingConfig.value); } catch {}
     }
 
-    const keyMap = new Map<number, string>();
-    existingKeys.forEach(k => keyMap.set(k.keyId, k.publicKey));
-    preKeys.forEach((k: { keyId: number; publicKey: string }) => keyMap.set(k.keyId, k.publicKey));
-    const mergedKeys = Array.from(keyMap.entries()).map(([keyId, publicKey]) => ({ keyId, publicKey }));
+    const mergedKeys = mergeAndCapPreKeys(existingKeys, preKeys);
 
     await prisma.systemConfig.upsert({
       where: { key: `e2ee:prekeys:${userId}` },
