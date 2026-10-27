@@ -47,6 +47,47 @@ cp .env.example .env
 
 ---
 
+## 多机部署（单区域 · Gateway 多节点）
+
+同区域 2+ 台 Gateway，共享一台 PostgreSQL / Redis / MinIO。跨节点实时投递走 Redis Pub/Sub（`cqim:im:push` + `cqim:im:push:{nodeId}`），路由表在 `user:online:{userId}`。
+
+### 本地启动 2 个 Gateway
+
+```bash
+cd cqim-app
+cp .env.example .env   # 填同一套 DATABASE_URL / REDIS_URL / MinIO
+docker compose -f docker-compose.yml -f docker-compose.multi.yml up -d --build
+
+curl -s http://127.0.0.1:8082/health   # nodeId=gw-1，redis=true
+curl -s http://127.0.0.1:8083/health   # nodeId=gw-2
+```
+
+入口 Nginx 示例：`cqim-app/deploy/nginx-multi.conf`（`/api` → API upstream，`/signal` 与 `/ws/group` → 长连接 upstream，支持 Upgrade）。
+
+### 验证跨节点发消息
+
+1. 用户 A 连节点 1 的 `/signal`（或 `/ws/group`），用户 B 连节点 2。
+2. A 给 B 发私聊/群消息：写库成功后，B 应实时收到（本机无连接时发布 Pub/Sub，对端节点只本地推，不二次转发）。
+3. 断开重连后查 Redis：`GET user:online:{userId}` 应为 JSON `{"nodeId","connId","ts"}`，TTL ≈ 90s。
+4. B 完全离线时应仍走原有落库 + APNs/Web Push。
+
+更细的双节点运维说明见 [cqim-app/docs/TWO_NODES.md](./cqim-app/docs/TWO_NODES.md)。
+
+### 回滚到单节点
+
+```bash
+# 停掉第二台 Gateway，或只用基础 compose
+docker compose -f docker-compose.yml -f docker-compose.multi.yml stop go-gateway-2
+# 或：
+docker compose -f docker-compose.yml up -d
+```
+
+Nginx upstream 只保留一台；行为与单机一致（本机直推，无跨节点时不依赖第二台）。
+
+环境变量：`GATEWAY_NODE_ID`（或别名 `GATEWAY_ID`）、所有节点同一 `REDIS_URL` / `DATABASE_URL`。见 `cqim-app/.env.example`。
+
+---
+
 ## 还没做完
 
 - 现网是否已按本文档完成切库与冒烟，以部署机为准

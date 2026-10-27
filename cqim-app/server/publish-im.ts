@@ -11,6 +11,10 @@ export const IM_PUSH_CHANNEL = 'cqim:im:push';
 export interface ImPushEnvelope {
   userId: string;
   payload: unknown;
+  /** Optional idempotency key for cross-node dedupe on Gateway subscribers */
+  msgId?: string;
+  fromNodeId?: string;
+  targetNodeId?: string;
 }
 
 type ImPushHandler = (userId: string, payload: unknown) => void;
@@ -48,11 +52,34 @@ function ensureSubscriber() {
   });
 }
 
+function extractMsgId(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object') return undefined;
+  const obj = payload as Record<string, unknown>;
+  for (const key of ['msgId', 'id', 'clientMsgId', 'client_msg_id']) {
+    const v = obj[key];
+    if (typeof v === 'string' && v.length > 0) return v;
+  }
+  const nested = obj.payload;
+  if (nested && typeof nested === 'object') {
+    const inner = nested as Record<string, unknown>;
+    for (const key of ['msgId', 'id', 'clientMsgId', 'client_msg_id']) {
+      const v = inner[key];
+      if (typeof v === 'string' && v.length > 0) return v;
+    }
+  }
+  return undefined;
+}
+
 /** 发布跨节点 IM 推送；失败仅打日志，不抛错 */
 export async function publishImPush(userId: string, payload: unknown): Promise<void> {
   if (!userId) return;
   try {
-    const envelope: ImPushEnvelope = { userId, payload };
+    const envelope: ImPushEnvelope = {
+      userId,
+      payload,
+      msgId: extractMsgId(payload),
+      fromNodeId: process.env.GATEWAY_NODE_ID || process.env.GATEWAY_ID || undefined,
+    };
     await redisPub.publish(IM_PUSH_CHANNEL, JSON.stringify(envelope));
   } catch (err) {
     console.error(`[IM Push] PUBLISH 失败 userId=${userId}:`, err);

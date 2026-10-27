@@ -96,7 +96,7 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		log.Printf("[Main] Go Gateway 监听在 ws://%s/ws/group (gatewayId=%s)", addr, cfg.GatewayID)
+		log.Printf("[Main] Go Gateway 监听在 ws://%s/ws/group (nodeId=%s)", addr, cfg.GatewayID)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("[Main] HTTP 服务器启动失败: %v", err)
 		}

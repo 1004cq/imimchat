@@ -1,0 +1,59 @@
+# Local / staging multi-Gateway overlay.
+# Usage (from cqim-app/):
+#   docker compose -f docker-compose.yml -f docker-compose.multi.yml up -d --build
+#
+# Brings up two Go Gateway containers sharing the same Redis.
+# Direct health probes (host):
+#   curl -s http://127.0.0.1:8082/health   # gateway-1
+#   curl -s http://127.0.0.1:8083/health   # gateway-2
+#
+# Roll back to single Gateway:
+#   docker compose -f docker-compose.yml up -d
+#   # or: docker compose -f docker-compose.yml -f docker-compose.multi.yml stop go-gateway-2
+
+services:
+  go-gateway:
+    container_name: cqim-gateway-1
+    ports:
+      - "8082:8081"
+    environment:
+      - GATEWAY_NODE_ID=${GATEWAY_NODE_ID_1:-gw-1}
+      - GATEWAY_ID=${GATEWAY_NODE_ID_1:-gw-1}
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=
+      - REDIS_DB=0
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://im.cq.je,http://im.cq.je}
+      - DB_PATH=/tmp/cqim-gateway.db
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8081/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  go-gateway-2:
+    build:
+      context: ./go-gateway
+      dockerfile: Dockerfile
+    image: cqim-gateway:latest
+    container_name: cqim-gateway-2
+    restart: unless-stopped
+    ports:
+      - "8083:8081"
+    environment:
+      - GATEWAY_NODE_ID=${GATEWAY_NODE_ID_2:-gw-2}
+      - GATEWAY_ID=${GATEWAY_NODE_ID_2:-gw-2}
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=
+      - REDIS_DB=0
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://im.cq.je,http://im.cq.je}
+      - DB_PATH=/tmp/cqim-gateway.db
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8081/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s

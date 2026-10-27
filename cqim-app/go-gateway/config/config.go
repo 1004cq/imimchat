@@ -4,6 +4,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 type Config struct {
@@ -29,11 +31,15 @@ type Config struct {
 }
 
 func Load() *Config {
-	gatewayID := getEnv("GATEWAY_ID", "")
+	// Prefer GATEWAY_NODE_ID; keep GATEWAY_ID as a backward-compatible alias.
+	gatewayID := getEnv("GATEWAY_NODE_ID", "")
+	if gatewayID == "" {
+		gatewayID = getEnv("GATEWAY_ID", "")
+	}
 	if gatewayID == "" {
 		hostname, err := os.Hostname()
 		if err != nil || hostname == "" {
-			gatewayID = "gateway-unknown"
+			gatewayID = "gw-" + uuid.NewString()
 		} else {
 			gatewayID = hostname
 		}

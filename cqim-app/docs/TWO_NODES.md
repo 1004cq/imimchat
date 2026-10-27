@@ -101,12 +101,17 @@ docker compose -f docker-compose.yml -f deploy/docker-compose.app.yml up -d cqim
 
 | Redis Key | 含义 |
 |-----------|------|
-| `user:online:{uid}` | Go Gateway 在线，值为 `GATEWAY_ID`，TTL 90s |
-| `gw:users:{GATEWAY_ID}` | 该 Gateway 在线用户集合 |
+| `user:online:{uid}` | Go Gateway 路由表，JSON `{"nodeId","connId","ts"}`（兼容旧纯字符串 nodeId），TTL 90s |
+| `gw:users:{GATEWAY_NODE_ID}` | 该 Gateway 在线用户集合 |
+| `gw:alive:{GATEWAY_NODE_ID}` | 节点存活心跳，TTL 30s |
 | `online:{uid}` | Node `/signal` 在线 |
-| `cqim:im:push` | Pub/Sub 频道，跨节点 WebSocket 投递 |
+| `cqim:im:push` | 共享 Pub/Sub 频道（Node + Gateway） |
+| `cqim:im:push:{nodeId}` | 按目标节点定向投递（Gateway 订阅自身频道） |
 
-私聊写库后，若本机 `trySendTo` 失败则 `publishImPush`；各节点订阅后向本机连接投递。
+鉴权成功后写入路由；心跳 / ping 续期；断开时条件删除（仅当仍指向本 nodeId+connId）。  
+投递：本机连接 → 直推；否则查路由 → 他节点则 Pub/Sub（带 `msgId`/`fromNodeId`，接收端不二次转发）；离线则返回，由现有落库 + APNs/Web Push 处理。
+
+本地双 Gateway Compose：`docker-compose.multi.yml`。Nginx 多机示例：`deploy/nginx-multi.conf`。
 
 ## 验收清单
 
