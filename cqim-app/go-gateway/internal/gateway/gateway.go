@@ -540,7 +540,7 @@ func (gw *Gateway) HandleWS(w http.ResponseWriter, r *http.Request) {
 	client.readPump() // 阻塞直到连接断开
 }
 
-// HandleHealth 健康检查（含 Redis 连通性）
+// HandleHealth 健康检查（含 Redis 连通性 + 单机/多机探测）
 func (gw *Gateway) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	gw.mu.RLock()
 	onlineCount := len(gw.clients)
@@ -550,6 +550,20 @@ func (gw *Gateway) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	if err := gw.rdb.Ping(gw.ctx).Err(); err != nil {
 		redisOK = false
 		log.Printf("[Gateway] health Redis ping 失败: %v", err)
+	}
+
+	peerCount := 1
+	mode := "single"
+	if redisOK {
+		if keys, err := gw.rdb.Keys(gw.ctx, "gw:alive:*").Result(); err == nil {
+			peerCount = len(keys)
+			if peerCount == 0 {
+				peerCount = 1 // self may not have renewed yet
+			}
+			if peerCount > 1 {
+				mode = "multi"
+			}
+		}
 	}
 
 	status := "ok"
@@ -562,12 +576,14 @@ func (gw *Gateway) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"status":    status,
-		"gatewayId": gw.id,
-		"nodeId":    gw.id,
-		"online":    onlineCount,
-		"redis":     redisOK,
-		"service":   "cqim-go-gateway",
+		"status":       status,
+		"gatewayId":    gw.id,
+		"nodeId":       gw.id,
+		"online":       onlineCount,
+		"redis":        redisOK,
+		"mode":         mode,
+		"gatewayCount": peerCount,
+		"service":      "cqim-go-gateway",
 	})
 }
 

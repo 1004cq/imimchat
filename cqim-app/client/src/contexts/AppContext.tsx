@@ -4,7 +4,8 @@
 import React, { createContext, useContext, useReducer, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { createStore, useStore } from 'zustand';
 import type { StoreApi } from 'zustand';
-import { authenticatedSignalUrl } from '@/lib/e2ee/signal-url';
+import { authenticatedSignalUrlAsync } from '@/lib/e2ee/signal-url';
+import { ensureRuntime } from '@/lib/runtimeConfig';
 import {
   type Chat, type Message, type MomentPost, type CallState, type BurnAfterReadTimer,
   MOCK_CHATS, MOCK_MESSAGES, MOCK_MOMENTS, CURRENT_USER,
@@ -1081,10 +1082,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
         try { existing.close(); } catch {}
         botWsRef.current = null;
       }
-      const wsUrl = authenticatedSignalUrl(currentUserId);
-      if (!wsUrl) return;
-      const ws = new WebSocket(wsUrl);
-      botWsRef.current = ws;
+      void (async () => {
+        await ensureRuntime();
+        if (closedByEffect || !stateRef.current.isLoggedIn) return;
+        const wsUrl = await authenticatedSignalUrlAsync(currentUserId);
+        if (!wsUrl) return;
+        // Re-check after await: another connect may have started
+        const again = botWsRef.current;
+        if (again && (again.readyState === WebSocket.OPEN || again.readyState === WebSocket.CONNECTING)) {
+          return;
+        }
+        const ws = new WebSocket(wsUrl);
+        botWsRef.current = ws;
 
       ws.onopen = () => {
         console.log('[AppContext] 持久信令连接已建立');
@@ -1442,6 +1451,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         console.error('[AppContext] 持久信令连接错误:', err);
         clearHeartbeat();
       };
+      })();
     };
 
     const ensureConnected = () => {

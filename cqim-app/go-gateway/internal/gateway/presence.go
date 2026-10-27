@@ -166,6 +166,7 @@ func (gw *Gateway) clearOnline(userID, connID string) {
 // StartPresenceLoop periodically renews local online users and gw:alive.
 func (gw *Gateway) StartPresenceLoop(ctx context.Context) {
 	go func() {
+		gw.renewAllPresence() // register node immediately
 		ticker := time.NewTicker(presenceRenewInterval)
 		defer ticker.Stop()
 		for {

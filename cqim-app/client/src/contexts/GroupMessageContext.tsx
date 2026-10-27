@@ -7,7 +7,8 @@
 
 import React, { createContext, useContext, useCallback, useRef, useEffect, useReducer, type ReactNode } from 'react';
 import { loadGroupMessagesFromLocalDb, persistGroupMessages } from '@/lib/localdb';
-import { authenticatedSignalUrl } from '@/lib/e2ee/signal-url';
+import { authenticatedSignalUrlAsync } from '@/lib/e2ee/signal-url';
+import { ensureRuntime } from '@/lib/runtimeConfig';
 
 // ============ 类型定义 ============
 
@@ -255,10 +256,12 @@ export function GroupMessageProvider({ children, userId }: { children: ReactNode
     let reconnectTimer: ReturnType<typeof setTimeout>;
 
     const connect = () => {
-      const wsUrl = authenticatedSignalUrl(userId);
-      if (!wsUrl) return;
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
+      void (async () => {
+        await ensureRuntime();
+        const wsUrl = await authenticatedSignalUrlAsync(userId);
+        if (!wsUrl) return;
+        const ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
 
       ws.onopen = () => {
         dispatch({ type: 'SET_WS_CONNECTED', connected: true });
@@ -359,6 +362,7 @@ export function GroupMessageProvider({ children, userId }: { children: ReactNode
       ws.onerror = (err) => {
         console.error('[GroupMsgCtx] WebSocket 错误:', err);
       };
+      })();
     };
 
     connect();

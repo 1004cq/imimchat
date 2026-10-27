@@ -3,7 +3,8 @@
  * 封装真实 WebRTC 逻辑：RTCPeerConnection、getUserMedia、ICE 协商、多人 Mesh
  */
 import { useEffect, useRef, useCallback, useState } from "react";
-import { authenticatedSignalUrl } from '@/lib/e2ee/signal-url';
+import { authenticatedSignalUrlAsync } from '@/lib/e2ee/signal-url';
+import { ensureRuntime } from '@/lib/runtimeConfig';
 
 // ============ 类型定义 ============
 
@@ -297,30 +298,33 @@ export function useWebRTC(options: UseWebRTCOptions): UseWebRTCReturn {
   // ============ 连接信令服务器 ============
 
   const connectSignal = useCallback(() => {
-    const wsUrl = authenticatedSignalUrl(userId);
-    if (!wsUrl) return;
+    void (async () => {
+      await ensureRuntime();
+      const wsUrl = await authenticatedSignalUrlAsync(userId);
+      if (!wsUrl) return;
 
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
 
-    ws.onopen = () => {
-      console.log("[Signal] 已连接");
-      setSignalReady(true);
-    };
+      ws.onopen = () => {
+        console.log("[Signal] 已连接");
+        setSignalReady(true);
+      };
 
-    ws.onmessage = (event) => {
-      handleSignalMessage(event.data);
-    };
+      ws.onmessage = (event) => {
+        handleSignalMessage(event.data);
+      };
 
-    ws.onclose = () => {
-      console.log("[Signal] 连接断开");
-      setSignalReady(false);
-    };
+      ws.onclose = () => {
+        console.log("[Signal] 连接断开");
+        setSignalReady(false);
+      };
 
-    ws.onerror = (err) => {
-      console.error("[Signal] 连接错误:", err);
-      setSignalReady(false);
-    };
+      ws.onerror = (err) => {
+        console.error("[Signal] 连接错误:", err);
+        setSignalReady(false);
+      };
+    })();
   }, [userId, handleSignalMessage]);
 
   // ============ 获取本地媒体流 ============
