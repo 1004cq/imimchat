@@ -16,6 +16,7 @@ export default defineConfig({
       'client/src/lib/presence.test.ts',
       'client/src/lib/e2ee/**/*.test.ts',
       'client/src/components/VirtualMessageList.test.ts',
+      'client/src/components/moments/momentsHeader.test.ts',
     ],
   },
 });
