@@ -28,6 +28,8 @@ type GroupMessagePayload struct {
 // PushMessage 推送给客户端的消息格式
 type PushMessage struct {
 	Type       string         `json:"type"`
+	ID         string         `json:"id,omitempty"`
+	MsgID      string         `json:"msgId,omitempty"`
 	GroupID    string         `json:"groupId"`
 	Seq        int64          `json:"seq"`
 	SenderID   string         `json:"senderId"`
@@ -187,6 +189,8 @@ type ConnectionManager interface {
 	PushToUser(userID string, serializedMsg []byte) bool
 	// PublishImPush 跨节点推送（本机未连接时由 Redis Pub/Sub 投递）
 	PublishImPush(userID string, serializedMsg []byte) error
+	// DeliverToUser 本机直推 → 查 Redis 路由 → 跨节点 Pub/Sub；离线返回 false
+	DeliverToUser(userID string, serializedMsg []byte, msgID string) bool
 	// GetGroupOnlineMembers 获取群在线成员列表
 	GetGroupOnlineMembers(groupID string) []string
 	// GetGroupMemberCount 获取群成员总数（用于选择扇出策略）
@@ -278,9 +282,11 @@ func (svc *Service) SendGroupMessage(ctx context.Context, payload GroupMessagePa
 		extraStr = &s
 	}
 
-	// 2. 构造推送消息
+	// 2. 构造推送消息（带 msgId，跨节点投递去重）
 	pushMsg := PushMessage{
 		Type:       "group_message",
+		ID:         msgID,
+		MsgID:      msgID,
 		GroupID:    payload.GroupID,
 		Seq:        seq,
 		SenderID:   payload.SenderID,
@@ -367,6 +373,11 @@ func (svc *Service) fanoutToGroup(groupID string, msg PushMessage, excludeUserID
 		shards = append(shards, targets[i:end])
 	}
 
+	msgID := msg.MsgID
+	if msgID == "" {
+		msgID = msg.ID
+	}
+
 	// 提交分片任务给 Worker 池
 	tasks := make([]fanout.Task, len(shards))
 	for i, shard := range shards {
@@ -374,10 +385,8 @@ func (svc *Service) fanoutToGroup(groupID string, msg PushMessage, excludeUserID
 		sm := serializedMsg
 		tasks[i] = func() {
 			for _, uid := range s {
-				if !svc.connMgr.PushToUser(uid, sm) {
-					if err := svc.connMgr.PublishImPush(uid, sm); err != nil {
-						log.Printf("[MsgService] 跨节点推送失败: userId=%s err=%v", uid, err)
-					}
+				if !svc.connMgr.DeliverToUser(uid, sm, msgID) {
+					log.Printf("[MsgService] 投递未达在线连接（可能离线）: userId=%s msgId=%s", uid, msgID)
 				}
 			}
 		}

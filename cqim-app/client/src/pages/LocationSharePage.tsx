@@ -4,7 +4,8 @@
  * 功能：发起/加入共享、多人 Marker + 轨迹、限时/手动停止、距离显示
  */
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { authenticatedSignalUrl } from '@/lib/e2ee/signal-url';
+import { authenticatedSignalUrlAsync } from '@/lib/e2ee/signal-url';
+import { ensureRuntime } from '@/lib/runtimeConfig';
 import {
   ArrowLeft, MapPin, Users, Clock, Navigation,
   Square, Loader2, AlertCircle, RefreshCw
@@ -192,41 +193,44 @@ export default function LocationSharePage({ chatId, chatName, shareId: initShare
   // ── WebSocket 连接 ──
   const connectWs = useCallback((sid: string, endAt: number) => {
     endTimeRef.current = endAt;
-    const wsUrl = authenticatedSignalUrl();
-    if (!wsUrl) return;
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-    ws.onopen = () => ws.send(JSON.stringify({ type: 'join_location_share', shareId: sid, userId: CURRENT_USER.id, nickname: CURRENT_USER.name }));
-    ws.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data);
-        if (msg.type === 'location_update') {
-          setParticipants(prev => {
-            const next = new Map(prev);
-            const ex = next.get(msg.userId);
-            const trail = ex ? [...ex.trail, { lat: msg.lat, lng: msg.lng }].slice(-50) : [{ lat: msg.lat, lng: msg.lng }];
-            const upd: ParticipantLocation = { userId: msg.userId, nickname: msg.nickname || msg.userId, lat: msg.lat, lng: msg.lng, timestamp: msg.timestamp || Date.now(), trail };
-            next.set(msg.userId, upd);
-            updateMarker(msg.userId, upd);
-            return next;
-          });
-        } else if (msg.type === 'location_share_ended') {
+    void (async () => {
+      await ensureRuntime();
+      const wsUrl = await authenticatedSignalUrlAsync();
+      if (!wsUrl) return;
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+      ws.onopen = () => ws.send(JSON.stringify({ type: 'join_location_share', shareId: sid, userId: CURRENT_USER.id, nickname: CURRENT_USER.name }));
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'location_update') {
+            setParticipants(prev => {
+              const next = new Map(prev);
+              const ex = next.get(msg.userId);
+              const trail = ex ? [...ex.trail, { lat: msg.lat, lng: msg.lng }].slice(-50) : [{ lat: msg.lat, lng: msg.lng }];
+              const upd: ParticipantLocation = { userId: msg.userId, nickname: msg.nickname || msg.userId, lat: msg.lat, lng: msg.lng, timestamp: msg.timestamp || Date.now(), trail };
+              next.set(msg.userId, upd);
+              updateMarker(msg.userId, upd);
+              return next;
+            });
+          } else if (msg.type === 'location_share_ended') {
+            setPhase('ended');
+            cleanup();
+          }
+        } catch {
+          // ignore malformed ws payload
+        }
+      };
+      timerRef.current = setInterval(() => {
+        const rem = endTimeRef.current - Date.now();
+        if (rem <= 0) {
           setPhase('ended');
           cleanup();
+        } else {
+          setRemaining(rem);
         }
-      } catch {
-        // ignore malformed ws payload
-      }
-    };
-    timerRef.current = setInterval(() => {
-      const rem = endTimeRef.current - Date.now();
-      if (rem <= 0) {
-        setPhase('ended');
-        cleanup();
-      } else {
-        setRemaining(rem);
-      }
-    }, 1000);
+      }, 1000);
+    })();
   }, [cleanup, updateMarker]);
 
   // ── 开始连续定位 ──

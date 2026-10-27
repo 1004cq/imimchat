@@ -71,6 +71,11 @@ import { publicUrl } from "./public-url";
 import mediaRouter from './media-router.js';
 import { authenticateSignal, sessionResetSignal } from './signal-auth.js';
 import { ensureMediaBucket, saveMedia } from './media-storage.js';
+import {
+  getRuntimeTopology,
+  startApiTopologyHeartbeat,
+  stopApiTopologyHeartbeat,
+} from './topology.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -3480,6 +3485,26 @@ app.use("/api/home", homeRouter);
     }
   });
 
+  // ============ 运行时拓扑（单机/多机自动探测，供客户端选路） ============
+  app.get('/api/runtime', async (_req, res) => {
+    try {
+      const topology = await getRuntimeTopology();
+      return res.json({
+        ok: true,
+        ...topology,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error('[runtime] 拓扑探测失败:', error);
+      return res.status(503).json({
+        ok: false,
+        mode: 'single',
+        error: 'topology_unavailable',
+        timestamp: new Date().toISOString(),
+      });
+    }
+  });
+
   // ============ 健康检查 ============
   app.get('/api/health', async (_req, res) => {
     let databaseAvailable = true;
@@ -3491,12 +3516,24 @@ app.use("/api/home", homeRouter);
       console.error('[health] PostgreSQL 检查失败:', error);
     }
     redisAvailable = await checkRedisHealth();
+    let topology: Awaited<ReturnType<typeof getRuntimeTopology>> | null = null;
+    if (redisAvailable) {
+      try {
+        topology = await getRuntimeTopology();
+      } catch (error) {
+        console.error('[health] 拓扑探测失败:', error);
+      }
+    }
     const ok = databaseAvailable && redisAvailable;
     if (ok) {
       return res.json({
         ok: true,
         service: 'cqim',
         checks: { database: true, redis: true },
+        mode: topology?.mode ?? 'single',
+        nodeId: topology?.nodeId,
+        apiCount: topology?.apiCount ?? 1,
+        gatewayCount: topology?.gatewayCount ?? 0,
         env: process.env.NODE_ENV || 'development',
         uptime: Math.round(process.uptime()),
         timestamp: new Date().toISOString(),
@@ -3506,6 +3543,7 @@ app.use("/api/home", homeRouter);
       ok: false,
       service: 'cqim',
       checks: { database: databaseAvailable, redis: redisAvailable },
+      mode: topology?.mode ?? 'single',
       error: !databaseAvailable ? 'database_unavailable' : 'redis_unavailable',
       timestamp: new Date().toISOString(),
     });
@@ -3833,6 +3871,14 @@ function startReverseWsClient(handleOneBotAction: (ws: WebSocket, action: OneBot
 
 initDatabase()
   .then(() => connectRedis())
+  .then(() => {
+    startApiTopologyHeartbeat();
+    const onShutdown = () => {
+      stopApiTopologyHeartbeat();
+    };
+    process.once('SIGINT', onShutdown);
+    process.once('SIGTERM', onShutdown);
+  })
   .then(() => ensureMediaBucket())
   .then(() => startServer())
   .catch(console.error);

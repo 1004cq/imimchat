@@ -45,6 +45,18 @@ cp .env.example .env
 顺序：Postgres / Redis / MinIO healthy → `prisma migrate deploy` → API 与网关 → Nginx。  
 `DATABASE_URL` 必须是 PostgreSQL，禁止文件数据库路径。
 
+### 部署后必须确认迁移
+
+`cqim` 容器入口（`scripts/start-api.sh`）会先跑 `pnpm exec prisma migrate deploy`；失败则不启 API。  
+含 `User.webPushSubscription` 的迁移 SQL 使用 `ADD COLUMN IF NOT EXISTS`，已热修过的库再跑也不会失败。
+
+手工补跑 / 核验：
+
+```bash
+docker compose exec cqim pnpm exec prisma migrate deploy
+docker compose exec cqim pnpm exec prisma migrate status
+```
+
 ## 探活
 
 ```bash
@@ -59,7 +71,8 @@ docker compose exec minio /usr/local/bin/busybox wget -q -O /dev/null \
 
 ## 推送
 
-仅前台在聊时跳过系统通知；长连接还在不算免推。  
+仅前台在聊时跳过系统通知；长连接（WebSocket /signal 仍在）不算免推。  
+代码路径：`shouldSkipApns` / `shouldSkipApnsFromState` 只看 presence=`foreground`（及可选 activeChatId），不看 Gateway 在线表。  
 按设备令牌环境分别发往对应推送网关。失效令牌只删对应一行。通知不含消息明文。
 
 ## 冒烟
@@ -73,11 +86,60 @@ docker compose exec minio /usr/local/bin/busybox wget -q -O /dev/null \
 7. 从通知或联系人进入正确会话
 8. 未读数字正确，进入会话后清零
 
+## 单机 / 多机模式
+
+系统按 Redis 存活键自动判定，客户端连信令前会请求 `GET /api/runtime`：
+
+| 条件 | `mode` | 客户端行为 |
+|------|--------|------------|
+| `api:alive:*` / `gw:alive:*` 各 ≤1 | `single` | 同源 `/signal` |
+| 任一类 >1 | `multi` | 有 Nginx LB → 仍同源 `/signal`；配了 `PUBLIC_SIGNAL_URLS` → 按 userId 粘性选节点 |
+
+强制覆盖（排障 / 切流）：
+
+```bash
+# .env
+DEPLOY_MODE=auto    # 默认
+# DEPLOY_MODE=single
+# DEPLOY_MODE=multi
+```
+
+单机：只用 `docker compose up -d`，`GATEWAY_NODE_ID` / `API_NODE_ID` 各一个即可。  
+多机：两台共用同一 Postgres / Redis / MinIO，节点 ID 互不相同，入口 Nginx 见 `deploy/nginx-lb.conf`。
+
+```bash
+curl -s https://你的域名/api/runtime
+# {"mode":"single"|"multi","apiCount":…,"gatewayCount":…,"signalPath":"/signal",…}
+```
+
+## 多节点 Gateway（本地）
+
+同区域 2 个 Gateway + 共享 Redis（完整栈）：
+
+```bash
+cd cqim-app
+docker compose -f docker-compose.yml -f docker-compose.multi.yml up -d --build
+curl -s http://127.0.0.1:8082/health   # nodeId=gw-1
+curl -s http://127.0.0.1:8083/health   # nodeId=gw-2
+```
+
+仅 Gateway 边缘节点（`GATEWAY_ONLY=true`，1C1G）：
+
+```bash
+docker compose -f docker-compose.gateway-only.yml --profile dual up -d --build
+curl -s http://127.0.0.1:8082/health   # gatewayOnly=true
+curl -s http://127.0.0.1:8083/health
+```
+
+跨节点互发：用户 A 连节点 1（8082），用户 B 连节点 2（8083）；查 Redis `GET user:online:{userId}` 应为 JSON `{"nodeId","connId","ts"}`。详见 `docs/TWO_NODES.md` 与仓库根 README。
+
 ## 更新
 
 ```bash
 git checkout main && git pull
 cd cqim-app && docker compose up -d --build
+# 确认迁移（compose 启动已跑；手工核验）：
+docker compose exec cqim pnpm exec prisma migrate deploy
 ```
 
 ## 排障

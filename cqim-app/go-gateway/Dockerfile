@@ -9,7 +9,7 @@ COPY . .
 RUN CGO_ENABLED=1 GOOS=linux go build -o cqim-gateway ./cmd/main.go
 
 FROM alpine:3.19
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata wget
 ENV TZ=Asia/Shanghai
 WORKDIR /app
 COPY --from=builder /app/cqim-gateway .

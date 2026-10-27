@@ -12,6 +12,7 @@ import (
 	"github.com/cqim/go-gateway/internal/auth"
 	"github.com/cqim/go-gateway/internal/msgservice"
 	"github.com/cqim/go-gateway/internal/store"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/redis/go-redis/v9"
 )
@@ -28,6 +29,7 @@ const (
 // Client 代表一个 WebSocket 连接
 type Client struct {
 	userID  string
+	connID  string
 	conn    *websocket.Conn
 	send    chan []byte // 发送缓冲区
 	gateway *Gateway
@@ -84,7 +86,7 @@ func (c *Client) readPump() {
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error {
 		c.conn.SetReadDeadline(time.Now().Add(pongWait))
-		c.gateway.renewOnline(c.userID)
+		c.gateway.renewOnline(c.userID, c.connID)
 		return nil
 	})
 
@@ -105,13 +107,14 @@ func (c *Client) readPump() {
 
 // Gateway WebSocket 接入层
 type Gateway struct {
-	id        string
-	upgrader  websocket.Upgrader
-	verifier  *auth.Verifier
-	store     *store.Store
-	msgSvc    *msgservice.Service
-	rdb       *redis.Client
-	ctx       context.Context
+	id          string
+	gatewayOnly bool
+	upgrader    websocket.Upgrader
+	verifier    *auth.Verifier
+	store       *store.Store
+	msgSvc      *msgservice.Service
+	rdb         *redis.Client
+	ctx         context.Context
 
 	// 连接管理
 	mu          sync.RWMutex
@@ -129,13 +132,27 @@ func New(
 	gatewayID string,
 	corsOrigins []string,
 ) *Gateway {
+	return NewWithOptions(verifier, s, rdb, ctx, gatewayID, corsOrigins, false)
+}
+
+// NewWithOptions creates a Gateway; gatewayOnly marks a slim edge process.
+func NewWithOptions(
+	verifier *auth.Verifier,
+	s *store.Store,
+	rdb *redis.Client,
+	ctx context.Context,
+	gatewayID string,
+	corsOrigins []string,
+	gatewayOnly bool,
+) *Gateway {
 	allowedOrigins := make(map[string]struct{}, len(corsOrigins))
 	for _, origin := range corsOrigins {
 		allowedOrigins[origin] = struct{}{}
 	}
 
 	gw := &Gateway{
-		id: gatewayID,
+		id:          gatewayID,
+		gatewayOnly: gatewayOnly,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  4096,
 			WriteBufferSize: 4096,
@@ -266,13 +283,15 @@ func (gw *Gateway) register(client *Client) {
 	gw.mu.Lock()
 	defer gw.mu.Unlock()
 
-	// 如果已有旧连接，关闭它
+	// 如果已有旧连接，关闭它（条件清理旧 conn 路由，避免误删新连接刚写入的记录）
 	if old, ok := gw.clients[client.userID]; ok {
+		oldConnID := old.connID
 		close(old.send)
+		go gw.clearOnline(client.userID, oldConnID)
 	}
 	gw.clients[client.userID] = client
 
-	log.Printf("[Gateway] 用户 %s 上线，当前在线: %d", client.userID, len(gw.clients))
+	log.Printf("[Gateway] 用户 %s 上线 conn=%s，当前在线: %d", client.userID, client.connID, len(gw.clients))
 }
 
 // unregister 注销连接
@@ -296,7 +315,7 @@ func (gw *Gateway) unregister(client *Client) {
 			}
 		}
 
-		go gw.clearOnline(client.userID)
+		go gw.clearOnline(client.userID, client.connID)
 
 		log.Printf("[Gateway] 用户 %s 下线，当前在线: %d", client.userID, len(gw.clients))
 	}
@@ -341,7 +360,7 @@ func (gw *Gateway) handleClientMessage(c *Client, rawMsg []byte) {
 	case "group_ack":
 		gw.handleGroupAck(c, msg.Data)
 	case "ping":
-		gw.renewOnline(c.userID)
+		gw.renewOnline(c.userID, c.connID)
 		gw.sendToClient(c, map[string]string{"type": "pong"})
 	default:
 		log.Printf("[Gateway] 未知消息类型: %s", msg.Type)
@@ -512,13 +531,14 @@ func (gw *Gateway) HandleWS(w http.ResponseWriter, r *http.Request) {
 
 	client := &Client{
 		userID:  userID,
+		connID:  uuid.NewString(),
 		conn:    conn,
 		send:    make(chan []byte, 512),
 		gateway: gw,
 	}
 
 	gw.register(client)
-	gw.setOnline(userID)
+	gw.setOnline(userID, client.connID)
 
 	// 自动加入用户所在的所有群的在线列表
 	go func() {
@@ -535,18 +555,61 @@ func (gw *Gateway) HandleWS(w http.ResponseWriter, r *http.Request) {
 	client.readPump() // 阻塞直到连接断开
 }
 
-// HandleHealth 健康检查
+// HandleHealth 健康检查（含 Redis 连通性 + 单机/多机探测）
 func (gw *Gateway) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	gw.mu.RLock()
 	onlineCount := len(gw.clients)
 	gw.mu.RUnlock()
 
+	redisOK := true
+	if err := gw.rdb.Ping(gw.ctx).Err(); err != nil {
+		redisOK = false
+		log.Printf("[Gateway] health Redis ping 失败: %v", err)
+	}
+
+	peerCount := 1
+	mode := "single"
+	if redisOK {
+		n := 0
+		var cursor uint64
+		for {
+			keys, next, err := gw.rdb.Scan(gw.ctx, cursor, "gw:alive:*", 50).Result()
+			if err != nil {
+				break
+			}
+			n += len(keys)
+			cursor = next
+			if cursor == 0 {
+				break
+			}
+		}
+		if n > 0 {
+			peerCount = n
+		}
+		if peerCount > 1 {
+			mode = "multi"
+		}
+	}
+
+	status := "ok"
+	code := http.StatusOK
+	if !redisOK {
+		status = "degraded"
+		code = http.StatusServiceUnavailable
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"status":    "ok",
-		"gatewayId": gw.id,
-		"online":    onlineCount,
-		"service":   "cqim-go-gateway",
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":       status,
+		"gatewayId":    gw.id,
+		"nodeId":       gw.id,
+		"online":       onlineCount,
+		"redis":        redisOK,
+		"mode":         mode,
+		"gatewayOnly":  gw.gatewayOnly,
+		"gatewayCount": peerCount,
+		"service":      "cqim-go-gateway",
 	})
 }
 

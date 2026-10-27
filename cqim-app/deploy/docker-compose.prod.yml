@@ -27,7 +27,11 @@ services:
       MINIO_REGION: ${MINIO_REGION:-us-east-1}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://im.cq.je}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://im.cq.je,http://im.cq.je}
-      GATEWAY_ID: ${GATEWAY_ID:-gw-app-1}
+      API_NODE_ID: ${API_NODE_ID:-api-1}
+      GATEWAY_NODE_ID: ${GATEWAY_NODE_ID:-${GATEWAY_ID:-gw-app-1}}
+      GATEWAY_ID: ${GATEWAY_NODE_ID:-${GATEWAY_ID:-gw-app-1}}
+      DEPLOY_MODE: ${DEPLOY_MODE:-auto}
+      PUBLIC_SIGNAL_URLS: ${PUBLIC_SIGNAL_URLS:-}
     volumes:
       - /home/ubuntu/cqim_shared/data:/app/data
   go-gateway:
@@ -35,7 +39,9 @@ services:
     ports:
       - "127.0.0.1:8082:8081"
     environment:
-      GATEWAY_ID: ${GATEWAY_ID:-gw-app-1}
+      GATEWAY_NODE_ID: ${GATEWAY_NODE_ID:-${GATEWAY_ID:-gw-app-1}}
+      GATEWAY_ID: ${GATEWAY_NODE_ID:-${GATEWAY_ID:-gw-app-1}}
+      GATEWAY_ONLY: ${GATEWAY_ONLY:-false}
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       REDIS_DB: ${REDIS_DB:-0}

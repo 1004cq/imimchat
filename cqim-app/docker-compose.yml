@@ -107,6 +107,10 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://im.cq.je}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://im.cq.je,http://im.cq.je}
       TRTC_SDK_APP_ID: ${TRTC_SDK_APP_ID:-1600159677}
+      API_NODE_ID: ${API_NODE_ID:-api-1}
+      GATEWAY_NODE_ID: ${GATEWAY_NODE_ID:-${GATEWAY_ID:-gw-app-1}}
+      DEPLOY_MODE: ${DEPLOY_MODE:-auto}
+      PUBLIC_SIGNAL_URLS: ${PUBLIC_SIGNAL_URLS:-}
     volumes:
       - ./data:/app/data
     healthcheck:
@@ -126,7 +130,9 @@ services:
     expose:
       - "8081"
     environment:
-      - GATEWAY_ID=${GATEWAY_ID:-gw-app-1}
+      - GATEWAY_NODE_ID=${GATEWAY_NODE_ID:-${GATEWAY_ID:-gw-app-1}}
+      - GATEWAY_ID=${GATEWAY_NODE_ID:-${GATEWAY_ID:-gw-app-1}}
+      - GATEWAY_ONLY=${GATEWAY_ONLY:-false}
       - REDIS_ADDR=redis:6379
       - REDIS_PASSWORD=
       - REDIS_DB=0
@@ -135,6 +141,12 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8081/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
 volumes:
   pg_data:
