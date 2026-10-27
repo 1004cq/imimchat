@@ -98,6 +98,22 @@ Nginx upstream 只保留一台；行为与单机一致（本机直推，无跨�
 
 环境变量：`GATEWAY_NODE_ID`（或别名 `GATEWAY_ID`）、所有节点同一 `REDIS_URL` / `DATABASE_URL`。见 `cqim-app/.env.example`。
 
+### `GATEWAY_ONLY=true`（1C1G 边缘节点）
+
+只跑 Go Gateway，Node / Postgres / MinIO 在其他机器；本机仍需可达的共享 Redis，以及可读的会话库 `DB_PATH`（鉴权与落库）。默认并发/队列更小，便于 1C1G。
+
+```bash
+cd cqim-app
+# 双边缘 + 内置 Redis（profile dual）
+docker compose -f docker-compose.gateway-only.yml --profile dual up -d --build
+curl -s http://127.0.0.1:8082/health   # gatewayOnly=true, nodeId=gw-edge-1
+curl -s http://127.0.0.1:8083/health   # gatewayOnly=true, nodeId=gw-edge-2
+```
+
+生产边缘机：设 `GATEWAY_ONLY=true`、`GATEWAY_NODE_ID=<唯一>`、`REDIS_ADDR=<共享 Redis>`、`DB_PATH=<共享或只读会话库>`，用 `docker-compose.gateway-only.yml` 不带 dual profile，或单独起二进制。
+
+部署后请确认 `prisma migrate deploy` 已执行（含 `webPushSubscription` 的 `IF NOT EXISTS` 迁移）；细节见 [cqim-app/docs/DEPLOY.md](./cqim-app/docs/DEPLOY.md)。
+
 ---
 
 ## 还没做完

@@ -19,6 +19,7 @@ services:
     environment:
       - GATEWAY_NODE_ID=${GATEWAY_NODE_ID_1:-gw-1}
       - GATEWAY_ID=${GATEWAY_NODE_ID_1:-gw-1}
+      - GATEWAY_ONLY=${GATEWAY_ONLY:-false}
       - REDIS_ADDR=redis:6379
       - REDIS_PASSWORD=
       - REDIS_DB=0
@@ -43,6 +44,7 @@ services:
     environment:
       - GATEWAY_NODE_ID=${GATEWAY_NODE_ID_2:-gw-2}
       - GATEWAY_ID=${GATEWAY_NODE_ID_2:-gw-2}
+      - GATEWAY_ONLY=${GATEWAY_ONLY:-false}
       - REDIS_ADDR=redis:6379
       - REDIS_PASSWORD=
       - REDIS_DB=0

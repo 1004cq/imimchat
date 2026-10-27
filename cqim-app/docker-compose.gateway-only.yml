@@ -1,0 +1,97 @@
+# Edge / 1C1G: run only the Go Gateway against a shared Redis (+ session DB).
+# Node API / Postgres / MinIO stay on the primary hosts.
+#
+# Usage (from cqim-app/), pointing at an existing Redis:
+#   REDIS_ADDR=host.docker.internal:6379 \
+#   GATEWAY_NODE_ID=gw-edge-1 \
+#   DB_PATH=/data/cqim-gateway.db \
+#   docker compose -f docker-compose.gateway-only.yml up -d --build
+#
+# Local multi-edge smoke (two gateways + one Redis):
+#   docker compose -f docker-compose.gateway-only.yml --profile dual up -d --build
+#   curl -s http://127.0.0.1:8082/health   # gatewayOnly=true, nodeId=gw-edge-1
+#   curl -s http://127.0.0.1:8083/health   # gatewayOnly=true, nodeId=gw-edge-2
+#
+# Cross-node check: connect A to :8082 /ws/group, B to :8083 /ws/group,
+# send a message; Redis Pub/Sub + user:online:{userId} should deliver.
+
+services:
+  redis:
+    profiles: ["dual"]
+    image: redis:7-alpine
+    container_name: cqim-gateway-only-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  go-gateway:
+    build:
+      context: ./go-gateway
+      dockerfile: Dockerfile
+    image: cqim-gateway:latest
+    container_name: cqim-gateway-edge-1
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_HOST_PORT_1:-8082}:8081"
+    environment:
+      - GATEWAY_ONLY=true
+      - GATEWAY_NODE_ID=${GATEWAY_NODE_ID:-gw-edge-1}
+      - GATEWAY_ID=${GATEWAY_NODE_ID:-gw-edge-1}
+      - REDIS_ADDR=${REDIS_ADDR:-redis:6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_DB=${REDIS_DB:-0}
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://im.cq.je,http://im.cq.je}
+      - DB_PATH=${DB_PATH:-/tmp/cqim-gateway.db}
+    depends_on:
+      redis:
+        condition: service_healthy
+        required: false
+    volumes:
+      - gateway_edge_1_data:/tmp
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8081/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  go-gateway-2:
+    profiles: ["dual"]
+    build:
+      context: ./go-gateway
+      dockerfile: Dockerfile
+    image: cqim-gateway:latest
+    container_name: cqim-gateway-edge-2
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_HOST_PORT_2:-8083}:8081"
+    environment:
+      - GATEWAY_ONLY=true
+      - GATEWAY_NODE_ID=${GATEWAY_NODE_ID_2:-gw-edge-2}
+      - GATEWAY_ID=${GATEWAY_NODE_ID_2:-gw-edge-2}
+      - REDIS_ADDR=${REDIS_ADDR:-redis:6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_DB=${REDIS_DB:-0}
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://im.cq.je,http://im.cq.je}
+      - DB_PATH=${DB_PATH_2:-/tmp/cqim-gateway-2.db}
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - gateway_edge_2_data:/tmp
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8081/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  gateway_edge_1_data:
+  gateway_edge_2_data:

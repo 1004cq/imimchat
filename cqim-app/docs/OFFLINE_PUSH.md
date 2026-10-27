@@ -1,6 +1,6 @@
 # CQIM 离线推送方案
 
-离线消息只使用自建通道：iOS 通过 APNs Token Authentication，Web 通过 Web Push VAPID。发送前先读取 presence；用户处于 foreground 时跳过系统推送。
+离线消息只使用自建通道：iOS 通过 APNs Token Authentication，Web 通过 Web Push VAPID。发送前先读取 presence；**仅**用户处于 `foreground`（前台在聊）时跳过系统推送。WebSocket / Gateway 长连接仍在不算免推——`background` 或 `offline` 一律照常发 APNs / Web Push。
 
 APNs alert 与 VoIP token 均存放在 PostgreSQL 的 `PushDeviceToken` 表中，分别使用 `kind=alert` 与 `kind=voip`，一个用户可以拥有多个设备。APNs 的 P8 私钥只通过 `APNS_P8_KEY` 环境变量注入，绝不写入数据库。
 

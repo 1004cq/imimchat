@@ -111,7 +111,39 @@ docker compose -f docker-compose.yml -f deploy/docker-compose.app.yml up -d cqim
 鉴权成功后写入路由；心跳 / ping 续期；断开时条件删除（仅当仍指向本 nodeId+connId）。  
 投递：本机连接 → 直推；否则查路由 → 他节点则 Pub/Sub（带 `msgId`/`fromNodeId`，接收端不二次转发）；离线则返回，由现有落库 + APNs/Web Push 处理。
 
-本地双 Gateway Compose：`docker-compose.multi.yml`。Nginx 多机示例：`deploy/nginx-multi.conf`。
+本地双 Gateway Compose：`docker-compose.multi.yml`。仅 Gateway 边缘：`docker-compose.gateway-only.yml`（`GATEWAY_ONLY=true`）。Nginx 多机示例：`deploy/nginx-multi.conf`。
+
+## 本地验证（2 Gateway + 共享 Redis）
+
+完整栈（API + 两台 Gateway）：
+
+```bash
+cd cqim-app
+docker compose -f docker-compose.yml -f docker-compose.multi.yml up -d --build
+curl -s http://127.0.0.1:8082/health   # mode + gatewayId=gw-1
+curl -s http://127.0.0.1:8083/health   # gatewayId=gw-2
+```
+
+仅 Gateway（`GATEWAY_ONLY`，适合 1C1G / 边缘）：
+
+```bash
+docker compose -f docker-compose.gateway-only.yml --profile dual up -d --build
+curl -s http://127.0.0.1:8082/health   # gatewayOnly=true
+curl -s http://127.0.0.1:8083/health
+```
+
+跨节点互发：
+
+1. 用户 A 连节点 1（`:8082` 的 `/ws/group` 或经 Nginx 的 `/signal`），用户 B 连节点 2（`:8083`）。
+2. A→B、B→A 各发一条：本机无连接时走 Redis Pub/Sub（`cqim:im:push` / `cqim:im:push:{nodeId}`），对端只本地推、不二次转发。
+3. `redis-cli GET user:online:{userId}` → JSON `{"nodeId","connId","ts"}`，TTL ≈ 90s；`gw:alive:{nodeId}` 有心跳。
+4. 停掉一台 Gateway 后，该节点用户应改走落库 + APNs/Web Push（长连接在也不算免推，除非 presence=foreground）。
+
+单元测试（需本机 Redis）：
+
+```bash
+cd cqim-app/go-gateway && go test ./internal/gateway/ -count=1
+```
 
 ## 验收清单
 

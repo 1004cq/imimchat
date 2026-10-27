@@ -107,13 +107,14 @@ func (c *Client) readPump() {
 
 // Gateway WebSocket 接入层
 type Gateway struct {
-	id        string
-	upgrader  websocket.Upgrader
-	verifier  *auth.Verifier
-	store     *store.Store
-	msgSvc    *msgservice.Service
-	rdb       *redis.Client
-	ctx       context.Context
+	id          string
+	gatewayOnly bool
+	upgrader    websocket.Upgrader
+	verifier    *auth.Verifier
+	store       *store.Store
+	msgSvc      *msgservice.Service
+	rdb         *redis.Client
+	ctx         context.Context
 
 	// 连接管理
 	mu          sync.RWMutex
@@ -131,13 +132,27 @@ func New(
 	gatewayID string,
 	corsOrigins []string,
 ) *Gateway {
+	return NewWithOptions(verifier, s, rdb, ctx, gatewayID, corsOrigins, false)
+}
+
+// NewWithOptions creates a Gateway; gatewayOnly marks a slim edge process.
+func NewWithOptions(
+	verifier *auth.Verifier,
+	s *store.Store,
+	rdb *redis.Client,
+	ctx context.Context,
+	gatewayID string,
+	corsOrigins []string,
+	gatewayOnly bool,
+) *Gateway {
 	allowedOrigins := make(map[string]struct{}, len(corsOrigins))
 	for _, origin := range corsOrigins {
 		allowedOrigins[origin] = struct{}{}
 	}
 
 	gw := &Gateway{
-		id: gatewayID,
+		id:          gatewayID,
+		gatewayOnly: gatewayOnly,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  4096,
 			WriteBufferSize: 4096,
@@ -582,6 +597,7 @@ func (gw *Gateway) HandleHealth(w http.ResponseWriter, r *http.Request) {
 		"online":       onlineCount,
 		"redis":        redisOK,
 		"mode":         mode,
+		"gatewayOnly":  gw.gatewayOnly,
 		"gatewayCount": peerCount,
 		"service":      "cqim-go-gateway",
 	})

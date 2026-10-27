@@ -96,11 +96,33 @@ func TestDeliverToUserCrossNodePubSub(t *testing.T) {
 	gw1 := newTestGateway(t, rdb, "test-gw-src")
 	gw2 := newTestGateway(t, rdb, "test-gw-dst")
 	gw2.StartPushSubscriber(ctx)
+	// Wait until Redis subscription is active (Channel() is async).
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		n, err := rdb.PubSubNumSub(ctx, nodePushChannel(gw2.id)).Result()
+		if err == nil && n[nodePushChannel(gw2.id)] > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for Pub/Sub subscription")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 
 	userID := "user-cross-1"
+	msgID := "m-cross-" + time.Now().Format("150405.000")
 	t.Cleanup(func() {
-		_ = rdb.Del(context.Background(), userOnlineKey(userID), gwUsersKey(gw1.id), gwUsersKey(gw2.id)).Err()
+		_ = rdb.Del(
+			context.Background(),
+			userOnlineKey(userID),
+			gwUsersKey(gw1.id),
+			gwUsersKey(gw2.id),
+			recentPushKey(userID, msgID),
+			recentPushKey(userID, "rx:"+msgID),
+		).Err()
 	})
+	// Clear any leftover dedupe keys from prior runs with the same fixture ids.
+	_ = rdb.Del(context.Background(), recentPushKey(userID, msgID), recentPushKey(userID, "rx:"+msgID)).Err()
 
 	// Simulate user online on gw2 with a local client buffer.
 	client := &Client{
@@ -114,8 +136,8 @@ func TestDeliverToUserCrossNodePubSub(t *testing.T) {
 	gw2.mu.Unlock()
 	gw2.setOnline(userID, client.connID)
 
-	payload := []byte(`{"type":"group_message","msgId":"m-cross-1","content":"hi"}`)
-	if !gw1.DeliverToUser(userID, payload, "m-cross-1") {
+	payload := []byte(`{"type":"group_message","msgId":"` + msgID + `","content":"hi"}`)
+	if !gw1.DeliverToUser(userID, payload, msgID) {
 		t.Fatal("DeliverToUser should succeed via Pub/Sub")
 	}
 
