@@ -337,7 +337,7 @@ async function notifyOfflineGroupMembers(groupId: string, msg: PushMessage, send
           groupId,
           senderId,
           senderName,
-          previewText: '🔒 [群消息]',
+          previewText: '群消息',
         }).catch(() => {}),
       ),
     );

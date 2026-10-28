@@ -1,13 +1,14 @@
-/* CQIM Web Push service worker. Notifications never include message plaintext. */
+/* IMIM Web Push service worker. May show ephemeral preview body from the server. */
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch (_) { data = {}; }
   if (data.encrypted !== true || data.type !== 'encrypted_message') return;
 
   const chatId = typeof data.chatId === 'string' ? data.chatId : '';
-  const title = 'CQIM';
+  const title = typeof data.title === 'string' && data.title.trim() ? data.title.trim() : 'IMIM';
+  const body = typeof data.body === 'string' && data.body.trim() ? data.body.trim() : '发来一条消息';
   const options = {
-    body: '🔒 收到一条加密消息',
+    body,
     icon: '/icon-192.png',
     badge: '/icon-128.png',
     tag: chatId ? `cqim-chat-${chatId}` : 'cqim-encrypted-message',

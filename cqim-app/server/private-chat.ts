@@ -14,12 +14,11 @@ import {
   getUnreadCount,
   incrUnreadCount,
   clearUnreadCount,
-  isUserOnline,
-  redis,
 } from './redis.js';
 import { userAuth } from './auth.js';
 import { avatarToProxy } from './cos-signer.js';
 import { notifyPrivateMessagePush } from './push-notify.js';
+import { sanitizePushPreview } from './push-preview.js';
 import { publishImPush } from './publish-im.js';
 import { saveMedia, type MediaKind } from './media-storage.js';
 
@@ -92,6 +91,7 @@ async function createPrivateMessageAndNotify(
   content: string,
   replyToId?: string | null,
   extra?: Record<string, any>,
+  pushPreview?: string | null,
 ) {
   const currentUser = (req as any).user;
   const chat = await prisma.chat.findUnique({ where: { id: chatId } });
@@ -150,19 +150,14 @@ async function createPrivateMessageAndNotify(
     await publishImPush(peerId, wsPayload);
   }
 
-  if (!delivered) {
-    const peerOnlineElsewhere = await isUserOnline(peerId).catch(() => false)
-      || Boolean(await redis.get(`user:online:${peerId}`).catch(() => null));
-    if (!peerOnlineElsewhere) {
-      void notifyPrivateMessagePush({
-        toUserId: peerId,
-        senderId: currentUser.id,
-        chatId,
-        messageId: message.id,
-        previewText: messagePreview(msgType, content),
-      });
-    }
-  }
+  // Always attempt system push: iOS may keep WS open in background.
+  void notifyPrivateMessagePush({
+    toUserId: peerId,
+    senderId: currentUser.id,
+    chatId,
+    messageId: message.id,
+    previewText: sanitizePushPreview(pushPreview) || undefined,
+  });
 
   return res.json({ message: result });
 }
@@ -254,7 +249,7 @@ router.post('/send', async (req: AuthenticatedRequest, res: Response) => {
     const contentType = String(req.headers['content-type'] || '');
 
     if (!contentType.includes('multipart/form-data')) {
-      const { chatId, msgType, content = '', replyTo } = req.body || {};
+      const { chatId, msgType, content = '', replyTo, pushPreview } = req.body || {};
       if (!chatId) return res.status(400).json({ error: '缺少 chatId' });
       if (msgType !== 'encrypted') {
         return res.status(400).json({ error: '私聊强制要求端到端加密，请发送加密消息 (msgType=encrypted)' });
@@ -262,7 +257,16 @@ router.post('/send', async (req: AuthenticatedRequest, res: Response) => {
       if (!String(content).trim()) {
         return res.status(400).json({ error: '加密信封内容不能为空' });
       }
-      return await createPrivateMessageAndNotify(req, res, chatId, 'encrypted', String(content), replyTo || null);
+      return await createPrivateMessageAndNotify(
+        req,
+        res,
+        chatId,
+        'encrypted',
+        String(content),
+        replyTo || null,
+        undefined,
+        sanitizePushPreview(pushPreview),
+      );
     }
 
     const createBusboy = (busboy as any).default || busboy;
@@ -568,7 +572,7 @@ router.post('/:chatId/messages', async (req: Request, res: Response) => {
   try {
     const currentUser = (req as any).user;
     const { chatId } = req.params;
-    const { content, msgType, replyToId, extra: rawExtra, burnAfterRead, hmac } = req.body;
+    const { content, msgType, replyToId, extra: rawExtra, burnAfterRead, hmac, pushPreview } = req.body;
 
     // 强制 P0：私聊必须加密，禁止明文发送
     if (msgType !== 'encrypted') {
@@ -650,19 +654,13 @@ router.post('/:chatId/messages', async (req: Request, res: Response) => {
       await publishImPush(peerId, wsPayload);
     }
 
-    if (!delivered) {
-      const peerOnlineElsewhere = await isUserOnline(peerId).catch(() => false)
-        || Boolean(await redis.get(`user:online:${peerId}`).catch(() => null));
-      if (!peerOnlineElsewhere) {
-        void notifyPrivateMessagePush({
-          toUserId: peerId,
-          senderId: currentUser.id,
-          chatId,
-          messageId: message.id,
-          previewText: '🔒 [加密消息]',
-        });
-      }
-    }
+    void notifyPrivateMessagePush({
+      toUserId: peerId,
+      senderId: currentUser.id,
+      chatId,
+      messageId: message.id,
+      previewText: sanitizePushPreview(pushPreview) || undefined,
+    });
 
     res.json({ message: result });
   } catch (err) {

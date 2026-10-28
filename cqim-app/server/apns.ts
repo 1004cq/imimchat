@@ -362,7 +362,7 @@ async function deleteInvalidToken(id: string, context: string): Promise<void> {
   }
 }
 
-export async function sendAPNsPush(payload: APNsPushPayload): Promise<boolean> {
+export async function sendAPNsPushLocal(payload: APNsPushPayload): Promise<boolean> {
   try {
     const devices = await prisma.pushDeviceToken.findMany({
       where: { userId: payload.toUserId, platform: 'ios', kind: 'alert' },
@@ -385,6 +385,27 @@ export async function sendAPNsPush(payload: APNsPushPayload): Promise<boolean> {
     console.error('[APNs] 推送请求失败:', error);
     return false;
   }
+}
+
+/**
+ * Send APNs from this node; on failure publish once for peer nodes (e.g. YN)
+ * that can reach Apple when this host cannot.
+ */
+export async function sendAPNsPush(payload: APNsPushPayload & { skipRelay?: boolean }): Promise<boolean> {
+  const delivered = await sendAPNsPushLocal(payload);
+  if (delivered || payload.skipRelay) return delivered;
+  try {
+    const { publishApnsRelay } = await import('./apns-relay.js');
+    await publishApnsRelay({
+      toUserId: payload.toUserId,
+      title: payload.title,
+      body: payload.body,
+      customData: payload.customData,
+    });
+  } catch (error) {
+    console.error('[APNs] relay publish failed:', error);
+  }
+  return delivered;
 }
 
 export interface VoIPPushPayload {

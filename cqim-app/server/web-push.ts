@@ -81,11 +81,15 @@ export interface WebPushMessageParams {
   chatId: string;
   messageId?: string;
   senderId?: string;
+  /** Optional lock-screen / SW title (sender label). */
+  title?: string;
+  /** Optional ephemeral preview body; ciphertext must never be passed here. */
+  body?: string;
 }
 
 /**
- * Sends only a generic encrypted-message wake-up. No preview/content is accepted
- * in this API to make accidental plaintext push leakage impossible.
+ * Wakes the browser and may include an ephemeral preview body for the system
+ * notification. Message ciphertext remains only in PrivateMessage / sync APIs.
  */
 export async function sendWebPush(params: WebPushMessageParams): Promise<boolean> {
   if (!webPushEnabled) return false;
@@ -109,6 +113,8 @@ export async function sendWebPush(params: WebPushMessageParams): Promise<boolean
     messageId: params.messageId || '',
     senderId: params.senderId || '',
     encrypted: true,
+    title: params.title || 'IMIM',
+    body: params.body || '发来一条消息',
   });
 
   try {
