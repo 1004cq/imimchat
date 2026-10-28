@@ -19,6 +19,8 @@ const MAX_DISCOVER_RESULTS = 24;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN?.trim() || '';
 const TELEGRAM_MAX_STICKERS = 200;
 const TELEGRAM_MAX_FILE_BYTES = 8 * 1024 * 1024;
+/** Skip near-empty TG webp frames that render as blank tiles in the panel. */
+const TELEGRAM_MIN_USEFUL_FILE_BYTES = 5 * 1024;
 
 type StickerSourceType = 'remote' | 'local';
 
@@ -499,7 +501,16 @@ async function importTelegramPack(input: string): Promise<StickerPack> {
       if (!file.file_path) continue;
       const extension = telegramFileExtension(sticker);
       const relativeFile = path.join(packDir, `${sticker.file_unique_id}.${extension}`).replaceAll(path.sep, '/');
-      await downloadTelegramFile(file.file_path, path.join(STICKER_FILES_DIR, relativeFile));
+      const absoluteFile = path.join(STICKER_FILES_DIR, relativeFile);
+      await downloadTelegramFile(file.file_path, absoluteFile);
+      const downloadedBytes = (await fs.promises.stat(absoluteFile)).size;
+      if (downloadedBytes < TELEGRAM_MIN_USEFUL_FILE_BYTES) {
+        await fs.promises.unlink(absoluteFile).catch(() => undefined);
+        console.warn(
+          `[Sticker] 跳过过小贴纸 (${sticker.file_unique_id}): ${downloadedBytes}B < ${TELEGRAM_MIN_USEFUL_FILE_BYTES}B`,
+        );
+        continue;
+      }
       stickers.push({
         id: sticker.file_unique_id,
         emoji: sticker.emoji || '🙂',
