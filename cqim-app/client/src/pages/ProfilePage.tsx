@@ -1050,7 +1050,7 @@ export default function ProfilePage() {
                 <span className="text-sm text-foreground">聊天背景</span>
                 <div className="grid grid-cols-4 gap-2 mt-3">
                   {[
-                    { key: 'default', label: '默认', cls: darkMode ? 'bg-[oklch(0.12_0.008_240)]' : 'bg-dove-mist' },
+                    { key: 'default', label: '默认', cls: darkMode ? 'bg-[oklch(0.12_0.008_240)]' : 'bg-white border border-black/10' },
                     { key: 'green', label: '清绿', cls: 'bg-dove-green-light' },
                     { key: 'warm', label: '暖黄', cls: 'bg-amber-50' },
                     { key: 'blue', label: '淡蓝', cls: 'bg-blue-50' },
