@@ -92,7 +92,8 @@
   --imim-chat-topbar-bg: rgba(255, 255, 255, 0.96);
   --imim-chat-input-bg: #ffffff;
   --imim-chat-surface: #ffffff;
-  --imim-chat-self-bg: linear-gradient(180deg, rgba(255, 245, 186, 0.98), rgba(255, 236, 144, 0.97));
+  --imim-chat-self-bg: #abddee;
+  --imim-chat-self-border: rgba(120, 186, 210, 0.55);
   --imim-chat-border: rgba(0, 0, 0, 0.08);
 }
 
@@ -348,15 +349,11 @@
   .bubble-self {
     background: var(--imim-chat-self-bg);
     border-radius: 20px 6px 20px 20px;
-    border: 1px solid rgba(237, 214, 110, 0.44);
-    box-shadow:
-      0 8px 18px rgba(167, 132, 30, 0.10),
-      inset 0 1px 0 rgba(255,255,255,0.55);
+    border: 1px solid var(--imim-chat-self-border);
+    box-shadow: 0 1px 2px rgba(90, 150, 175, 0.12);
     max-width: 100%;
     overflow-wrap: anywhere;
     word-break: break-word;
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
   }
   .bubble-other {
     background: var(--imim-chat-surface);
@@ -1327,15 +1324,16 @@
   --imim-chat-topbar-bg: rgba(15, 23, 35, 0.96);
   --imim-chat-input-bg: rgba(21, 30, 44, 0.98);
   --imim-chat-surface: rgba(21, 30, 44, 0.98);
-  --imim-chat-self-bg: linear-gradient(180deg, rgba(73, 107, 129, 0.96), rgba(55, 88, 109, 0.98));
+  --imim-chat-self-bg: #5aa9c4;
+  --imim-chat-self-border: rgba(140, 210, 230, 0.35);
   --imim-chat-border: rgba(255, 255, 255, 0.08);
 }
 
 /* 暗色模式下的气泡样式 */
 .dark .bubble-self {
-  background: linear-gradient(180deg, rgba(73, 107, 129, 0.96), rgba(55, 88, 109, 0.98));
-  border-color: rgba(114, 186, 220, 0.18);
-  box-shadow: 0 10px 22px rgba(0,0,0,0.24), inset 0 1px 0 rgba(255,255,255,0.06);
+  background: var(--imim-chat-self-bg);
+  border-color: var(--imim-chat-self-border);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.28);
 }
 .dark .bubble-other {
   background: rgba(21, 30, 44, 0.95);
