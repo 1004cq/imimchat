@@ -148,3 +148,30 @@ docker compose exec cqim pnpm exec prisma migrate deploy
 docker compose logs --tail=200
 docker compose exec cqim pnpm exec prisma migrate status
 ```
+
+## app.imim.chat 双机入口（HK + YN）
+
+生产拓扑（内网 `10.66.66.0/24`）：
+
+| 角色 | 公网 | 内网 | 职责 |
+|------|------|------|------|
+| HK | `103.24.217.244` | `10.66.66.1` | TLS 终结、静态站、Postgres/Redis/MinIO、API+Gateway |
+| YN | `140.210.12.160` | `10.66.66.2` | API/Gateway 应用节点；**公网 80/443 只做 stream 透传到 HK** |
+
+宿主机 Nginx 模板：
+
+- HK TLS 入口 → Docker `127.0.0.1:18080`：`deploy/nginx-app.imim.chat.host.conf`
+- YN `stream {}` 透传：`deploy/nginx-edge-stream-yn.conf`
+
+**DNS（DNSPod）**：`app.imim.chat` 的 A 记录**优先只保留 HK**。若同时解析到 YN：
+
+1. YN 必须 `ufw allow 80,443/tcp`，否则客户端连 YN 会超时（表现为「网页打不开」）。
+2. YN 必须用 stream 透传到 `10.66.66.1`，**不要**在 YN 再挂一套静态 HTML/JS（双份构建 hash 不一致会导致白屏）。
+3. 验收：分别 `--resolve` 到两台公网 IP，`/` 与 `/api/health` 均为 200，且首页 `sha256` 相同。
+
+```bash
+dig +short app.imim.chat A
+curl -sS -o /dev/null -w "%{http_code}\n" --resolve app.imim.chat:443:103.24.217.244 https://app.imim.chat/
+curl -sS -o /dev/null -w "%{http_code}\n" --resolve app.imim.chat:443:140.210.12.160 https://app.imim.chat/
+curl -sS https://app.imim.chat/api/runtime
+```
