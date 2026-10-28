@@ -504,10 +504,11 @@ async function importTelegramPack(input: string): Promise<StickerPack> {
       const absoluteFile = path.join(STICKER_FILES_DIR, relativeFile);
       await downloadTelegramFile(file.file_path, absoluteFile);
       const downloadedBytes = (await fs.promises.stat(absoluteFile)).size;
-      if (downloadedBytes < TELEGRAM_MIN_USEFUL_FILE_BYTES) {
+      // Only blank static webp frames are tiny; animated .tgs must not use this gate.
+      if (extension === 'webp' && downloadedBytes < TELEGRAM_MIN_USEFUL_FILE_BYTES) {
         await fs.promises.unlink(absoluteFile).catch(() => undefined);
         console.warn(
-          `[Sticker] 跳过过小贴纸 (${sticker.file_unique_id}): ${downloadedBytes}B < ${TELEGRAM_MIN_USEFUL_FILE_BYTES}B`,
+          `[Sticker] 跳过过小 webp (${sticker.file_unique_id}): ${downloadedBytes}B < ${TELEGRAM_MIN_USEFUL_FILE_BYTES}B`,
         );
         continue;
       }
