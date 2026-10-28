@@ -20,7 +20,7 @@ export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
   enabled: true,
   soundEnabled: true,
   vibrationEnabled: true,
-  previewEnabled: false,
+  previewEnabled: true,
   browserEnabled: true,
 };
 
@@ -210,7 +210,7 @@ export function showBrowserNotification(payload: BrowserNotificationPayload): No
     return null;
   }
 
-  const body = preferences.previewEnabled ? payload.body : '你收到一条新消息';
+  const body = preferences.previewEnabled ? payload.body : '发来一条消息';
   const notification = new Notification(payload.title, {
     body,
     tag: payload.tag || `cqim-chat-${payload.chatId}`,

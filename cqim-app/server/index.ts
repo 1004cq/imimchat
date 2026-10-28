@@ -51,8 +51,10 @@ import qrRouter from "./qr";
 import apnsRouter from "./apns";
 import webPushRouter from "./web-push";
 import { notifyPrivateMessagePush } from "./push-notify.js";
+import { sanitizePushPreview } from "./push-preview.js";
 import { getActiveChatId, getPresence, setPresence, shouldSkipApnsFromState } from "./presence";
 import { publishImPush, subscribeImPush } from "./publish-im.js";
+import { subscribeApnsRelay } from "./apns-relay.js";
 import cookieParser from "cookie-parser";
 import compression from "compression";
 import stickerRouter, { STICKER_STATIC_PREFIX, STICKER_FILES_DIR, ensureStickerStore } from "./sticker";
@@ -1265,8 +1267,9 @@ async function handleMessage(client: SignalClient, raw: string) {
 
     // ===== 私聊消息信令处理 =====
     case "private_send": {
-      // payload: { chatId, content, msgType, replyToId, extra, tempId, burnAfterRead, hmac }
-      const { chatId: pChatId, content: pContent, msgType: pMsgType, replyToId: pReplyToId, extra: rawPExtra, tempId, burnAfterRead: pBurnAfterRead, hmac: pHmac } = msg.payload || {};
+      // payload: { chatId, content, msgType, replyToId, extra, tempId, burnAfterRead, hmac, pushPreview? }
+      // pushPreview is ephemeral lock-screen text only — never stored with the ciphertext.
+      const { chatId: pChatId, content: pContent, msgType: pMsgType, replyToId: pReplyToId, extra: rawPExtra, tempId, burnAfterRead: pBurnAfterRead, hmac: pHmac, pushPreview: pPushPreview } = msg.payload || {};
 
       // 强制 P0：私聊必须加密，禁止明文发送
       if (pMsgType !== 'encrypted') {
@@ -1389,7 +1392,7 @@ async function handleMessage(client: SignalClient, raw: string) {
               senderId: client.userId,
               chatId: pChatId,
               messageId: message.id,
-              previewText: '加密消息',
+              previewText: sanitizePushPreview(pPushPreview) || undefined,
             }).catch((error: unknown) => console.error('[APNs] private message notification failed:', error));
           } catch (err) {
             console.error('[PrivateChat] 发送失败:', err);
@@ -2651,6 +2654,18 @@ app.use("/api/home", homeRouter);
     const msg = payload as SignalMessage;
     if (!msg.type) return;
     trySendTo(userId, msg);
+  });
+
+  // ★ APNs 跨节点补发：本机连不上 Apple 时由 peer（如云南）重试一次
+  subscribeApnsRelay((envelope) => {
+    void import('./apns.js').then(({ sendAPNsPushLocal }) =>
+      sendAPNsPushLocal({
+        toUserId: envelope.toUserId,
+        title: envelope.title,
+        body: envelope.body,
+        customData: envelope.customData,
+      }),
+    ).catch((error: unknown) => console.error('[APNs Relay] peer send failed:', error));
   });
 
   // ★ 朋友圈实时事件推送：订阅 Redis 频道，将点赞/评论通知推送给在线用户

@@ -885,7 +885,8 @@ export default function ChatDetailPage() {
               chatId, 
               content: envelopeStr, 
               msgType: 'encrypted', 
-              tempId: encTempId, 
+              tempId: encTempId,
+              pushPreview: text.slice(0, 72),
               ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), 
               ...(msgHmac ? { hmac: msgHmac } : {}), 
               ...(activeReply ? { replyToId: activeReply.id } : {}) 
@@ -897,7 +898,7 @@ export default function ChatDetailPage() {
             fetch(`/api/chat/${chatId}/messages`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-              body: JSON.stringify({ content: envelopeStr, msgType: 'encrypted', ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), ...(msgHmac ? { hmac: msgHmac } : {}), ...(activeReply ? { replyToId: activeReply.id } : {}) }),
+              body: JSON.stringify({ content: envelopeStr, msgType: 'encrypted', pushPreview: text.slice(0, 72), ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), ...(msgHmac ? { hmac: msgHmac } : {}), ...(activeReply ? { replyToId: activeReply.id } : {}) }),
             })
               .then(async r => {
                 if (!r.ok) throw new Error(`send_${r.status}`);
@@ -961,7 +962,7 @@ export default function ChatDetailPage() {
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({
             type: 'private_send',
-            payload: { chatId, content: envelopeStr, msgType: 'encrypted', tempId, burnAfterRead: msg.burnAfterRead },
+            payload: { chatId, content: envelopeStr, msgType: 'encrypted', tempId, pushPreview: emoji.slice(0, 72), burnAfterRead: msg.burnAfterRead },
           }));
         }
         return;
@@ -1045,7 +1046,7 @@ export default function ChatDetailPage() {
             };
             sendMessage(chatId, msg);
             const ws = signalWs?.current;
-            const payload = { chatId, content: envelopeStr, msgType: 'encrypted', tempId, ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), ...(gifHmac ? { hmac: gifHmac } : {}) };
+            const payload = { chatId, content: envelopeStr, msgType: 'encrypted', tempId, pushPreview: '[GIF]', ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}), ...(gifHmac ? { hmac: gifHmac } : {}) };
             if (ws && ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ type: 'private_send', payload }));
             } else {
@@ -1140,7 +1141,7 @@ export default function ChatDetailPage() {
           if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({
               type: 'private_send',
-              payload: { chatId, content: envelopeStr, msgType: 'encrypted', tempId, burnAfterRead: msg.burnAfterRead },
+              payload: { chatId, content: envelopeStr, msgType: 'encrypted', tempId, pushPreview: stickerLabel.slice(0, 72), burnAfterRead: msg.burnAfterRead },
             }));
           }
           return;
@@ -1275,7 +1276,8 @@ export default function ChatDetailPage() {
               chatId, 
               content: envelopeStr, 
               msgType: 'encrypted', 
-              tempId: encTempId, 
+              tempId: encTempId,
+              pushPreview: mediaType === 'image' ? '[图片]' : '[视频]',
               burnAfterRead: effectiveBurnTimer 
             },
           }));
@@ -1507,6 +1509,7 @@ export default function ChatDetailPage() {
         body: JSON.stringify({
           content: JSON.stringify(envelope),
           msgType: 'encrypted',
+          pushPreview: `语音消息 · ${payload.duration} 秒`,
           ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}),
         }),
       });
@@ -1960,7 +1963,7 @@ export default function ChatDetailPage() {
               content: wireContent,
               msgType: wireMsgType,
               tempId,
-              ...(isPrivateLocation ? {} : { extra: { locationData } }),
+              ...(isPrivateLocation ? { pushPreview: '[位置]' } : { extra: { locationData } }),
               ...(effectiveBurnTimer ? { burnAfterRead: effectiveBurnTimer } : {}),
               ...(locHmac ? { hmac: locHmac } : {}),
             };
