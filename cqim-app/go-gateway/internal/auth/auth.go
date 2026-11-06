@@ -1,109 +1,79 @@
 package auth
 
 import (
+	"context"
 	"database/sql"
-	"fmt"
-	"sync"
+	"errors"
+	"net/url"
+	"os"
+	"strings"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// SessionCache Session 缓存条目
-type SessionCache struct {
-	UserID    string
-	ExpiresAt time.Time
-}
-
-// Verifier Session Token 验证器
-// 通过查询 SQLite 的 UserSession 表验证 token，并使用本地缓存减少 DB 查询
+// Verifier checks the authoritative session table, including bans, on every
+// operation. A positive TTL cache would allow revoked sessions to reconnect.
 type Verifier struct {
-	db    *sql.DB
-	mu    sync.RWMutex
-	cache map[string]*SessionCache
+	db       *sql.DB
+	postgres bool
 }
 
-// NewVerifier 创建 Session 验证器
+// DATABASE_URL opts into the shared Node/Go API PostgreSQL session store.
+// With no DATABASE_URL, legacy SQLite installations retain their existing source.
+// An invalid/unavailable PostgreSQL configuration never falls back to SQLite.
 func NewVerifier(dbPath string) (*Verifier, error) {
+	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
+		return NewPostgresVerifier(dsn)
+	}
 	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&mode=ro")
 	if err != nil {
-		return nil, fmt.Errorf("open auth db: %w", err)
+		return nil, errors.New("open session database failed")
 	}
 	db.SetMaxOpenConns(5)
 	db.SetMaxIdleConns(3)
-
-	v := &Verifier{
-		db:    db,
-		cache: make(map[string]*SessionCache),
-	}
-
-	// 启动缓存清理协程
-	go v.cleanupLoop()
-
-	return v, nil
+	return &Verifier{db: db}, nil
 }
-
-// Verify 验证 Session Token，返回 userId
-func (v *Verifier) Verify(token string) (string, error) {
-	// 先查缓存
-	v.mu.RLock()
-	if cached, ok := v.cache[token]; ok {
-		if time.Now().Before(cached.ExpiresAt) {
-			v.mu.RUnlock()
-			return cached.UserID, nil
-		}
+func NewPostgresVerifier(dsn string) (*Verifier, error) {
+	u, err := url.Parse(dsn)
+	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
+		return nil, errors.New("invalid PostgreSQL session configuration")
 	}
-	v.mu.RUnlock()
-
-	// 查数据库
-	var userID string
-	var expiresAt *time.Time
-	err := v.db.QueryRow(
-		`SELECT userId, expiresAt FROM "UserSession" WHERE token = ? LIMIT 1`,
-		token,
-	).Scan(&userID, &expiresAt)
-
-	if err == sql.ErrNoRows {
-		return "", fmt.Errorf("invalid session token")
+	q := u.Query()
+	// Prisma's schema option is not a PostgreSQL startup parameter.
+	if schema := q.Get("schema"); schema != "" {
+		q.Del("schema")
+		q.Set("search_path", `"`+strings.ReplaceAll(schema, `"`, `""`)+`"`)
 	}
+	u.RawQuery = q.Encode()
+	db, err := sql.Open("pgx", u.String())
 	if err != nil {
-		return "", fmt.Errorf("query session: %w", err)
+		return nil, errors.New("open session database failed")
 	}
-
-	// 检查是否过期
-	if expiresAt != nil && time.Now().After(*expiresAt) {
-		return "", fmt.Errorf("session expired")
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(3)
+	return &Verifier{db: db, postgres: true}, nil
+}
+func (v *Verifier) Verify(token string) (string, error) {
+	return v.VerifyContext(context.Background(), token)
+}
+func (v *Verifier) VerifyContext(ctx context.Context, token string) (string, error) {
+	if token == "" {
+		return "", errors.New("invalid session")
 	}
-
-	// 写入缓存（TTL 30 秒）
-	v.mu.Lock()
-	v.cache[token] = &SessionCache{
-		UserID:    userID,
-		ExpiresAt: time.Now().Add(30 * time.Second),
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	parameter := "?"
+	if v.postgres {
+		parameter = "$1"
 	}
-	v.mu.Unlock()
-
+	var userID string
+	var expiresAt time.Time
+	err := v.db.QueryRowContext(ctx, `SELECT s."userId",s."expiresAt" FROM "UserSession" s JOIN "User" u ON u."id"=s."userId" WHERE s."token"=`+parameter+` AND u."isBanned"=false LIMIT 1`, token).Scan(&userID, &expiresAt)
+	if err != nil || !time.Now().Before(expiresAt) {
+		return "", errors.New("session unavailable, revoked or expired")
+	}
 	return userID, nil
 }
-
-// Close 关闭数据库连接
-func (v *Verifier) Close() error {
-	return v.db.Close()
-}
-
-// cleanupLoop 定期清理过期缓存
-func (v *Verifier) cleanupLoop() {
-	ticker := time.NewTicker(60 * time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		now := time.Now()
-		v.mu.Lock()
-		for token, cached := range v.cache {
-			if now.After(cached.ExpiresAt) {
-				delete(v.cache, token)
-			}
-		}
-		v.mu.Unlock()
-	}
-}
+func (v *Verifier) Close() error { return v.db.Close() }

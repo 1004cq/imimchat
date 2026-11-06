@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cqim/go-gateway/internal/auth"
 	"github.com/cqim/go-gateway/internal/msgservice"
 	"github.com/cqim/go-gateway/internal/store"
 	"github.com/gorilla/websocket"
@@ -27,10 +26,14 @@ const (
 
 // Client 代表一个 WebSocket 连接
 type Client struct {
-	userID  string
-	conn    *websocket.Conn
-	send    chan []byte // 发送缓冲区
-	gateway *Gateway
+	userID   string
+	token    string
+	opMu     sync.Mutex
+	done     chan struct{}
+	stopOnce sync.Once
+	conn     *websocket.Conn
+	send     chan []byte // 发送缓冲区
+	gateway  *Gateway
 }
 
 // writePump 写协程：从 send 通道读取消息并写入 WebSocket
@@ -43,12 +46,13 @@ func (c *Client) writePump() {
 
 	for {
 		select {
-		case msg, ok := <-c.send:
-			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
-			if !ok {
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+		case <-c.done:
+			return
+		case msg := <-c.send:
+			if c.closed() {
 				return
 			}
+			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 
 			// ★ 背压控制：检测缓冲区积压
 			if len(c.send) > cap(c.send)*3/4 {
@@ -80,7 +84,9 @@ func (c *Client) readPump() {
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error {
 		c.conn.SetReadDeadline(time.Now().Add(pongWait))
-		c.gateway.renewOnline(c.userID)
+		if !c.gateway.refreshClient(c) {
+			return context.Canceled
+		}
 		return nil
 	})
 
@@ -101,24 +107,24 @@ func (c *Client) readPump() {
 
 // Gateway WebSocket 接入层
 type Gateway struct {
-	id        string
-	upgrader  websocket.Upgrader
-	verifier  *auth.Verifier
-	store     *store.Store
-	msgSvc    *msgservice.Service
-	rdb       *redis.Client
-	ctx       context.Context
+	id       string
+	upgrader websocket.Upgrader
+	verifier sessionVerifier
+	store    *store.Store
+	msgSvc   *msgservice.Service
+	rdb      *redis.Client
+	ctx      context.Context
 
 	// 连接管理
 	mu          sync.RWMutex
-	clients     map[string]*Client // userID -> Client
+	clients     map[string]*Client             // userID -> Client
 	groupOnline map[string]map[string]struct{} // groupID -> set<userID>
 	groupCount  map[string]int                 // groupID -> 总成员数缓存
 }
 
 // New 创建 Gateway
 func New(
-	verifier *auth.Verifier,
+	verifier sessionVerifier,
 	s *store.Store,
 	rdb *redis.Client,
 	ctx context.Context,
@@ -177,13 +183,7 @@ func (gw *Gateway) PushToUser(userID string, serializedMsg []byte) bool {
 	}
 
 	// 非阻塞写入，避免慢消费者阻塞扇出
-	select {
-	case client.send <- serializedMsg:
-		return true
-	default:
-		log.Printf("[Gateway] 用户 %s 发送缓冲区已满，丢弃消息", userID)
-		return false
-	}
+	return client.enqueue(serializedMsg)
 }
 
 // GetGroupOnlineMembers 获取群在线成员列表
@@ -235,7 +235,7 @@ func (gw *Gateway) register(client *Client) {
 
 	// 如果已有旧连接，关闭它
 	if old, ok := gw.clients[client.userID]; ok {
-		close(old.send)
+		old.stop(websocket.CloseNormalClosure, "connection replaced")
 	}
 	gw.clients[client.userID] = client
 
@@ -244,42 +244,50 @@ func (gw *Gateway) register(client *Client) {
 
 // unregister 注销连接
 func (gw *Gateway) unregister(client *Client) {
+	client.stop(websocket.CloseNormalClosure, "connection closed")
 	gw.mu.Lock()
 	defer gw.mu.Unlock()
 
 	if current, ok := gw.clients[client.userID]; ok && current == client {
 		delete(gw.clients, client.userID)
-		close(client.send)
+		groups := []string{}
 
 		// 从所有群在线列表中移除
 		for groupID, members := range gw.groupOnline {
 			if _, inGroup := members[client.userID]; inGroup {
+				groups = append(groups, groupID)
 				delete(members, client.userID)
 				if len(members) == 0 {
 					delete(gw.groupOnline, groupID)
 				}
 				// 更新 Redis 在线状态
-				go gw.rdb.SRem(gw.ctx, "group:online:"+groupID, client.userID)
+				// Redis membership is removed atomically with presence below.
 			}
 		}
 
-		go gw.clearOnline(client.userID)
+		gw.clearOnlineGroups(client.userID, groups)
 
 		log.Printf("[Gateway] 用户 %s 下线，当前在线: %d", client.userID, len(gw.clients))
 	}
 }
 
 // joinGroupOnline 将用户加入群在线列表
-func (gw *Gateway) joinGroupOnline(groupID, userID string) {
+func (gw *Gateway) joinGroupOnline(groupID string, c *Client) {
+	userID := c.userID
 	gw.mu.Lock()
+	defer gw.mu.Unlock()
+	if gw.clients[userID] != c || c.closed() {
+		return
+	}
 	if _, ok := gw.groupOnline[groupID]; !ok {
 		gw.groupOnline[groupID] = make(map[string]struct{})
 	}
 	gw.groupOnline[groupID][userID] = struct{}{}
-	gw.mu.Unlock()
 
 	// 更新 Redis
-	gw.rdb.SAdd(gw.ctx, "group:online:"+groupID, userID)
+	ctx, cancel := context.WithTimeout(gw.ctx, 2*time.Second)
+	defer cancel()
+	gw.rdb.SAdd(ctx, "group:online:"+groupID, userID)
 }
 
 // ============ 消息处理 ============
@@ -292,6 +300,11 @@ type ClientMessage struct {
 
 // handleClientMessage 处理客户端消息
 func (gw *Gateway) handleClientMessage(c *Client, rawMsg []byte) {
+	c.opMu.Lock()
+	defer c.opMu.Unlock()
+	if !gw.authorizeClient(c) {
+		return
+	}
 	var msg ClientMessage
 	if err := json.Unmarshal(rawMsg, &msg); err != nil {
 		log.Printf("[Gateway] 解析消息失败: %v", err)
@@ -308,7 +321,7 @@ func (gw *Gateway) handleClientMessage(c *Client, rawMsg []byte) {
 	case "group_ack":
 		gw.handleGroupAck(c, msg.Data)
 	case "ping":
-		gw.renewOnline(c.userID)
+		gw.refreshPresence(c)
 		gw.sendToClient(c, map[string]string{"type": "pong"})
 	default:
 		log.Printf("[Gateway] 未知消息类型: %s", msg.Type)
@@ -362,7 +375,7 @@ func (gw *Gateway) handleGroupJoinOnline(c *Client, data json.RawMessage) {
 		if err != nil || !isMember {
 			continue
 		}
-		gw.joinGroupOnline(groupID, c.userID)
+		gw.joinGroupOnline(groupID, c)
 	}
 }
 
@@ -465,7 +478,7 @@ func (gw *Gateway) HandleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, err := gw.verifier.Verify(token)
+	userID, err := gw.verifier.VerifyContext(r.Context(), token)
 	if err != nil {
 		http.Error(w, "invalid token", http.StatusUnauthorized)
 		return
@@ -479,23 +492,31 @@ func (gw *Gateway) HandleWS(w http.ResponseWriter, r *http.Request) {
 
 	client := &Client{
 		userID:  userID,
+		token:   token,
+		done:    make(chan struct{}),
 		conn:    conn,
 		send:    make(chan []byte, 512),
 		gateway: gw,
 	}
 
 	gw.register(client)
-	gw.setOnline(userID)
-
-	// 自动加入用户所在的所有群的在线列表
-	go func() {
-		groupIDs, err := gw.store.GetUserGroups(userID)
-		if err == nil {
-			for _, gid := range groupIDs {
-				gw.joinGroupOnline(gid, userID)
+	// Recheck after registration: revocation may have raced the HTTP upgrade.
+	client.opMu.Lock()
+	active := gw.authorizeClient(client)
+	if active {
+		gw.activatePresence(client)
+		if gw.store != nil {
+			if groups, err := gw.store.GetUserGroups(userID); err == nil {
+				for _, gid := range groups {
+					gw.joinGroupOnline(gid, client)
+				}
 			}
 		}
-	}()
+	}
+	client.opMu.Unlock()
+	if !active {
+		return
+	}
 
 	// 启动读写协程
 	go client.writePump()
@@ -524,10 +545,7 @@ func (gw *Gateway) sendToClient(c *Client, data any) {
 	if err != nil {
 		return
 	}
-	select {
-	case c.send <- b:
-	default:
-	}
+	c.enqueue(b)
 }
 
 func (gw *Gateway) sendError(c *Client, errMsg string) {

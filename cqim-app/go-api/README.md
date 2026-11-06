@@ -107,9 +107,17 @@ curl -i "$GO_API_BASE/api/health"
 | DELETE | `/api/moments/:id`, `/api/moments/:momentId/comments/:commentId` | 删除动态或评论 |
 | GET | `/api/moments/topics/hot` | 热门话题 |
 | POST/GET | `/api/admin/login`, `/api/admin/logout`, `/api/admin/me` | AdminSession 登录、登出、当前管理员；Bearer 与 `admin_token` Cookie 兼容 |
-| GET | `/api/admin/dashboard` | PostgreSQL 实际指标与 Redis `online:*` 在线人数；不可用指标返回 0 并列入 `unavailableMetrics` |
+| GET | `/api/admin/dashboard` | PostgreSQL 实际指标与 Redis `user:online:*` 在线人数；不可用指标返回 0 并列入 `unavailableMetrics` |
 | GET | `/api/admin/users`, `/api/admin/users/:id` | 用户列表、搜索、分页与详情 |
-| POST | `/api/admin/users/:id/ban` | 管理员封禁/解封用户并撤销被封禁用户会话 |
+| POST | `/api/admin/users/create` | 创建用户，格式/强度/唯一性校验 |
+| PUT | `/api/admin/users/:id` | 编辑资料、重置密码；重置时撤销全部 UserSession |
+| POST | `/api/admin/users/:id/ban` | 封禁/解封、撤销 Session、删除在线键；物理断连限制见下文 |
+| DELETE | `/api/admin/users/:id` | 删除用户及 schema 定义的级联数据 |
+| GET | `/api/admin/moments` | 动态搜索、分页、首张媒体及评论/点赞数量 |
+| GET | `/api/admin/moments/:id` | 动态详情及全部媒体 |
+| DELETE | `/api/admin/moments/:id` | 删除动态（按现有 FK 级联） |
+| GET | `/api/admin/moments/:id/comments` | 评论列表、分页 |
+| DELETE | `/api/admin/comments/:id` | 删除评论 |
 | GET | `/api/admin/logs` | 管理员操作日志分页 |
 | POST | `/api/crypto/register-key` | 注册 ECDH 公钥到 `e2ee:pubkey:{userId}:{deviceId}` |
 | GET | `/api/crypto/get-key` | 读取已注册公钥 |
@@ -186,3 +194,96 @@ docker compose up -d nginx
 | `/signal` | `go-gateway:8081`（不是 Node，不是 C++） |
 | `/ws` | `go-gateway:8081` |
 | `/` 与 ACME `root` | 与 `default.conf` 相同（站点仍由 `cqim` 提供） |
+
+
+## 管理后台实现与边界
+
+实现位于 `internal/api/admin.go`（路由、鉴权、仪表盘、用户读取、日志）、
+`admin_write.go`（登录及事务写入）、`admin_moments.go`（动态/评论读取）。
+只使用现有 PostgreSQL pool 和 Redis client，不修改 schema、Node 或流量路由。
+
+- 共享 Node 的 `"AdminAccount"` / `"AdminSession"` 表。Token 有效期 2 小时；先读 Bearer，再读 `admin_token` Cookie。
+  Cookie 的 `HttpOnly`、`SameSite=Strict`、`/api/admin` 路径、`ADMIN_DOMAIN` 和生产环境 `Secure` 与 Node 保持一致。
+- bcrypt cost=12；旧 SHA-256 登录成功后升级。兼容 bcryptjs 的 UTF-8 72 字节截断和 JS 字符串长度。
+  创建用户要求用户名 1–20 位字母/数字/下划线，密码至少 8 位且含大小写及数字；重置密码遵循 Node 的至少 8 位规则。
+- 所有成功写操作与 `AdminLog` 在同一事务提交，审计写入失败则业务回滚。登录失败也写审计，未知账号的 adminId 为 null。
+  日志记录 actor/action/target/ip，密码重置只记字段名，不记密码、哈希、Token 或聊天内容。
+- 读取允许所有已登录管理员；用户和内容写操作仅允许 `admin` / `superadmin`，与现有 Node 对应操作一致。
+  用户接口使用字段白名单，不照搬 Node ban 响应中泄漏密码哈希的行为。
+  原始 SQL JSON 的日期统一补齐 UTC 标记，按 Prisma 的 Timestamp(3) 语义输出，避免客户端解析偏移。每日统计使用与 Node 相同的本地日期窗口并转换为 UTC 查询；两进程的 TZ 应保持一致。
+- Go 登录使用 Redis `admin:login:go:{ip}`：每 IP 15 分钟最多 5 次，成功后重置；与 Node 的限流计数不共享。
+  Redis 不可用时登录返回 503。IP 读取规则与 Node 一致，上游必须清理不可信的 X-Forwarded-For，Go 管理端口不应直接暴露公网。
+- 列表 page 最小 1、最大 1000000；pageSize 默认 20、最大 100；日志固定每页 20。
+  搜索使用与 Prisma contains 一致的区分大小写、字面子串匹配，`%`、`_` 不作为通配符。
+- 仪表盘在线数使用 SCAN `user:online:*`、去重，绝不 KEYS；失败返回 0 并标记 `onlineUsers`。
+  数据库指标分别降级，无法完整计算的总消息数返回 0；缺失集合返回 [] 并列出集合名。`unavailableMetrics` 去重。
+  统计只读取消息数量、类型、发送者和时间，不读取私聊/群聊正文或解密数据。
+- 本次额外补齐动态详情、评论列表/删除；当前参考 Node 路由文件没有这三条，不能把 Node 404 当作 Go 失败。
+  其他未迁移 `/api/admin/*`：未登录返回 401，已登录返回明确 JSON 501。
+
+### 封禁与网关断线
+
+封禁事务设置 `User.isBanned`、删除全部 UserSession 并写审计；提交后删除
+`user:online:{uid}` / `user:presence:{uid}` / `user:activeChat:{uid}`，并向现有
+`cqim:im:push` 发布 `{userId, payload:{type:"session_revoked", reason:"admin_action"}}`。
+Redis 操作失败返回 503 和 `applied:true`，表示数据库封禁已经生效，可重试清理。
+
+后续网关修复已增加撤销事件消费者：重新核对数据库 Session，关闭被撤销连接（WebSocket 1008）。
+每条入站命令、Pong 和定期在线续期也核对 Session，避免漏收 Pub/Sub 后旧 Token 仍可操作。
+网关必须配置与 Go API 相同的 PostgreSQL `DATABASE_URL`；不配置时仍使用旧 SQLite 会话源。
+该改动仅接通共享 Session 校验，网关原有群消息 SQLite 存储没有迁移。
+
+已在隔离 PostgreSQL/Redis 中用真实管理 HTTP 请求和两台 WebSocket 网关验证断线。
+生产尚未部署或验收。API 没有逐节点断线回执，因此保留 `disconnectConfirmed:false`，
+它表示未收到分布式断线确认，不表示本地消费者尚未实现。
+详见 [网关验证记录](docs/gateway-revocation-20261106.md)。
+
+### 本地验证
+
+```sh
+go test ./...
+go vet ./...
+go build ./cmd/go-api
+```
+
+真实数据库回归使用 **专用** `imim_admin_test` 数据库和独立 Redis 实例（DB 15），不要指向生产：
+
+```sh
+ADMIN_TEST_DATABASE_URL='postgres://postgres@127.0.0.1:55439/imim_admin_test?sslmode=disable' \
+ADMIN_TEST_REDIS_ADDR='127.0.0.1:56389' \
+go test ./internal/api -run TestAdmin -v -count=1
+```
+
+测试生成随机 schema，读取已有 Prisma migrations，只在该 schema 建表，结束后删除该测试 schema。
+Redis 只清理测试创建的键，不执行 FLUSHDB。未设置以上变量时集成测试会明确 SKIP。
+覆盖共享 Session、Cookie/Bearer、TTL、旧密码升级、失败审计、角色、创建/唯一性/搜索、
+重置撤销、审计回滚、封禁/Redis 事件、SCAN 多页及不可用降级、动态评论/级联删除、登出、限流。
+不能据此宣称实际客户端已被踢出。
+
+### 同一 Bearer Token 对拍 Node 与 Go
+
+在隔离环境让 Node 与 Go 连接**同一个测试数据库及 Redis**。Node 正常登录后使用返回的管理员 token；
+Go 无需再次登录，也不创建另一套 Session。Go 默认监听 `127.0.0.1:8089`。
+无需修改默认 Nginx；Node 直接端口按本地实际启动配置填写。
+
+以下 Python 脚本只发送只读请求，Token 隐藏输入，不放进命令行参数、源文件或打印到终端：
+
+```python
+import getpass, json, urllib.request
+node = input("Node 本地地址（含端口）: ").rstrip("/")
+go = "http://127.0.0.1:8089"
+token = getpass.getpass("现有管理员 Bearer token: ")
+for path in ("/me", "/dashboard", "/users?page=1&pageSize=20", "/moments?page=1", "/logs?page=1"):
+    for label, base in (("Node", node), ("Go", go)):
+        req = urllib.request.Request(base + "/api/admin" + path,
+            headers={"Authorization": "Bearer " + token})
+        with urllib.request.urlopen(req, timeout=20) as response:
+            body = json.load(response)
+            print(label, path, response.status, json.dumps(body, ensure_ascii=False, sort_keys=True))
+```
+
+比对业务字段、数量、筛选和分页；时间统一解析为 UTC 后比较，列表相同时间戳的并列行可按 id 排序。
+Go 增加的 `unavailableMetrics`、安全响应字段，以及双方各自登录/审计生成的时间和记录需单独解释。
+只在测试环境做写接口对拍：用同一 token 操作不同的临时用户/动态，核对数据库结果及 AdminLog；
+不要对同一对象连续执行两边删除再把第二次 404 当成不一致。登出放最后，两边都应随后返回 401。
+`disconnectConfirmed:false` 表示 API 不等待逐节点断线回执；两端对拍不能将事件发布视为所有生产连接已关闭。

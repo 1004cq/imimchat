@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"log"
 	"time"
-
-	"github.com/redis/go-redis/v9"
 )
 
 const (
@@ -28,39 +26,39 @@ func gwAliveKey(gatewayID string) string {
 	return "gw:alive:" + gatewayID
 }
 
-// setOnline 标记用户在本 Gateway 在线
+// Presence changes are atomic and conditional on ownership. Caller serializes
+// local connection replacement/cleanup with Gateway.mu.
 func (gw *Gateway) setOnline(userID string) {
-	pipe := gw.rdb.Pipeline()
-	pipe.Set(gw.ctx, userOnlineKey(userID), gw.id, onlineTTL)
-	pipe.SAdd(gw.ctx, gwUsersKey(gw.id), userID)
-	if _, err := pipe.Exec(gw.ctx); err != nil {
-		log.Printf("[Gateway] setOnline 失败 user=%s: %v", userID, err)
+	ctx, cancel := context.WithTimeout(gw.ctx, 2*time.Second)
+	defer cancel()
+	err := gw.rdb.Eval(ctx, `redis.call('SET',KEYS[1],ARGV[1],'EX',ARGV[3]);redis.call('SADD',KEYS[2],ARGV[2]);return 1`, []string{userOnlineKey(userID), gwUsersKey(gw.id)}, gw.id, userID, int(onlineTTL.Seconds())).Err()
+	if err != nil {
+		log.Printf("[Gateway] setOnline failed: %v", err)
 	}
 }
-
-// renewOnline 续期在线状态；若 key 不属于本 Gateway 则重新抢占
 func (gw *Gateway) renewOnline(userID string) {
-	val, err := gw.rdb.Get(gw.ctx, userOnlineKey(userID)).Result()
-	if err == redis.Nil || val != gw.id {
-		gw.setOnline(userID)
-		return
-	}
-	if err := gw.rdb.Expire(gw.ctx, userOnlineKey(userID), onlineTTL).Err(); err != nil {
-		log.Printf("[Gateway] renewOnline 失败 user=%s: %v", userID, err)
+	ctx, cancel := context.WithTimeout(gw.ctx, 2*time.Second)
+	defer cancel()
+	// A heartbeat from an older node cannot steal ownership from a newer node.
+	err := gw.rdb.Eval(ctx, `local owner=redis.call('GET',KEYS[1]);if not owner or owner==ARGV[1] then redis.call('SET',KEYS[1],ARGV[1],'EX',ARGV[3]);redis.call('SADD',KEYS[2],ARGV[2]);return 1 end;return 0`, []string{userOnlineKey(userID), gwUsersKey(gw.id)}, gw.id, userID, int(onlineTTL.Seconds())).Err()
+	if err != nil {
+		log.Printf("[Gateway] renewOnline failed: %v", err)
 	}
 }
-
-// clearOnline 仅当 user:online 值等于本 Gateway ID 时删除
-func (gw *Gateway) clearOnline(userID string) {
-	val, err := gw.rdb.Get(gw.ctx, userOnlineKey(userID)).Result()
-	if err != nil || val != gw.id {
-		return
+func (gw *Gateway) clearOnline(userID string) { gw.clearOnlineGroups(userID, nil) }
+func (gw *Gateway) clearOnlineGroups(userID string, groups []string) {
+	ctx, cancel := context.WithTimeout(gw.ctx, 2*time.Second)
+	defer cancel()
+	gw.clearOwnedPresence(ctx, userID, groups)
+}
+func (gw *Gateway) clearOwnedPresence(ctx context.Context, userID string, groups []string) {
+	keys := []string{userOnlineKey(userID), gwUsersKey(gw.id)}
+	for _, group := range groups {
+		keys = append(keys, "group:online:"+group)
 	}
-	pipe := gw.rdb.Pipeline()
-	pipe.Del(gw.ctx, userOnlineKey(userID))
-	pipe.SRem(gw.ctx, gwUsersKey(gw.id), userID)
-	if _, err := pipe.Exec(gw.ctx); err != nil {
-		log.Printf("[Gateway] clearOnline 失败 user=%s: %v", userID, err)
+	err := gw.rdb.Eval(ctx, `local owner=redis.call('GET',KEYS[1]);if not owner or owner==ARGV[1] then redis.call('DEL',KEYS[1]);for i=3,#KEYS do redis.call('SREM',KEYS[i],ARGV[2]) end end;redis.call('SREM',KEYS[2],ARGV[2]);return 1`, keys, gw.id, userID).Err()
+	if err != nil {
+		log.Printf("[Gateway] clearOnline failed: %v", err)
 	}
 }
 
@@ -82,14 +80,14 @@ func (gw *Gateway) StartPresenceLoop(ctx context.Context) {
 
 func (gw *Gateway) renewAllPresence() {
 	gw.mu.RLock()
-	userIDs := make([]string, 0, len(gw.clients))
-	for uid := range gw.clients {
-		userIDs = append(userIDs, uid)
+	clients := make([]*Client, 0, len(gw.clients))
+	for _, c := range gw.clients {
+		clients = append(clients, c)
 	}
 	gw.mu.RUnlock()
 
-	for _, uid := range userIDs {
-		gw.renewOnline(uid)
+	for _, c := range clients {
+		gw.refreshClient(c)
 	}
 
 	if err := gw.rdb.Set(gw.ctx, gwAliveKey(gw.id), "1", gwAliveTTL).Err(); err != nil {
@@ -105,17 +103,11 @@ func (gw *Gateway) ShutdownPresence(ctx context.Context) {
 		return
 	}
 
-	pipe := gw.rdb.Pipeline()
 	for _, uid := range members {
-		val, getErr := gw.rdb.Get(ctx, userOnlineKey(uid)).Result()
-		if getErr == nil && val == gw.id {
-			pipe.Del(ctx, userOnlineKey(uid))
-		}
-		pipe.SRem(ctx, gwUsersKey(gw.id), uid)
+		gw.clearOwnedPresence(ctx, uid, nil)
 	}
-	pipe.Del(ctx, gwAliveKey(gw.id))
-	if _, err := pipe.Exec(ctx); err != nil {
-		log.Printf("[Gateway] ShutdownPresence 清理失败: %v", err)
+	if err := gw.rdb.Del(ctx, gwAliveKey(gw.id)).Err(); err != nil {
+		log.Printf("[Gateway] shutdown presence failed: %v", err)
 	}
 }
 
@@ -138,8 +130,15 @@ func (gw *Gateway) PublishImPush(userID string, payload []byte) error {
 }
 
 // StartPushSubscriber 订阅 cqim:im:push，投递到本机 WebSocket 连接
-func (gw *Gateway) StartPushSubscriber(ctx context.Context) {
+func (gw *Gateway) StartPushSubscriber(ctx context.Context) error {
 	pubsub := gw.rdb.Subscribe(ctx, imPushChannel)
+	readyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	_, err := pubsub.Receive(readyCtx)
+	cancel()
+	if err != nil {
+		pubsub.Close()
+		return err
+	}
 	go func() {
 		ch := pubsub.Channel()
 		for {
@@ -167,8 +166,16 @@ func (gw *Gateway) StartPushSubscriber(ctx context.Context) {
 						payload = []byte(s)
 					}
 				}
+				var event struct {
+					Type string `json:"type"`
+				}
+				if json.Unmarshal(payload, &event) == nil && event.Type == "session_revoked" {
+					gw.revalidateUser(envelope.UserID)
+					continue
+				}
 				gw.PushToUser(envelope.UserID, payload)
 			}
 		}
 	}()
+	return nil
 }

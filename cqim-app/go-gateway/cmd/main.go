@@ -16,7 +16,6 @@ import (
 	"github.com/cqim/go-gateway/internal/msgservice"
 	"github.com/cqim/go-gateway/internal/store"
 	"github.com/redis/go-redis/v9"
-
 )
 
 func main() {
@@ -59,7 +58,9 @@ func main() {
 	// 初始化 Gateway
 	gw := gateway.New(verifier, s, rdb, ctx, cfg.GatewayID, cfg.CorsOrigins)
 	gw.StartPresenceLoop(ctx)
-	gw.StartPushSubscriber(ctx)
+	if err := gw.StartPushSubscriber(ctx); err != nil {
+		log.Fatal("[Main] Redis subscriber startup failed")
+	}
 
 	// 初始化消息服务
 	msgSvc := msgservice.New(s, gw, msgservice.Config{

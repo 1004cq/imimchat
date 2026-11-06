@@ -41,7 +41,9 @@ func (s *Server) registerLegacyRoutes(mux *http.ServeMux) {
     s.registerGroupRoutes(mux)
     s.registerMomentsRoutes(mux)
     s.registerAdminRoutes(mux)
-    mux.HandleFunc("/api/admin/", s.notMigrated)
+    mux.HandleFunc("/api/admin/", s.requireAdmin(func(w http.ResponseWriter, r *http.Request, _ adminAccount, _ string) {
+        s.notMigrated(w, r)
+    }))
 }
 func (s *Server) notMigrated(w http.ResponseWriter,_ *http.Request){writeJSON(w,http.StatusNotImplemented,map[string]string{"error":"该路由尚未迁移到 go-api"})}
 func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
