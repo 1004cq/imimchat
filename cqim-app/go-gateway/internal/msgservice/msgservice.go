@@ -28,6 +28,8 @@ type GroupMessagePayload struct {
 // PushMessage 推送给客户端的消息格式
 type PushMessage struct {
 	Type       string         `json:"type"`
+	ID         string         `json:"id,omitempty"`
+	MsgID      string         `json:"msgId,omitempty"`
 	GroupID    string         `json:"groupId"`
 	Seq        int64          `json:"seq"`
 	SenderID   string         `json:"senderId"`
@@ -159,6 +161,26 @@ func (q *batchQueue) flushBatch(groupID string, batch []*queueItem) {
 	}
 }
 
+// drain 排空队列：停止所有定时器并同步刷盘剩余批次。
+// ★ S17：优雅关闭时调用，保证已入队（但尚未 ACK 的）消息尽量落盘，
+// 而不是随进程退出直接丢弃。
+func (q *batchQueue) drain() {
+	q.mu.Lock()
+	for _, t := range q.flushTimers {
+		t.Stop()
+	}
+	q.flushTimers = make(map[string]*time.Timer)
+	buckets := q.buckets
+	q.buckets = make(map[string][]*queueItem)
+	q.mu.Unlock()
+
+	for groupID, batch := range buckets {
+		if len(batch) > 0 {
+			q.flushBatch(groupID, batch)
+		}
+	}
+}
+
 // ============ Message Service ============
 
 // ConnectionManager 连接管理接口（由 Gateway 实现）
@@ -167,6 +189,8 @@ type ConnectionManager interface {
 	PushToUser(userID string, serializedMsg []byte) bool
 	// PublishImPush 跨节点推送（本机未连接时由 Redis Pub/Sub 投递）
 	PublishImPush(userID string, serializedMsg []byte) error
+	// DeliverToUser 本机直推 → 查 Redis 路由 → 跨节点 Pub/Sub；离线返回 false
+	DeliverToUser(userID string, serializedMsg []byte, msgID string) bool
 	// GetGroupOnlineMembers 获取群在线成员列表
 	GetGroupOnlineMembers(groupID string) []string
 	// GetGroupMemberCount 获取群成员总数（用于选择扇出策略）
@@ -222,6 +246,11 @@ func (svc *Service) getSeqGen(groupID string) *seqGenerator {
 	return v.(*seqGenerator)
 }
 
+// Shutdown 优雅关闭：排空批量落库队列（★ S17）
+func (svc *Service) Shutdown() {
+	svc.queue.drain()
+}
+
 // SendGroupMessage 发送群消息（快速路径，异步落库和推送）
 func (svc *Service) SendGroupMessage(ctx context.Context, payload GroupMessagePayload) (*SendResult, error) {
 	// 1. 生成序列号
@@ -253,9 +282,11 @@ func (svc *Service) SendGroupMessage(ctx context.Context, payload GroupMessagePa
 		extraStr = &s
 	}
 
-	// 2. 构造推送消息
+	// 2. 构造推送消息（带 msgId，跨节点投递去重）
 	pushMsg := PushMessage{
 		Type:       "group_message",
+		ID:         msgID,
+		MsgID:      msgID,
 		GroupID:    payload.GroupID,
 		Seq:        seq,
 		SenderID:   payload.SenderID,
@@ -288,17 +319,18 @@ func (svc *Service) SendGroupMessage(ctx context.Context, payload GroupMessagePa
 		return nil, err
 	}
 
-	// 4. 异步扇出推送（不等待落库完成）
+	// ★ S17：等待落库完成后再返回 ACK，建立"已 ACK ⇒ 已持久化"的不变式。
+	// 之前是入内存队列就立即 ACK，50ms 刷盘窗口内崩溃会导致已确认消息永久丢失。
+	// 最坏延迟约为一次刷盘间隔（默认 50ms）+ 批量写入耗时，对 IM 可接受。
+	if err := <-done; err != nil {
+		return nil, fmt.Errorf("persist message: %w", err)
+	}
+
+	// 异步扇出推送（落库已完成，保证消息可拉取）
 	go func() {
-		// 等待落库完成后再推送（保证消息可拉取）
-		if err := <-done; err != nil {
-			log.Printf("[MsgService] 落库失败: groupId=%s seq=%d err=%v", payload.GroupID, seq, err)
-			return
-		}
 		svc.fanoutToGroup(payload.GroupID, pushMsg, payload.SenderID)
 	}()
 
-	// 5. 立即返回 ACK（快速路径，<10ms）
 	return &SendResult{Seq: seq, Timestamp: timestamp}, nil
 }
 
@@ -341,6 +373,11 @@ func (svc *Service) fanoutToGroup(groupID string, msg PushMessage, excludeUserID
 		shards = append(shards, targets[i:end])
 	}
 
+	msgID := msg.MsgID
+	if msgID == "" {
+		msgID = msg.ID
+	}
+
 	// 提交分片任务给 Worker 池
 	tasks := make([]fanout.Task, len(shards))
 	for i, shard := range shards {
@@ -348,10 +385,8 @@ func (svc *Service) fanoutToGroup(groupID string, msg PushMessage, excludeUserID
 		sm := serializedMsg
 		tasks[i] = func() {
 			for _, uid := range s {
-				if !svc.connMgr.PushToUser(uid, sm) {
-					if err := svc.connMgr.PublishImPush(uid, sm); err != nil {
-						log.Printf("[MsgService] 跨节点推送失败: userId=%s err=%v", uid, err)
-					}
+				if !svc.connMgr.DeliverToUser(uid, sm, msgID) {
+					log.Printf("[MsgService] 投递未达在线连接（可能离线）: userId=%s msgId=%s", uid, msgID)
 				}
 			}
 		}

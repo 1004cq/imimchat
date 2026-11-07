@@ -79,7 +79,7 @@ func (gw *Gateway) refreshPresence(c *Client) {
 	if gw.clients[c.userID] != c || c.closed() {
 		return
 	}
-	gw.renewOnline(c.userID)
+	gw.renewOnline(c.userID, c.connID)
 }
 
 func (gw *Gateway) revalidateUser(userID string) {
@@ -101,5 +101,5 @@ func (gw *Gateway) activatePresence(c *Client) {
 	if gw.clients[c.userID] != c || c.closed() {
 		return
 	}
-	gw.setOnline(c.userID)
+	gw.setOnline(c.userID, c.connID)
 }

@@ -4,6 +4,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 type Config struct {
@@ -16,6 +18,9 @@ type Config struct {
 	RedisDB       int
 	DBPath        string
 	DatabaseURL   string
+	// GatewayOnly: this process is a slim edge node (1C1G-friendly). Redis +
+	// session DB still required; Node/API/MinIO run elsewhere.
+	GatewayOnly           bool
 	LargeGroupThreshold   int
 	LargeGroupConcurrency int
 	SmallGroupConcurrency int
@@ -29,14 +34,32 @@ type Config struct {
 }
 
 func Load() *Config {
-	gatewayID := getEnv("GATEWAY_ID", "")
+	// Prefer GATEWAY_NODE_ID; keep GATEWAY_ID as a backward-compatible alias.
+	gatewayID := getEnv("GATEWAY_NODE_ID", "")
+	if gatewayID == "" {
+		gatewayID = getEnv("GATEWAY_ID", "")
+	}
 	if gatewayID == "" {
 		hostname, err := os.Hostname()
 		if err != nil || hostname == "" {
-			gatewayID = "gateway-unknown"
+			gatewayID = "gw-" + uuid.NewString()
 		} else {
 			gatewayID = hostname
 		}
+	}
+
+	gatewayOnly := getEnvBool("GATEWAY_ONLY", false)
+
+	// Slim defaults for 1C1G edge boxes; explicit env still wins.
+	largeConc := 30
+	smallConc := 200
+	queueMax := 100000
+	backpressure := 65536
+	if gatewayOnly {
+		largeConc = 8
+		smallConc = 40
+		queueMax = 10000
+		backpressure = 32768
 	}
 
 	return &Config{
@@ -49,16 +72,17 @@ func Load() *Config {
 		RedisDB:               getEnvInt("REDIS_DB", 0),
 		DBPath:                getEnv("DB_PATH", ""),
 		DatabaseURL:           getEnv("DATABASE_URL", ""),
+		GatewayOnly:           gatewayOnly,
 		LargeGroupThreshold:   getEnvInt("LARGE_GROUP_THRESHOLD", 500),
-		LargeGroupConcurrency: getEnvInt("LARGE_GROUP_CONCURRENCY", 30),
-		SmallGroupConcurrency: getEnvInt("SMALL_GROUP_CONCURRENCY", 200),
+		LargeGroupConcurrency: getEnvInt("LARGE_GROUP_CONCURRENCY", largeConc),
+		SmallGroupConcurrency: getEnvInt("SMALL_GROUP_CONCURRENCY", smallConc),
 		FanoutShardSize:       getEnvInt("FANOUT_SHARD_SIZE", 200),
 		MergeWindowMs:         getEnvInt("MERGE_WINDOW_MS", 80),
 		MergeMaxBatch:         getEnvInt("MERGE_MAX_BATCH", 20),
-		WsBackpressureBytes:   getEnvInt("WS_BACKPRESSURE_BYTES", 65536),
+		WsBackpressureBytes:   getEnvInt("WS_BACKPRESSURE_BYTES", backpressure),
 		DBBatchSize:           getEnvInt("DB_BATCH_SIZE", 100),
 		DBFlushIntervalMs:     getEnvInt("DB_FLUSH_INTERVAL_MS", 50),
-		QueueMaxSize:          getEnvInt("QUEUE_MAX_SIZE", 100000),
+		QueueMaxSize:          getEnvInt("QUEUE_MAX_SIZE", queueMax),
 	}
 }
 
@@ -76,6 +100,21 @@ func getEnvInt(key string, defaultVal int) int {
 		}
 	}
 	return defaultVal
+}
+
+func getEnvBool(key string, defaultVal bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return defaultVal
+	}
+	switch strings.ToLower(v) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return defaultVal
+	}
 }
 
 func parseCSV(raw string) []string {

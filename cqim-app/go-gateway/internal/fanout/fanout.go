@@ -1,6 +1,7 @@
 package fanout
 
 import (
+	"log"
 	"sync"
 )
 
@@ -25,7 +26,13 @@ func New(concurrency int) *WorkerPool {
 func (p *WorkerPool) Submit(task Task) {
 	p.sem <- struct{}{}
 	go func() {
-		defer func() { <-p.sem }()
+		defer func() {
+			<-p.sem
+			// ★ S14 同类：任务 panic 不拖垮整个网关进程
+			if r := recover(); r != nil {
+				log.Printf("[Fanout] 任务 panic 已恢复: %v", r)
+			}
+		}()
 		task()
 	}()
 }
@@ -41,6 +48,10 @@ func (p *WorkerPool) SubmitAndWait(tasks []Task) {
 			defer func() {
 				<-p.sem
 				wg.Done()
+				// ★ S14 同类：任务 panic 不拖垮整个网关进程
+				if r := recover(); r != nil {
+					log.Printf("[Fanout] 任务 panic 已恢复: %v", r)
+				}
 			}()
 			t()
 		}()

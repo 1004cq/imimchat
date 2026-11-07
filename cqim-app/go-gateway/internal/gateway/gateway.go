@@ -11,6 +11,7 @@ import (
 
 	"github.com/cqim/go-gateway/internal/msgservice"
 	"github.com/cqim/go-gateway/internal/store"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/redis/go-redis/v9"
 )
@@ -27,6 +28,7 @@ const (
 // Client 代表一个 WebSocket 连接
 type Client struct {
 	userID   string
+	connID   string
 	token    string
 	opMu     sync.Mutex
 	done     chan struct{}
@@ -38,6 +40,13 @@ type Client struct {
 
 // writePump 写协程：从 send 通道读取消息并写入 WebSocket
 func (c *Client) writePump() {
+	// ★ S14：兜底 recover，单个连接的 panic 不拖垮整个网关进程
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[Gateway] writePump panic 已恢复 user=%s: %v", c.userID, r)
+		}
+	}()
+
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
@@ -54,12 +63,9 @@ func (c *Client) writePump() {
 			}
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 
-			// ★ 背压控制：检测缓冲区积压
-			if len(c.send) > cap(c.send)*3/4 {
-				log.Printf("[Gateway] 用户 %s 发送缓冲区积压，丢弃消息", c.userID)
-				continue
-			}
-
+			// ★ S15：删除原来的"出队后按积压丢弃"逻辑。
+			// 出队后的消息必须写入 socket；背压只在入队侧控制
+			// （PushToUser/sendToClient 的非阻塞发送），拥堵时越丢越多是错的。
 			if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 				return
 			}
@@ -107,13 +113,14 @@ func (c *Client) readPump() {
 
 // Gateway WebSocket 接入层
 type Gateway struct {
-	id       string
-	upgrader websocket.Upgrader
-	verifier sessionVerifier
-	store    *store.Store
-	msgSvc   *msgservice.Service
-	rdb      *redis.Client
-	ctx      context.Context
+	gatewayOnly bool
+	id          string
+	upgrader    websocket.Upgrader
+	verifier    sessionVerifier
+	store       *store.Store
+	msgSvc      *msgservice.Service
+	rdb         *redis.Client
+	ctx         context.Context
 
 	// 连接管理
 	mu          sync.RWMutex
@@ -131,13 +138,27 @@ func New(
 	gatewayID string,
 	corsOrigins []string,
 ) *Gateway {
+	return NewWithOptions(verifier, s, rdb, ctx, gatewayID, corsOrigins, false)
+}
+
+// NewWithOptions creates a Gateway; gatewayOnly marks a slim edge process.
+func NewWithOptions(
+	verifier sessionVerifier,
+	s *store.Store,
+	rdb *redis.Client,
+	ctx context.Context,
+	gatewayID string,
+	corsOrigins []string,
+	gatewayOnly bool,
+) *Gateway {
 	allowedOrigins := make(map[string]struct{}, len(corsOrigins))
 	for _, origin := range corsOrigins {
 		allowedOrigins[origin] = struct{}{}
 	}
 
 	gw := &Gateway{
-		id: gatewayID,
+		id:          gatewayID,
+		gatewayOnly: gatewayOnly,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  4096,
 			WriteBufferSize: 4096,
@@ -172,6 +193,24 @@ func (gw *Gateway) SetMsgService(svc *msgservice.Service) {
 
 // ============ ConnectionManager 接口实现 ============
 
+// safeSend 非阻塞发送；channel 已关闭时返回 false 而不是 panic。
+// ★ S14：register/unregister 的 close(send) 与并发的 PushToUser/sendToClient
+// 之间存在竞态，Go 向已关闭 channel 发送（即使 select-default）也会 panic。
+// 所有向 client.send 的发送都必须走这里。
+func safeSend(ch chan []byte, msg []byte) (ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	select {
+	case ch <- msg:
+		return true
+	default:
+		return false
+	}
+}
+
 // PushToUser 推送消息给指定用户
 func (gw *Gateway) PushToUser(userID string, serializedMsg []byte) bool {
 	gw.mu.RLock()
@@ -187,17 +226,29 @@ func (gw *Gateway) PushToUser(userID string, serializedMsg []byte) bool {
 }
 
 // GetGroupOnlineMembers 获取群在线成员列表
+// ★ S18：返回 本机集合 ∪ Redis 全局集合（group:online:{groupId}）的并集，
+// 多实例下挂在其他节点上的成员也能被扇出覆盖（不在线的节点走 PublishImPush）。
 func (gw *Gateway) GetGroupOnlineMembers(groupID string) []string {
-	gw.mu.RLock()
-	defer gw.mu.RUnlock()
+	seen := make(map[string]struct{})
 
-	members, ok := gw.groupOnline[groupID]
-	if !ok {
-		return nil
+	gw.mu.RLock()
+	if members, ok := gw.groupOnline[groupID]; ok {
+		for uid := range members {
+			seen[uid] = struct{}{}
+		}
+	}
+	gw.mu.RUnlock()
+
+	if ids, err := gw.rdb.SMembers(gw.ctx, "group:online:"+groupID).Result(); err == nil {
+		for _, uid := range ids {
+			seen[uid] = struct{}{}
+		}
+	} else {
+		log.Printf("[Gateway] 读取 Redis 群在线集合失败 group=%s: %v", groupID, err)
 	}
 
-	result := make([]string, 0, len(members))
-	for uid := range members {
+	result := make([]string, 0, len(seen))
+	for uid := range seen {
 		result = append(result, uid)
 	}
 	return result
@@ -233,13 +284,13 @@ func (gw *Gateway) register(client *Client) {
 	gw.mu.Lock()
 	defer gw.mu.Unlock()
 
-	// 如果已有旧连接，关闭它
+	// 如果已有旧连接，关闭它（条件清理旧 conn 路由，避免误删新连接刚写入的记录）
 	if old, ok := gw.clients[client.userID]; ok {
 		old.stop(websocket.CloseNormalClosure, "connection replaced")
 	}
 	gw.clients[client.userID] = client
 
-	log.Printf("[Gateway] 用户 %s 上线，当前在线: %d", client.userID, len(gw.clients))
+	log.Printf("[Gateway] 用户 %s 上线 conn=%s，当前在线: %d", client.userID, client.connID, len(gw.clients))
 }
 
 // unregister 注销连接
@@ -265,7 +316,7 @@ func (gw *Gateway) unregister(client *Client) {
 			}
 		}
 
-		gw.clearOnlineGroups(client.userID, groups)
+		gw.clearOnlineGroups(client.userID, client.connID, groups)
 
 		log.Printf("[Gateway] 用户 %s 下线，当前在线: %d", client.userID, len(gw.clients))
 	}
@@ -492,6 +543,7 @@ func (gw *Gateway) HandleWS(w http.ResponseWriter, r *http.Request) {
 
 	client := &Client{
 		userID:  userID,
+		connID:  uuid.NewString(),
 		token:   token,
 		done:    make(chan struct{}),
 		conn:    conn,
@@ -523,18 +575,61 @@ func (gw *Gateway) HandleWS(w http.ResponseWriter, r *http.Request) {
 	client.readPump() // 阻塞直到连接断开
 }
 
-// HandleHealth 健康检查
+// HandleHealth 健康检查（含 Redis 连通性 + 单机/多机探测）
 func (gw *Gateway) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	gw.mu.RLock()
 	onlineCount := len(gw.clients)
 	gw.mu.RUnlock()
 
+	redisOK := true
+	if err := gw.rdb.Ping(gw.ctx).Err(); err != nil {
+		redisOK = false
+		log.Printf("[Gateway] health Redis ping 失败: %v", err)
+	}
+
+	peerCount := 1
+	mode := "single"
+	if redisOK {
+		n := 0
+		var cursor uint64
+		for {
+			keys, next, err := gw.rdb.Scan(gw.ctx, cursor, "gw:alive:*", 50).Result()
+			if err != nil {
+				break
+			}
+			n += len(keys)
+			cursor = next
+			if cursor == 0 {
+				break
+			}
+		}
+		if n > 0 {
+			peerCount = n
+		}
+		if peerCount > 1 {
+			mode = "multi"
+		}
+	}
+
+	status := "ok"
+	code := http.StatusOK
+	if !redisOK {
+		status = "degraded"
+		code = http.StatusServiceUnavailable
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"status":    "ok",
-		"gatewayId": gw.id,
-		"online":    onlineCount,
-		"service":   "cqim-go-gateway",
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":       status,
+		"gatewayId":    gw.id,
+		"nodeId":       gw.id,
+		"online":       onlineCount,
+		"redis":        redisOK,
+		"mode":         mode,
+		"gatewayOnly":  gw.gatewayOnly,
+		"gatewayCount": peerCount,
+		"service":      "cqim-go-gateway",
 	})
 }
 

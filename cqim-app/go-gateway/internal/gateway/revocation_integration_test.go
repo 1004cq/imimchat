@@ -306,7 +306,7 @@ func TestAdminRevocationIntegration(t *testing.T) {
 	ping(replacement)
 	fresh.Close()
 	ping(replacement)
-	if rc.Get(ctx, userOnlineKey(uid)).Val() != g1.id {
+	if record, ok := g1.LookupOnline(uid); !ok || record.NodeID != g1.id {
 		t.Fatal("old cleanup deleted replacement presence")
 	}
 	// Deliberately omit subscriber to prove database revalidation is authoritative.

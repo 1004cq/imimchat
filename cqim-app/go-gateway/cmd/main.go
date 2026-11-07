@@ -24,12 +24,18 @@ func main() {
 
 	// 加载配置
 	cfg := config.Load()
+	if cfg.GatewayOnly {
+		log.Printf("[Main] GATEWAY_ONLY=true（边缘节点模式，Node/API/MinIO 应在其他机器） nodeId=%s", cfg.GatewayID)
+	}
+	if cfg.DBPath == "" {
+		log.Fatalf("[Main] DB_PATH 不能为空（Session 校验与群消息落库需要可读会话库）")
+	}
 
 	// 初始化上下文
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 初始化 Redis
+	// 初始化 Redis（多节点路由 / Pub/Sub 必需）
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     cfg.RedisAddr,
 		Password: cfg.RedisPassword,
@@ -56,7 +62,7 @@ func main() {
 	defer verifier.Close()
 
 	// 初始化 Gateway
-	gw := gateway.New(verifier, s, rdb, ctx, cfg.GatewayID, cfg.CorsOrigins)
+	gw := gateway.NewWithOptions(verifier, s, rdb, ctx, cfg.GatewayID, cfg.CorsOrigins, cfg.GatewayOnly)
 	gw.StartPresenceLoop(ctx)
 	if err := gw.StartPushSubscriber(ctx); err != nil {
 		log.Fatal("[Main] Redis subscriber startup failed")
@@ -97,7 +103,7 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		log.Printf("[Main] Go Gateway 监听在 ws://%s/ws/group (gatewayId=%s)", addr, cfg.GatewayID)
+		log.Printf("[Main] Go Gateway 监听在 ws://%s/ws/group (nodeId=%s gatewayOnly=%v)", addr, cfg.GatewayID, cfg.GatewayOnly)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("[Main] HTTP 服务器启动失败: %v", err)
 		}
@@ -110,6 +116,9 @@ func main() {
 	defer shutdownCancel()
 
 	gw.ShutdownPresence(shutdownCtx)
+
+	// ★ S17：排空消息落库队列，已入队的消息同步刷盘后再退出
+	msgSvc.Shutdown()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("[Main] 服务器关闭失败: %v", err)
